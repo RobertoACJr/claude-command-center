@@ -40,7 +40,53 @@ export interface AppConfig {
   ui: UiState
 }
 
+// ---------- Fase 2: execução ----------
+
+export interface RunRequest {
+  kind: ScriptType
+  /** Texto do script/comando, ainda com {{variaveis}} */
+  content: string
+  /** Valores das {{variaveis}}. Ausente = texto literal (console), sem substituição */
+  variables?: Record<string, string>
+  cwd: string
+  label?: string
+  /** Só para kind=claude: retoma uma sessão anterior (conversa contínua no console) */
+  resumeSessionId?: string
+}
+
+export type RunLineKind = 'stdout' | 'stderr' | 'claude' | 'tool' | 'info'
+
+export type RunEvent =
+  | { runId: string; type: 'lines'; lines: Array<{ kind: RunLineKind; text: string }> }
+  | { runId: string; type: 'session'; sessionId: string }
+  | { runId: string; type: 'exit'; code: number | null; signal: string | null; killed: boolean }
+  | { runId: string; type: 'error'; message: string }
+
+export type RemoteState = 'starting' | 'active' | 'needs-setup' | 'error' | 'stopping'
+
+export interface RemoteSession {
+  projectId: string
+  projectName: string
+  state: RemoteState
+  url?: string
+  message?: string
+  pid?: number
+  startedAt: number
+  /** Últimas linhas de saída do processo (para diagnóstico) */
+  tail: string[]
+}
+
 export interface CommandCenterApi {
+  // Fase 2
+  run(req: RunRequest): Promise<string>
+  stop(runId: string): Promise<void>
+  onRunEvent(cb: (e: RunEvent) => void): () => void
+  remoteList(): Promise<RemoteSession[]>
+  remoteRestart(projectId: string): Promise<void>
+  onRemoteUpdate(cb: (sessions: RemoteSession[]) => void): () => void
+  copyText(text: string): Promise<void>
+  openExternal(url: string): Promise<void>
+
   getConfig(): Promise<AppConfig>
   setStatus(status: PresenceStatus): Promise<AppConfig>
   saveProject(project: Project): Promise<AppConfig>

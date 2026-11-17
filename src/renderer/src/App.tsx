@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AppConfig, ConsoleMode, Project, Script } from '@shared/types'
+import type { AppConfig, ConsoleMode, Project, RemoteSession, RunEvent, Script, ScriptType } from '@shared/types'
 import { Header } from './components/Header'
 import { ProjectsPanel } from './components/ProjectsPanel'
 import { ScriptsPanel } from './components/ScriptsPanel'
@@ -12,10 +12,17 @@ import { extractVariables, fillVariables, resolveTargetPath, shortPath } from '.
 
 type Confirm = { kind: 'project'; item: Project } | { kind: 'script'; item: Script } | null
 
+interface RunMeta {
+  kind: ScriptType
+  /** Pasta da conversa contínua (só para mensagens do console em modo Claude) */
+  chatCwd?: string
+}
+
 export default function App() {
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [home, setHome] = useState('')
   const [branches, setBranches] = useState<Record<string, string | null | undefined>>({})
+  const [remote, setRemote] = useState<Record<string, RemoteSession>>({})
 
   const [projectModal, setProjectModal] = useState<{ open: boolean; item: Project | null }>({
     open: false,
@@ -25,26 +32,83 @@ export default function App() {
   const [varsPrompt, setVarsPrompt] = useState<{ script: Script; vars: string[] } | null>(null)
   const [confirm, setConfirm] = useState<Confirm>(null)
 
+  // ---------- console / execução ----------
   const [lines, setLines] = useState<ConsoleLine[]>([])
   const [runStatus, setRunStatus] = useState<RunStatus>('idle')
   const [exitCode, setExitCode] = useState<number | null>(null)
-  const [cwd, setCwd] = useState('')
+  const [running, setRunning] = useState<string[]>([])
+  const [consoleTarget, setConsoleTarget] = useState('global')
+  const [chatSessions, setChatSessions] = useState<Record<string, string>>({})
   const lineId = useRef(0)
+  const runMeta = useRef(new Map<string, RunMeta>())
+  const lastRunId = useRef<string | null>(null)
+
+  const log = useCallback((kind: LineKind, text: string) => {
+    setLines((ls) => [...ls.slice(-2999), { id: ++lineId.current, kind, text, ts: Date.now() }])
+  }, [])
+
+  const logMany = useCallback((items: Array<{ kind: LineKind; text: string }>) => {
+    setLines((ls) => [
+      ...ls,
+      ...items.map((i) => ({ id: ++lineId.current, kind: i.kind, text: i.text, ts: Date.now() }))
+    ].slice(-3000))
+  }, [])
 
   // ---------- bootstrap ----------
   const booted = useRef(false)
   useEffect(() => {
     if (booted.current) return
     booted.current = true
-    Promise.all([window.api.getConfig(), window.api.homeDir(), window.api.configPath()]).then(([cfg, h, cfgPath]) => {
-      setConfig(cfg)
-      setHome(h)
-      setCwd(h)
-      log('info', `Claude Command Center pronto · config: ${cfgPath}`)
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    Promise.all([window.api.getConfig(), window.api.homeDir(), window.api.configPath(), window.api.remoteList()]).then(
+      ([cfg, h, cfgPath, sessions]) => {
+        setConfig(cfg)
+        setHome(h)
+        if (cfg.projects[0]) setConsoleTarget(cfg.projects[0].id)
+        setRemote(Object.fromEntries(sessions.map((s) => [s.projectId, s])))
+        log('info', `Claude Command Center pronto · config: ${cfgPath}`)
+      }
+    )
+  }, [log])
 
+  // Eventos de execução vindos do main process
+  useEffect(() => {
+    const off = window.api.onRunEvent((e: RunEvent) => {
+      switch (e.type) {
+        case 'lines':
+          logMany(e.lines.map((l) => ({ kind: l.kind as LineKind, text: l.text })))
+          break
+        case 'session': {
+          const meta = runMeta.current.get(e.runId)
+          if (meta?.chatCwd) setChatSessions((s) => ({ ...s, [meta.chatCwd!]: e.sessionId }))
+          break
+        }
+        case 'error':
+          log('error', `✖ ${e.message}`)
+          break
+        case 'exit': {
+          runMeta.current.delete(e.runId)
+          setRunning((r) => r.filter((id) => id !== e.runId))
+          if (e.killed) log('info', '■ Interrompido')
+          else if (e.code === 0) log('success', '✔ Finalizado (0)')
+          else log('error', `✖ Saiu com código ${e.code ?? e.signal ?? '?'}`)
+          if (e.runId === lastRunId.current) {
+            setExitCode(e.code)
+            setRunStatus(e.killed ? 'stopped' : e.code === 0 ? 'success' : 'error')
+          }
+          break
+        }
+      }
+    })
+    return off
+  }, [log, logMany])
+
+  // Sessões de Remote Control
+  useEffect(
+    () => window.api.onRemoteUpdate((sessions) => setRemote(Object.fromEntries(sessions.map((s) => [s.projectId, s])))),
+    []
+  )
+
+  // ---------- branches ----------
   const refreshBranches = useCallback(async (projects: Project[]) => {
     setBranches(Object.fromEntries(projects.map((p) => [p.id, undefined])))
     const entries = await Promise.all(projects.map(async (p) => [p.id, await window.api.gitBranch(p.path)] as const))
@@ -57,29 +121,51 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectsKey])
 
-  // Atualiza branches quando a janela volta ao foco (você pode ter trocado de branch no terminal)
   useEffect(() => {
     const onFocus = () => config && refreshBranches(config.projects)
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [config, refreshBranches])
 
-  // ---------- console ----------
-  function log(kind: LineKind, text: string) {
-    setLines((ls) => [...ls.slice(-1999), { id: ++lineId.current, kind, text, ts: Date.now() }])
-  }
+  // Se o projeto do console for excluído, volta para Global
+  useEffect(() => {
+    if (config && consoleTarget !== 'global' && !config.projects.some((p) => p.id === consoleTarget)) {
+      setConsoleTarget(config.projects[0]?.id ?? 'global')
+    }
+  }, [config, consoleTarget])
 
-  /** Fase 1: execução simulada. Na Fase 2 isto vira child_process.spawn / claude -p no main process. */
-  function execute(kind: 'terminal' | 'claude', text: string, dir: string, label?: string) {
-    setCwd(dir)
+  // ---------- execução ----------
+  async function execute(
+    kind: ScriptType,
+    content: string,
+    variables: Record<string, string> | undefined,
+    cwd: string,
+    opts: { label?: string; chat?: boolean } = {}
+  ) {
+    if (opts.label) log('info', `▶ ${opts.label}  ·  ${cwd}`)
+    log(kind === 'terminal' ? 'cmd' : 'user', variables ? fillVariables(content, variables) : content)
+    const resumeSessionId = kind === 'claude' && opts.chat ? chatSessions[cwd] : undefined
+
     setRunStatus('running')
     setExitCode(null)
-    if (label) log('info', `▶ ${label}  ·  ${dir}`)
-    log(kind === 'terminal' ? 'cmd' : 'user', text)
-    setTimeout(() => {
-      log('info', '[Fase 1] Execução simulada: o motor real (terminal + Claude CLI) entra na Fase 2.')
-      setRunStatus('success')
-    }, 350)
+    const runId = await window.api.run({ kind, content, variables, cwd, label: opts.label, resumeSessionId })
+    runMeta.current.set(runId, { kind, chatCwd: opts.chat ? cwd : undefined })
+    lastRunId.current = runId
+    setRunning((r) => (r.includes(runId) ? r : [...r, runId]))
+  }
+
+  // Quando termina uma execução, re-lê as branches (o comando pode ter feito checkout)
+  const runningCount = running.length
+  const prevRunning = useRef(0)
+  useEffect(() => {
+    if (config && runningCount < prevRunning.current) refreshBranches(config.projects)
+    prevRunning.current = runningCount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runningCount])
+
+  const stopLatest = () => {
+    const id = lastRunId.current && running.includes(lastRunId.current) ? lastRunId.current : running.at(-1)
+    if (id) window.api.stop(id)
   }
 
   // ---------- ações ----------
@@ -89,7 +175,12 @@ export default function App() {
     if (!config) return
     const next = config.status === 'on' ? 'off' : 'on'
     save(window.api.setStatus(next))
-    log('info', next === 'off' ? 'Status → OFF (Ausente)' : 'Status → ON (No PC)')
+    log(
+      'info',
+      next === 'off'
+        ? 'Status → OFF (Ausente): iniciando Remote Control nos projetos marcados'
+        : 'Status → ON (No PC): encerrando sessões remotas'
+    )
   }
 
   const runScript = (s: Script) => {
@@ -101,12 +192,20 @@ export default function App() {
   const doRun = (s: Script, values: Record<string, string>) => {
     if (!config) return
     const dir = resolveTargetPath(s.target, config.projects, home)
-    execute(s.type, fillVariables(s.content, values), dir, s.name)
+    execute(s.type, s.content, values, dir, { label: s.name })
   }
+
+  const consoleCwd = config
+    ? consoleTarget === 'global'
+      ? home
+      : (config.projects.find((p) => p.id === consoleTarget)?.path ?? home)
+    : home
 
   const submitConsole = (text: string) => {
     if (!config) return
-    execute(config.ui.consoleMode, text, cwd || home)
+    if (config.ui.consoleMode === 'terminal' && /^(clear|cls)$/i.test(text)) return setLines([])
+    // No console o texto é literal: {{x}} não é tratado como variável (variables = undefined)
+    execute(config.ui.consoleMode, text, undefined, consoleCwd, { chat: config.ui.consoleMode === 'claude' })
   }
 
   const setMode = (m: ConsoleMode) => save(window.api.saveUi({ consoleMode: m }))
@@ -117,16 +216,18 @@ export default function App() {
   }
 
   const remoteCount = config.projects.filter((p) => p.remoteEnabled).length
+  const remoteActive = Object.values(remote).filter((s) => s.state === 'active').length
 
   return (
     <div className="flex h-full flex-col">
-      <Header status={config.status} onToggle={toggleStatus} remoteCount={remoteCount} />
+      <Header status={config.status} onToggle={toggleStatus} remoteCount={remoteCount} remoteActive={remoteActive} />
 
       <main className="grid min-h-0 flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-[minmax(320px,2fr)_3fr]">
         <ProjectsPanel
           projects={config.projects}
           branches={branches}
           status={config.status}
+          remote={remote}
           onAdd={() => setProjectModal({ open: true, item: null })}
           onEdit={(p) => setProjectModal({ open: true, item: p })}
           onDelete={(p) => setConfirm({ kind: 'project', item: p })}
@@ -150,9 +251,26 @@ export default function App() {
         onToggleExpand={toggleExpand}
         status={runStatus}
         exitCode={exitCode}
+        running={runningCount}
+        onStop={stopLatest}
         onSubmit={submitConsole}
         onClear={() => setLines([])}
-        cwdLabel={shortPath(cwd || home, 70)}
+        onNewChat={() => {
+          setChatSessions((s) => {
+            const next = { ...s }
+            delete next[consoleCwd]
+            return next
+          })
+          log('info', '— nova conversa com o Claude —')
+        }}
+        hasChat={!!chatSessions[consoleCwd]}
+        targets={[
+          ...config.projects.map((p) => ({ value: p.id, label: p.name })),
+          { value: 'global', label: 'Global (Home)' }
+        ]}
+        target={consoleTarget}
+        onTargetChange={setConsoleTarget}
+        cwdLabel={shortPath(consoleCwd, 60)}
       />
 
       <ProjectModal

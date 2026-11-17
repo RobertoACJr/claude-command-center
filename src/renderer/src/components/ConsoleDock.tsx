@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import {
+  Ban,
   CheckCircle2,
   ChevronRight,
   CircleDashed,
+  FolderTree,
   Loader2,
   Maximize2,
+  MessageSquarePlus,
   Minimize2,
   SendHorizontal,
   Sparkles,
+  Square,
   SquareTerminal,
   Trash2,
   XCircle
@@ -16,7 +20,7 @@ import type { ConsoleMode } from '@shared/types'
 import { IconButton } from './ui'
 import { cn } from '../lib/utils'
 
-export type LineKind = 'info' | 'cmd' | 'stdout' | 'stderr' | 'claude' | 'user' | 'success' | 'error'
+export type LineKind = 'info' | 'cmd' | 'stdout' | 'stderr' | 'claude' | 'tool' | 'user' | 'success' | 'error'
 
 export interface ConsoleLine {
   id: number
@@ -25,7 +29,7 @@ export interface ConsoleLine {
   ts: number
 }
 
-export type RunStatus = 'idle' | 'running' | 'success' | 'error'
+export type RunStatus = 'idle' | 'running' | 'success' | 'error' | 'stopped'
 
 const kindCls: Record<LineKind, string> = {
   info: 'text-zinc-500',
@@ -33,17 +37,18 @@ const kindCls: Record<LineKind, string> = {
   stdout: 'text-zinc-300',
   stderr: 'text-red-400',
   claude: 'text-violet-200',
+  tool: 'text-zinc-500 italic',
   user: 'text-sky-300',
   success: 'text-emerald-400',
   error: 'text-red-400'
 }
 
-function StatusPill({ status, exitCode }: { status: RunStatus; exitCode: number | null }) {
+function StatusPill({ status, exitCode, running }: { status: RunStatus; exitCode: number | null; running: number }) {
   const map = {
     idle: { icon: <CircleDashed size={13} />, label: 'Ocioso', cls: 'text-zinc-500 border-line' },
     running: {
       icon: <Loader2 size={13} className="animate-spin" />,
-      label: 'Rodando…',
+      label: running > 1 ? `Rodando (${running})` : 'Rodando…',
       cls: 'text-purple border-violet/40 bg-violet/10'
     },
     success: {
@@ -55,7 +60,8 @@ function StatusPill({ status, exitCode }: { status: RunStatus; exitCode: number 
       icon: <XCircle size={13} />,
       label: `Erro${exitCode !== null ? ` (${exitCode})` : ''}`,
       cls: 'text-red-400 border-red-500/30 bg-red-500/10'
-    }
+    },
+    stopped: { icon: <Ban size={13} />, label: 'Interrompido', cls: 'text-amber-300 border-amber-400/30 bg-amber-400/10' }
   }[status]
   return (
     <span className={cn('inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs', map.cls)}>
@@ -63,6 +69,11 @@ function StatusPill({ status, exitCode }: { status: RunStatus; exitCode: number 
       {map.label}
     </span>
   )
+}
+
+export interface TargetOption {
+  value: string
+  label: string
 }
 
 export function ConsoleDock({
@@ -73,8 +84,15 @@ export function ConsoleDock({
   onToggleExpand,
   status,
   exitCode,
+  running,
+  onStop,
   onSubmit,
   onClear,
+  onNewChat,
+  hasChat,
+  targets,
+  target,
+  onTargetChange,
   cwdLabel
 }: {
   lines: ConsoleLine[]
@@ -84,8 +102,15 @@ export function ConsoleDock({
   onToggleExpand: () => void
   status: RunStatus
   exitCode: number | null
+  running: number
+  onStop: () => void
   onSubmit: (text: string) => void
   onClear: () => void
+  onNewChat: () => void
+  hasChat: boolean
+  targets: TargetOption[]
+  target: string
+  onTargetChange: (v: string) => void
   cwdLabel: string
 }) {
   const [input, setInput] = useState('')
@@ -93,10 +118,11 @@ export function ConsoleDock({
   const [histIdx, setHistIdx] = useState(-1)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const stick = useRef(true)
 
   useEffect(() => {
     const el = scrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    if (el && stick.current) el.scrollTop = el.scrollHeight
   }, [lines, expanded])
 
   const send = () => {
@@ -106,10 +132,15 @@ export function ConsoleDock({
     setHistory((h) => [text, ...h.filter((x) => x !== text)].slice(0, 50))
     setHistIdx(-1)
     setInput('')
+    stick.current = true
   }
 
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') return send()
+    if (e.key === 'c' && e.ctrlKey && !input && running) {
+      e.preventDefault()
+      return onStop()
+    }
     if (e.key === 'ArrowUp' && history.length) {
       e.preventDefault()
       const i = Math.min(histIdx + 1, history.length - 1)
@@ -128,19 +159,37 @@ export function ConsoleDock({
     <div
       className={cn(
         'flex flex-col border-line bg-[#0c0c10]',
-        expanded ? 'fixed inset-0 z-40' : 'h-[260px] shrink-0 border-t'
+        expanded ? 'fixed inset-0 z-40' : 'h-[280px] shrink-0 border-t'
       )}
     >
       {/* Barra de título do console */}
-      <div className="flex h-9 shrink-0 items-center justify-between border-b border-line px-4">
-        <div className="flex items-center gap-2 text-xs text-zinc-500">
+      <div className="flex h-9 shrink-0 items-center justify-between gap-3 border-b border-line px-4">
+        <div className="flex min-w-0 items-center gap-2 text-xs text-zinc-500">
           <span className="font-semibold uppercase tracking-wider text-zinc-400">Console</span>
           <span className="text-zinc-700">·</span>
-          <span className="truncate font-mono" title={cwdLabel}>
+          <FolderTree size={12} className="shrink-0" />
+          <select
+            value={target}
+            onChange={(e) => onTargetChange(e.target.value)}
+            className="max-w-[200px] cursor-pointer rounded border border-transparent bg-transparent text-xs text-zinc-300 hover:border-line focus:outline-none"
+            title="Pasta onde os comandos do console rodam"
+          >
+            {targets.map((t) => (
+              <option key={t.value} value={t.value} className="bg-card">
+                {t.label}
+              </option>
+            ))}
+          </select>
+          <span className="truncate font-mono text-zinc-600" title={cwdLabel}>
             {cwdLabel}
           </span>
         </div>
-        <div className="flex items-center gap-0.5">
+        <div className="flex shrink-0 items-center gap-0.5">
+          {mode === 'claude' && hasChat && (
+            <IconButton title="Nova conversa com o Claude" tone="accent" onClick={onNewChat}>
+              <MessageSquarePlus size={14} />
+            </IconButton>
+          )}
           <IconButton title="Limpar console" onClick={onClear}>
             <Trash2 size={13} />
           </IconButton>
@@ -153,16 +202,18 @@ export function ConsoleDock({
       {/* Saída */}
       <div
         ref={scrollRef}
+        onScroll={(e) => {
+          const el = e.currentTarget
+          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+        }}
         className="selectable min-h-0 flex-1 overflow-y-auto px-4 py-2 font-mono text-[12.5px] leading-relaxed"
         onClick={() => window.getSelection()?.isCollapsed && inputRef.current?.focus()}
       >
         {lines.length === 0 ? (
-          <div className="pt-2 text-zinc-600">
-            Pronto. Execute um script ou digite um comando abaixo.
-          </div>
+          <div className="pt-2 text-zinc-600">Pronto. Execute um script ou digite um comando abaixo.</div>
         ) : (
           lines.map((l) => (
-            <div key={l.id} className={cn('whitespace-pre-wrap break-words', kindCls[l.kind])}>
+            <div key={l.id} className={cn('min-h-[1.2em] whitespace-pre-wrap break-words', kindCls[l.kind])}>
               {l.kind === 'cmd' && <span className="text-zinc-600">$ </span>}
               {l.kind === 'user' && <span className="text-zinc-600">› </span>}
               {l.text}
@@ -206,7 +257,13 @@ export function ConsoleDock({
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKey}
             spellCheck={false}
-            placeholder={mode === 'terminal' ? 'Digite um comando…' : 'Pergunte ou dê uma ordem ao Claude…'}
+            placeholder={
+              mode === 'terminal'
+                ? 'Digite um comando… (Ctrl+C para parar)'
+                : hasChat
+                  ? 'Continue a conversa com o Claude…'
+                  : 'Pergunte ou dê uma ordem ao Claude…'
+            }
             className="h-full min-w-0 flex-1 bg-transparent px-2 font-mono text-[12.5px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none"
           />
           <IconButton title="Enviar (Enter)" tone="accent" onClick={send}>
@@ -214,7 +271,17 @@ export function ConsoleDock({
           </IconButton>
         </div>
 
-        <StatusPill status={status} exitCode={exitCode} />
+        {running > 0 && (
+          <button
+            type="button"
+            onClick={onStop}
+            title="Parar a execução mais recente"
+            className="inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 text-xs text-red-300 hover:bg-red-500/20"
+          >
+            <Square size={11} fill="currentColor" /> Parar
+          </button>
+        )}
+        <StatusPill status={status} exitCode={exitCode} running={running} />
       </div>
     </div>
   )

@@ -5,11 +5,13 @@ import { cn } from '../lib/utils'
 export function Header({
   status,
   onToggle,
-  remoteCount
+  remoteCount,
+  remoteActive
 }: {
   status: PresenceStatus
   onToggle: () => void
   remoteCount: number
+  remoteActive: number
 }) {
   const on = status === 'on'
   return (
@@ -32,7 +34,7 @@ export function Header({
           <div className="text-zinc-600">
             {on
               ? `${remoteCount} projeto(s) com Remote Control`
-              : `Remote Control em ${remoteCount} projeto(s) (Fase 2)`}
+              : `Remote Control ativo em ${remoteActive}/${remoteCount}`}
           </div>
         </div>
 
