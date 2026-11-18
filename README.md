@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-Requisitos: Node.js 20+ e git no PATH.
+Requisitos: **Node.js 22 LTS** (mínimo 20.19 ou 22.12, exigência do Vite 7) e git no PATH. Confira com `node -v`.
 
 ## Onde ficam os dados
 
