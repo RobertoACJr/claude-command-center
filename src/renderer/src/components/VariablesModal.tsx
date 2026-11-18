@@ -7,19 +7,22 @@ import { fillVariables } from '../lib/utils'
 export function VariablesModal({
   script,
   variables,
+  initialValues,
   onClose,
   onRun
 }: {
   script: Script | null
   variables: string[]
+  /** Valores sugeridos (ex: vindos de um alerta do Vigia) */
+  initialValues?: Record<string, string>
   onClose: () => void
   onRun: (values: Record<string, string>) => void
 }) {
   const [values, setValues] = useState<Record<string, string>>({})
 
   useEffect(() => {
-    setValues(Object.fromEntries(variables.map((v) => [v, ''])))
-  }, [script, variables])
+    setValues(Object.fromEntries(variables.map((v) => [v, initialValues?.[v] ?? ''])))
+  }, [script, variables, initialValues])
 
   const valid = variables.every((v) => values[v]?.trim())
   const submit = () => {

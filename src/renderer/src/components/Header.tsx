@@ -1,17 +1,26 @@
-import { TerminalSquare } from 'lucide-react'
-import type { PresenceStatus } from '@shared/types'
+import { useEffect, useState } from 'react'
+import { Eye, EyeOff, Loader2, Settings, TerminalSquare } from 'lucide-react'
+import type { PresenceStatus, WatcherState } from '@shared/types'
 import { cn } from '../lib/utils'
 
 export function Header({
   status,
   onToggle,
   remoteCount,
-  remoteActive
+  remoteActive,
+  watcher,
+  watcherEnabled,
+  onToggleWatcher,
+  onOpenSettings
 }: {
   status: PresenceStatus
   onToggle: () => void
   remoteCount: number
   remoteActive: number
+  watcher: WatcherState
+  watcherEnabled: boolean
+  onToggleWatcher: () => void
+  onOpenSettings: () => void
 }) {
   const on = status === 'on'
   return (
@@ -27,6 +36,15 @@ export function Header({
       </div>
 
       <div className="flex items-center gap-4">
+        <WatcherPill state={watcher} enabled={watcherEnabled} onClick={onToggleWatcher} />
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          title="Configurações & Integrações"
+          className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border border-line bg-card text-zinc-400 transition-colors hover:border-violet/60 hover:text-white"
+        >
+          <Settings size={16} />
+        </button>
         <div className="hidden text-right text-xs leading-tight sm:block">
           <div className={on ? 'text-zinc-400' : 'text-amber-300'}>
             {on ? 'Você está no PC' : 'Modo ausente'}
@@ -76,5 +94,56 @@ export function Header({
         </button>
       </div>
     </header>
+  )
+}
+
+function useNow(active: boolean) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    if (!active) return
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [active])
+  return now
+}
+
+function WatcherPill({ state, enabled, onClick }: { state: WatcherState; enabled: boolean; onClick: () => void }) {
+  const now = useNow(state.phase === 'idle' && !!state.nextAt)
+  const left = state.nextAt ? Math.max(0, Math.round((state.nextAt - now) / 1000)) : null
+  const mmss = left !== null ? `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : ''
+
+  const look = {
+    off: { cls: 'border-line bg-card text-zinc-500', icon: <EyeOff size={14} />, label: 'Vigia' },
+    idle: {
+      cls: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+      icon: <Eye size={14} />,
+      label: mmss ? `Vigia · ${mmss}` : 'Vigia'
+    },
+    checking: {
+      cls: 'border-violet/50 bg-violet/10 text-purple',
+      icon: <Loader2 size={14} className="animate-spin" />,
+      label: 'Verificando…'
+    },
+    blocked: { cls: 'border-amber-400/40 bg-amber-400/10 text-amber-300', icon: <Eye size={14} />, label: 'Vigia ⚠' }
+  }[state.phase]
+
+  const title =
+    `Monitorar Google Chat: ${enabled ? 'ligado' : 'desligado'} (clique para alternar)\n${state.reason}` +
+    (state.lastResult ? `\nÚltimo: ${state.lastResult}` : '')
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={cn(
+        'inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition-colors hover:brightness-125',
+        look.cls
+      )}
+    >
+      {look.icon}
+      {look.label}
+      {state.phase !== 'off' && !enabled && <span className="text-[10px] opacity-70">auto</span>}
+    </button>
   )
 }

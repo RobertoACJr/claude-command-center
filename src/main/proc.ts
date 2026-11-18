@@ -63,7 +63,11 @@ export function spawnShell(command: string, cwd: string, env?: Record<string, st
  * Roda o CLI `claude` com argumentos fixos (nunca texto do usuário nos args).
  * O prompt, quando houver, vai pelo stdin.
  */
-export function spawnClaude(args: string[], cwd: string, opts?: { stdin?: boolean }): ChildProcess {
+export function spawnClaude(
+  args: string[],
+  cwd: string,
+  opts?: { stdin?: boolean; env?: Record<string, string> }
+): ChildProcess {
   // CCC_CLAUDE_BIN permite apontar para um executável específico do Claude Code
   const bin = process.env.CCC_CLAUDE_BIN || 'claude'
   const stdio: SpawnOptions['stdio'] = [opts?.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe']
@@ -71,10 +75,10 @@ export function spawnClaude(args: string[], cwd: string, opts?: { stdin?: boolea
     // cmd.exe resolve claude.exe / claude.cmd pelo PATH e repassa o stdin
     const exe = /\s/.test(bin) ? `"${bin}"` : bin
     const line = [exe, ...args.map((a) => (/^[\w./:=-]+$/.test(a) ? a : `"${a.replace(/"/g, '')}"`))].join(' ')
-    return spawn(line, [], { cwd, env: baseEnv(), windowsHide: true, shell: true, stdio })
+    return spawn(line, [], { cwd, env: baseEnv(opts?.env), windowsHide: true, shell: true, stdio })
   }
   const line = 'exec ' + [bin, ...args].map(bashQuote).join(' ')
-  return spawn('/bin/bash', ['-lc', line], { cwd, env: baseEnv(), detached: true, stdio })
+  return spawn('/bin/bash', ['-lc', line], { cwd, env: baseEnv(opts?.env), detached: true, stdio })
 }
 
 /** Encerra o processo e todos os filhos. Resolve quando o processo terminou (ou após o timeout). */
@@ -159,4 +163,47 @@ function clean(line: string): string {
   const s = stripAnsi(line)
   const i = s.lastIndexOf('\r')
   return i >= 0 ? s.slice(i + 1) : s
+}
+
+/** Roda `claude <args>` até terminar e devolve a saída (para comandos curtos: mcp add/get/remove, ciclo do Vigia). */
+export function runClaudeCapture(
+  args: string[],
+  opts: { cwd: string; stdin?: string; env?: Record<string, string>; timeoutMs?: number; onLine?: (l: string) => void }
+): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean; spawnError?: string }> {
+  return new Promise((resolve) => {
+    const child = spawnClaude(args, opts.cwd, { stdin: opts.stdin !== undefined, env: opts.env })
+    let stdout = ''
+    let stderr = ''
+    let timedOut = false
+    let spawnError: string | undefined
+    const split = new LineSplitter()
+    child.stdout?.setEncoding('utf8')
+    child.stderr?.setEncoding('utf8')
+    child.stdout?.on('data', (d: string) => {
+      stdout += d
+      if (opts.onLine) split.push(d).forEach(opts.onLine)
+    })
+    child.stderr?.on('data', (d: string) => {
+      stderr += d
+      if (opts.onLine) stripAnsi(d).split(/\r?\n/).filter(Boolean).forEach(opts.onLine)
+    })
+    child.on('error', (e: NodeJS.ErrnoException) => {
+      spawnError = e.code === 'ENOENT' ? 'CLI `claude` não encontrado no PATH.' : e.message
+    })
+    const timer = opts.timeoutMs
+      ? setTimeout(() => {
+          timedOut = true
+          void killTree(child)
+        }, opts.timeoutMs)
+      : null
+    child.on('close', (code) => {
+      if (timer) clearTimeout(timer)
+      if (opts.onLine) split.flush().forEach(opts.onLine)
+      resolve({ code, stdout: stripAnsi(stdout), stderr: stripAnsi(stderr), timedOut, spawnError })
+    })
+    if (opts.stdin !== undefined) {
+      child.stdin?.on('error', () => {})
+      child.stdin?.end(opts.stdin)
+    }
+  })
 }

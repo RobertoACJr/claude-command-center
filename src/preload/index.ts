@@ -1,5 +1,11 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { CommandCenterApi, RemoteSession, RunEvent } from '../shared/types'
+import type { AppConfig, AppLog, CommandCenterApi, RemoteSession, RunEvent, WatcherState } from '../shared/types'
+
+function subscribe<T>(channel: string, cb: (v: T) => void): () => void {
+  const h = (_e: Electron.IpcRendererEvent, v: T) => cb(v)
+  ipcRenderer.on(channel, h)
+  return () => ipcRenderer.removeListener(channel, h)
+}
 
 const api: CommandCenterApi = {
   getConfig: () => ipcRenderer.invoke('config:get'),
@@ -29,7 +35,23 @@ const api: CommandCenterApi = {
     return () => ipcRenderer.removeListener('remote:update', h)
   },
   copyText: (text) => ipcRenderer.invoke('clipboard:write', text),
-  openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url)
+  openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
+
+  onConfigChanged: (cb) => subscribe<AppConfig>('config:changed', cb),
+  onAppLog: (cb) => subscribe<AppLog>('app:log', cb),
+  saveSettings: (patch) => ipcRenderer.invoke('settings:save', patch),
+  secretsStatus: () => ipcRenderer.invoke('secrets:status'),
+  mcpApply: (id) => ipcRenderer.invoke('mcp:apply', id),
+  mcpStatus: (id) => ipcRenderer.invoke('mcp:status', id),
+  mcpLogin: (id) => ipcRenderer.invoke('mcp:login', id),
+  telegramTest: () => ipcRenderer.invoke('telegram:test'),
+  telegramDetectChat: () => ipcRenderer.invoke('telegram:detectChat'),
+  watcherState: () => ipcRenderer.invoke('watcher:state'),
+  onWatcherState: (cb) => subscribe<WatcherState>('watcher:state', cb),
+  watcherRunNow: () => ipcRenderer.invoke('watcher:runNow'),
+  setWatcherEnabled: (enabled) => ipcRenderer.invoke('watcher:setEnabled', enabled),
+  setAlertStatus: (id, status) => ipcRenderer.invoke('alerts:setStatus', id, status),
+  clearResolvedAlerts: () => ipcRenderer.invoke('alerts:clearResolved')
 }
 
 contextBridge.exposeInMainWorld('api', api)

@@ -1,11 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AppConfig, ConsoleMode, Project, RemoteSession, RunEvent, Script, ScriptType } from '@shared/types'
+import type {
+  AppConfig,
+  ConsoleMode,
+  DeployAlert,
+  Project,
+  RemoteSession,
+  RunEvent,
+  Script,
+  ScriptType,
+  WatcherState
+} from '@shared/types'
 import { Header } from './components/Header'
 import { ProjectsPanel } from './components/ProjectsPanel'
 import { ScriptsPanel } from './components/ScriptsPanel'
 import { ProjectModal } from './components/ProjectModal'
 import { ScriptModal } from './components/ScriptModal'
 import { VariablesModal } from './components/VariablesModal'
+import { SettingsModal } from './components/SettingsModal'
+import { AlertsBar } from './components/AlertsBar'
 import { ConsoleDock, type ConsoleLine, type LineKind, type RunStatus } from './components/ConsoleDock'
 import { ConfirmModal } from './components/ui'
 import { extractVariables, fillVariables, resolveTargetPath, shortPath } from './lib/utils'
@@ -29,8 +41,14 @@ export default function App() {
     item: null
   })
   const [scriptModal, setScriptModal] = useState<{ open: boolean; item: Script | null }>({ open: false, item: null })
-  const [varsPrompt, setVarsPrompt] = useState<{ script: Script; vars: string[] } | null>(null)
+  const [varsPrompt, setVarsPrompt] = useState<{
+    script: Script
+    vars: string[]
+    initial?: Record<string, string>
+  } | null>(null)
   const [confirm, setConfirm] = useState<Confirm>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [watcher, setWatcher] = useState<WatcherState>({ phase: 'off', reason: 'Desligado', nextAt: null, lastResult: null })
 
   // ---------- console / execução ----------
   const [lines, setLines] = useState<ConsoleLine[]>([])
@@ -59,9 +77,16 @@ export default function App() {
   useEffect(() => {
     if (booted.current) return
     booted.current = true
-    Promise.all([window.api.getConfig(), window.api.homeDir(), window.api.configPath(), window.api.remoteList()]).then(
-      ([cfg, h, cfgPath, sessions]) => {
+    Promise.all([
+      window.api.getConfig(),
+      window.api.homeDir(),
+      window.api.configPath(),
+      window.api.remoteList(),
+      window.api.watcherState()
+    ]).then(
+      ([cfg, h, cfgPath, sessions, ws]) => {
         setConfig(cfg)
+        setWatcher(ws)
         setHome(h)
         if (cfg.projects[0]) setConsoleTarget(cfg.projects[0].id)
         setRemote(Object.fromEntries(sessions.map((s) => [s.projectId, s])))
@@ -101,6 +126,11 @@ export default function App() {
     })
     return off
   }, [log, logMany])
+
+  // Fase 3: config alterada pelo main (Vigia, alertas), logs do app e estado do Vigia
+  useEffect(() => window.api.onConfigChanged(setConfig), [])
+  useEffect(() => window.api.onWatcherState(setWatcher), [])
+  useEffect(() => window.api.onAppLog((l) => log(l.kind, l.text)), [log])
 
   // Sessões de Remote Control
   useEffect(
@@ -183,10 +213,37 @@ export default function App() {
     )
   }
 
-  const runScript = (s: Script) => {
+  const runScript = (s: Script, initial?: Record<string, string>) => {
     const vars = extractVariables(s.content)
-    if (vars.length) return setVarsPrompt({ script: s, vars })
+    if (vars.length) return setVarsPrompt({ script: s, vars, initial })
     doRun(s, {})
+  }
+
+  // ---------- alertas do Vigia ----------
+  /** Sugere valores para {{variaveis}} a partir do alerta (card, branch, ambiente…) */
+  const alertValues = (a: DeployAlert): Record<string, string> => ({
+    card: a.card,
+    ticket: a.card,
+    issue: a.card,
+    branch: a.branch,
+    ambiente: a.environment,
+    environment: a.environment,
+    env: a.environment,
+    solicitante: a.requester,
+    requester: a.requester
+  })
+
+  const approveAlert = async (a: DeployAlert) => {
+    setConfig(await window.api.setAlertStatus(a.id, 'approved'))
+    log('success', `✔ Pedido aprovado: ${a.card || a.branch || a.summary} → ${a.environment || '?'}`)
+  }
+  const dismissAlert = async (a: DeployAlert) => {
+    setConfig(await window.api.setAlertStatus(a.id, 'dismissed'))
+    log('info', `Pedido descartado: ${a.card || a.branch || a.summary}`)
+  }
+  const approveAndRun = async (a: DeployAlert, s: Script) => {
+    await approveAlert(a)
+    runScript(s, alertValues(a))
   }
 
   const doRun = (s: Script, values: Record<string, string>) => {
@@ -220,7 +277,16 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <Header status={config.status} onToggle={toggleStatus} remoteCount={remoteCount} remoteActive={remoteActive} />
+      <Header
+        status={config.status}
+        onToggle={toggleStatus}
+        remoteCount={remoteCount}
+        remoteActive={remoteActive}
+        watcher={watcher}
+        watcherEnabled={config.watcher.enabled}
+        onToggleWatcher={async () => setConfig(await window.api.setWatcherEnabled(!config.watcher.enabled))}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
 
       <main className="grid min-h-0 flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-[minmax(320px,2fr)_3fr]">
         <ProjectsPanel
@@ -242,6 +308,15 @@ export default function App() {
           onRun={runScript}
         />
       </main>
+
+      <AlertsBar
+        alerts={config.alerts}
+        scripts={config.scripts}
+        onApprove={approveAlert}
+        onDismiss={dismissAlert}
+        onApproveAndRun={approveAndRun}
+        onClearResolved={async () => setConfig(await window.api.clearResolvedAlerts())}
+      />
 
       <ConsoleDock
         lines={lines}
@@ -289,9 +364,11 @@ export default function App() {
       <VariablesModal
         script={varsPrompt?.script ?? null}
         variables={varsPrompt?.vars ?? []}
+        initialValues={varsPrompt?.initial}
         onClose={() => setVarsPrompt(null)}
         onRun={(values) => varsPrompt && doRun(varsPrompt.script, values)}
       />
+      <SettingsModal open={settingsOpen} config={config} watcher={watcher} onClose={() => setSettingsOpen(false)} />
       <ConfirmModal
         open={!!confirm}
         title={confirm?.kind === 'project' ? 'Excluir projeto?' : 'Excluir script?'}

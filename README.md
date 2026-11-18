@@ -35,6 +35,25 @@ O caminho exato aparece na primeira linha do console do app.
   sem terminal o CLI não consegue perguntar e sai.
 - `CCC_CLAUDE_BIN=/caminho/do/claude` força um executável específico do Claude Code.
 
+## Fase 3: integrações, Telegram e Modo Vigia
+
+Engrenagem no header → **Configurações & Integrações**.
+
+- **MCPs** são registrados pelo próprio CLI (`claude mcp add-json <nome> -` / `claude mcp add`, escopo `user`), com nomes
+  `ccc-github`, `ccc-jira`, `ccc-gchat` para não mexer nos seus MCPs. Tokens vão pelo stdin ou por variável de ambiente.
+  - GitHub: servidor remoto oficial (`api.githubcopilot.com/mcp`, ou `/readonly`) com PAT.
+  - Jira: `uvx mcp-atlassian` com URL + e-mail + API token (precisa do [uv](https://docs.astral.sh/uv/)).
+  - Google Chat: **oficial** (`chatmcp.googleapis.com`, OAuth; hoje em Developer Preview do Workspace) ou **personalizado**
+    (cole o JSON de outro servidor e diga quais ferramentas são de leitura).
+  - Se o app for aberto *de dentro* de uma sessão do Claude Code, o CLI recusa o `add-json` via stdin. Abra por um terminal comum.
+- **Tokens** ficam em `secrets.json` (userData), cifrados com o cofre do sistema (DPAPI no Windows, libsecret/kwallet no Linux).
+  Os valores nunca voltam para a interface.
+- **Telegram**: o app chama `sendMessage` direto (o Claude nunca vê o token). Botões "Detectar" (Chat ID via `getUpdates`) e "Testar".
+- **Modo Vigia**: toggle no header, ou automático quando o status vai pra OFF. A cada N minutos:
+  `claude -p --tools "" --permission-mode default --allowedTools <leitura do Google Chat> --disallowedTools <escrita>`.
+  O Claude devolve JSON; o app deduplica pelo ID da mensagem, cria o alerta, avisa no Telegram e **espera você**:
+  "Aprovar e executar" abre o script escolhido com `{{card}}`, `{{branch}}`, `{{ambiente}}`/`{{env}}`, `{{solicitante}}` já preenchidos.
+
 ## Estrutura
 
 ```
@@ -46,6 +65,10 @@ src/
   main/proc.ts           spawn de shell/claude, kill da árvore, split de linhas
   main/runner.ts         execuções (terminal + Claude stream-json)
   main/remote.ts         sessões de Remote Control (reconciliação ON/OFF)
+  main/secrets.ts        cofre de tokens (safeStorage)
+  main/mcp.ts            claude mcp add/get/login para GitHub, Jira, Google Chat
+  main/telegram.ts       sendMessage / getUpdates
+  main/watcher.ts        ciclo do Modo Vigia (só leitura) + alertas
   preload/index.ts       contextBridge → window.api
   renderer/src/
     App.tsx              estado + orquestração
@@ -57,5 +80,5 @@ src/
 
 - [x] Fase 1: UI, CRUD de projetos/scripts, persistência JSON, detecção de branch, variáveis `{{x}}`, console dock
 - [x] Fase 2: execução real (bash/PowerShell, `claude -p` em streaming, Remote Control automático no OFF)
-- [ ] Fase 3: MCPs, Telegram, modo vigia
+- [x] Fase 3: MCPs (GitHub, Jira, Google Chat), Telegram, Modo Vigia com aprovação
 - [ ] Fase 4: instaladores

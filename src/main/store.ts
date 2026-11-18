@@ -1,22 +1,60 @@
 import { app } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, copyFileSync } from 'fs'
 import { join } from 'path'
-import type { AppConfig, Project, Script, UiState } from '../shared/types'
+import type {
+  AlertStatus,
+  AppConfig,
+  DeployAlert,
+  IntegrationId,
+  Project,
+  Script,
+  SettingsPatch,
+  UiState
+} from '../shared/types'
 
-const DEFAULT_CONFIG: AppConfig = {
-  version: 1,
-  status: 'on',
-  projects: [],
-  scripts: [],
-  ui: { consoleExpanded: false, consoleMode: 'terminal' }
+function defaults(): AppConfig {
+  return {
+    version: 1,
+    status: 'on',
+    projects: [],
+    scripts: [],
+    ui: { consoleExpanded: false, consoleMode: 'terminal' },
+    integrations: {
+      github: { enabled: false, readOnly: true },
+      jira: { enabled: false, url: '', email: '' },
+      gchat: { enabled: false, mode: 'official', clientId: '', callbackPort: 8765, readTools: '' },
+      lastApplied: {}
+    },
+    telegram: { chatId: '' },
+    watcher: {
+      enabled: false,
+      autoWhenOff: true,
+      intervalMin: 3,
+      focus: '',
+      model: '',
+      lastCheckAt: null,
+      seen: []
+    },
+    alerts: []
+  }
 }
 
 export function configFilePath(): string {
   return join(app.getPath('userData'), 'config.json')
 }
 
+const str = (v: unknown, d = '') => (typeof v === 'string' ? v : d)
+const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d)
+const num = (v: unknown, d: number, min: number, max: number) =>
+  typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : d
+
 function normalize(raw: unknown): AppConfig {
+  const d = defaults()
   const r = (raw && typeof raw === 'object' ? raw : {}) as Partial<AppConfig>
+  const gi = r.integrations?.github
+  const ji = r.integrations?.jira
+  const ci = r.integrations?.gchat
+  const w = r.watcher
   return {
     version: 1,
     status: r.status === 'off' ? 'off' : 'on',
@@ -25,24 +63,56 @@ function normalize(raw: unknown): AppConfig {
     ui: {
       consoleExpanded: Boolean(r.ui?.consoleExpanded),
       consoleMode: r.ui?.consoleMode === 'claude' ? 'claude' : 'terminal'
-    }
+    },
+    integrations: {
+      github: { enabled: bool(gi?.enabled, false), readOnly: bool(gi?.readOnly, true) },
+      jira: { enabled: bool(ji?.enabled, false), url: str(ji?.url).trim(), email: str(ji?.email).trim() },
+      gchat: {
+        enabled: bool(ci?.enabled, false),
+        mode: ci?.mode === 'custom' ? 'custom' : 'official',
+        clientId: str(ci?.clientId).trim(),
+        callbackPort: num(ci?.callbackPort, 8765, 1024, 65535),
+        readTools: str(ci?.readTools)
+      },
+      lastApplied: r.integrations?.lastApplied && typeof r.integrations.lastApplied === 'object'
+        ? r.integrations.lastApplied
+        : {}
+    },
+    telegram: { chatId: str(r.telegram?.chatId).trim() },
+    watcher: {
+      enabled: bool(w?.enabled, d.watcher.enabled),
+      autoWhenOff: bool(w?.autoWhenOff, d.watcher.autoWhenOff),
+      intervalMin: num(w?.intervalMin, 3, 1, 120),
+      focus: str(w?.focus),
+      model: str(w?.model).trim(),
+      lastCheckAt: typeof w?.lastCheckAt === 'number' ? w.lastCheckAt : null,
+      seen: Array.isArray(w?.seen) ? w.seen.filter((x) => typeof x === 'string').slice(-500) : []
+    },
+    alerts: Array.isArray(r.alerts) ? (r.alerts as DeployAlert[]).filter((a) => a && a.id).slice(-200) : []
   }
 }
 
+type Listener = (cfg: AppConfig) => void
+
 class ConfigStore {
-  private data: AppConfig = structuredClone(DEFAULT_CONFIG)
+  private data: AppConfig = defaults()
+  private listeners: Listener[] = []
+
+  /** Avisado a cada mudança (Remote Control, Vigia e renderer acompanham) */
+  onChange(fn: Listener): void {
+    this.listeners.push(fn)
+  }
 
   load(): AppConfig {
     const file = configFilePath()
     if (!existsSync(file)) {
-      this.data = structuredClone(DEFAULT_CONFIG)
+      this.data = defaults()
       this.persist()
       return this.get()
     }
     try {
       this.data = normalize(JSON.parse(readFileSync(file, 'utf-8')))
     } catch (err) {
-      // Arquivo corrompido: guarda uma cópia e recomeça limpo
       const backup = `${file}.corrupt-${Date.now()}`
       try {
         copyFileSync(file, backup)
@@ -50,7 +120,7 @@ class ConfigStore {
         /* ignore */
       }
       console.error('[store] config.json inválido, backup salvo em', backup, err)
-      this.data = structuredClone(DEFAULT_CONFIG)
+      this.data = defaults()
       this.persist()
     }
     return this.get()
@@ -73,7 +143,9 @@ class ConfigStore {
     mutator(draft)
     this.data = normalize(draft)
     this.persist()
-    return this.get()
+    const snapshot = this.get()
+    for (const fn of this.listeners) fn(snapshot)
+    return snapshot
   }
 
   setStatus(status: AppConfig['status']): AppConfig {
@@ -93,7 +165,6 @@ class ConfigStore {
   deleteProject(id: string): AppConfig {
     return this.update((d) => {
       d.projects = d.projects.filter((x) => x.id !== id)
-      // Scripts vinculados a esse projeto passam a ser Global
       d.scripts = d.scripts.map(
         (s): Script =>
           s.target.kind === 'project' && s.target.projectId === id ? { ...s, target: { kind: 'global' } } : s
@@ -118,6 +189,55 @@ class ConfigStore {
   saveUi(ui: Partial<UiState>): AppConfig {
     return this.update((d) => {
       d.ui = { ...d.ui, ...ui }
+    })
+  }
+
+  // ---------- Fase 3 ----------
+
+  saveSettings(patch: SettingsPatch): AppConfig {
+    return this.update((d) => {
+      if (patch.integrations?.github) d.integrations.github = { ...d.integrations.github, ...patch.integrations.github }
+      if (patch.integrations?.jira) d.integrations.jira = { ...d.integrations.jira, ...patch.integrations.jira }
+      if (patch.integrations?.gchat) d.integrations.gchat = { ...d.integrations.gchat, ...patch.integrations.gchat }
+      if (patch.telegram) d.telegram = { ...d.telegram, ...patch.telegram }
+      if (patch.watcher) d.watcher = { ...d.watcher, ...patch.watcher }
+    })
+  }
+
+  setApplied(id: IntegrationId, ok: boolean, message: string): AppConfig {
+    return this.update((d) => {
+      d.integrations.lastApplied[id] = { ok, at: Date.now(), message: message.slice(0, 500) }
+    })
+  }
+
+  setWatcherEnabled(enabled: boolean): AppConfig {
+    return this.update((d) => {
+      d.watcher.enabled = enabled
+    })
+  }
+
+  /** Grava resultado de um ciclo do Vigia: novos alertas + mensagens vistas + horário */
+  recordWatcherCycle(checkedAt: number, newAlerts: DeployAlert[], seenIds: string[]): AppConfig {
+    return this.update((d) => {
+      d.watcher.lastCheckAt = checkedAt
+      d.watcher.seen = [...new Set([...d.watcher.seen, ...seenIds])].slice(-500)
+      d.alerts = [...d.alerts, ...newAlerts].slice(-200)
+    })
+  }
+
+  patchAlert(id: string, patch: Partial<Pick<DeployAlert, 'status' | 'telegram'>>): AppConfig {
+    return this.update((d) => {
+      d.alerts = d.alerts.map((a) => (a.id === id ? { ...a, ...patch } : a))
+    })
+  }
+
+  setAlertStatus(id: string, status: AlertStatus): AppConfig {
+    return this.patchAlert(id, { status })
+  }
+
+  clearResolvedAlerts(): AppConfig {
+    return this.update((d) => {
+      d.alerts = d.alerts.filter((a) => a.status === 'pending')
     })
   }
 }

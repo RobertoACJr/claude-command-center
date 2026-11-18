@@ -6,7 +6,22 @@ import { configFilePath, store } from './store'
 import { getGitBranch } from './git'
 import { RunManager } from './runner'
 import { RemoteManager } from './remote'
-import type { AppConfig, PresenceStatus, Project, RunRequest, Script, UiState } from '../shared/types'
+import { secrets } from './secrets'
+import { applyIntegration, integrationLogin, integrationStatus } from './mcp'
+import { detectChatId, formatDecision, sendTelegram } from './telegram'
+import { Watcher } from './watcher'
+import type {
+  AlertStatus,
+  AppLog,
+  IntegrationId,
+  PresenceStatus,
+  Project,
+  RunRequest,
+  Script,
+  SecretKey,
+  SettingsPatch,
+  UiState
+} from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -17,11 +32,18 @@ function send(channel: string, payload: unknown): void {
 const runs = new RunManager((e) => send('run:event', e))
 const remote = new RemoteManager((sessions) => send('remote:update', sessions))
 
-/** Toda mudança de config passa por aqui para o Remote Control acompanhar */
-function after(cfg: AppConfig): AppConfig {
+const appLog = (l: AppLog) => send('app:log', l)
+const watcher = new Watcher((s) => send('watcher:state', s), appLog)
+
+// Toda mudança de config: Remote Control e Vigia se reconciliam, e a interface recebe a versão nova
+store.onChange((cfg) => {
   remote.sync(cfg)
-  return cfg
-}
+  watcher.evaluate(cfg)
+  send('config:changed', cfg)
+})
+
+const INTEGRATIONS: IntegrationId[] = ['github', 'jira', 'gchat']
+const SECRET_KEYS: SecretKey[] = ['github.pat', 'jira.token', 'gchat.clientSecret', 'gchat.customJson', 'telegram.token']
 
 function preloadPath(): string {
   const dir = join(__dirname, '../preload')
@@ -64,9 +86,9 @@ function createWindow(): void {
 
 function registerIpc(): void {
   ipcMain.handle('config:get', () => store.get())
-  ipcMain.handle('config:setStatus', (_e, status: PresenceStatus) => after(store.setStatus(status)))
-  ipcMain.handle('projects:save', (_e, p: Project) => after(store.saveProject(p)))
-  ipcMain.handle('projects:delete', (_e, id: string) => after(store.deleteProject(id)))
+  ipcMain.handle('config:setStatus', (_e, status: PresenceStatus) => store.setStatus(status))
+  ipcMain.handle('projects:save', (_e, p: Project) => store.saveProject(p))
+  ipcMain.handle('projects:delete', (_e, id: string) => store.deleteProject(id))
   ipcMain.handle('scripts:save', (_e, s: Script) => store.saveScript(s))
   ipcMain.handle('scripts:delete', (_e, id: string) => store.deleteScript(id))
   ipcMain.handle('ui:save', (_e, ui: Partial<UiState>) => store.saveUi(ui))
@@ -83,6 +105,49 @@ function registerIpc(): void {
   ipcMain.handle('shell:openExternal', (_e, url: string) => {
     if (/^https:\/\//.test(url)) return shell.openExternal(url)
   })
+
+  // Fase 3: configurações, MCPs, Telegram, Vigia
+  ipcMain.handle('settings:save', (_e, patch: SettingsPatch) => {
+    for (const [k, v] of Object.entries(patch.secrets ?? {})) {
+      if (SECRET_KEYS.includes(k as SecretKey) && v !== undefined) secrets.set(k as SecretKey, v)
+    }
+    return store.saveSettings({ ...patch, secrets: undefined })
+  })
+  ipcMain.handle('secrets:status', () => secrets.status())
+  ipcMain.handle('mcp:apply', async (_e, id: IntegrationId) => {
+    if (!INTEGRATIONS.includes(id)) return { ok: false, message: 'Integração desconhecida' }
+    appLog({ kind: 'info', text: `[MCP] aplicando ${id}…` })
+    const r = await applyIntegration(id, store.get())
+    store.setApplied(id, r.ok, r.message)
+    appLog({ kind: r.ok ? 'success' : 'error', text: `[MCP] ${id}: ${r.message.split('\n')[0]}` })
+    return r
+  })
+  ipcMain.handle('mcp:status', (_e, id: IntegrationId) =>
+    INTEGRATIONS.includes(id) ? integrationStatus(id) : { ok: false, message: 'Integração desconhecida' }
+  )
+  ipcMain.handle('mcp:login', async (_e, id: IntegrationId) => {
+    if (!INTEGRATIONS.includes(id)) return { ok: false, message: 'Integração desconhecida' }
+    appLog({ kind: 'info', text: `[MCP] login ${id}: siga no navegador que vai abrir…` })
+    const r = await integrationLogin(id, (line) => appLog({ kind: 'info', text: `[MCP] ${line}` }))
+    appLog({ kind: r.ok ? 'success' : 'error', text: `[MCP] login ${id}: ${r.ok ? 'ok' : r.message}` })
+    return r
+  })
+  ipcMain.handle('telegram:test', () =>
+    sendTelegram(store.get().telegram.chatId, '✅ <b>Claude Command Center</b>\nNotificações funcionando.')
+  )
+  ipcMain.handle('telegram:detectChat', () => detectChatId())
+  ipcMain.handle('watcher:state', () => watcher.getState())
+  ipcMain.handle('watcher:runNow', () => watcher.runNow())
+  ipcMain.handle('watcher:setEnabled', (_e, enabled: boolean) => store.setWatcherEnabled(Boolean(enabled)))
+  ipcMain.handle('alerts:setStatus', async (_e, id: string, status: AlertStatus) => {
+    const cfg = store.setAlertStatus(id, status)
+    const alert = cfg.alerts.find((a) => a.id === id)
+    if (alert && status !== 'pending' && alert.telegram === 'sent' && secrets.get('telegram.token')) {
+      void sendTelegram(cfg.telegram.chatId, formatDecision(alert, status === 'approved'))
+    }
+    return cfg
+  })
+  ipcMain.handle('alerts:clearResolved', () => store.clearResolvedAlerts())
 
   ipcMain.handle('dialog:pickFolder', async (_e, defaultPath?: string) => {
     const opts: Electron.OpenDialogOptions = {
@@ -111,8 +176,11 @@ if (!gotLock) {
     const cfg = store.load()
     registerIpc()
     createWindow()
-    // Se o app abriu já em OFF, sobe as sessões remotas
-    mainWindow?.webContents.once('did-finish-load', () => remote.sync(cfg))
+    // Se o app abriu já em OFF, sobe as sessões remotas e o Vigia
+    mainWindow?.webContents.once('did-finish-load', () => {
+      remote.sync(cfg)
+      watcher.evaluate(cfg)
+    })
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
@@ -120,11 +188,13 @@ if (!gotLock) {
 
   // Encerra tudo que o app abriu: nada de processo órfão/zumbi
   app.on('before-quit', () => {
+    watcher.stop()
     runs.stopAllSync()
     remote.stopAllSync()
   })
   for (const sig of ['SIGINT', 'SIGTERM'] as const) {
     process.on(sig, () => {
+      watcher.stop()
       runs.stopAllSync()
       remote.stopAllSync()
       app.exit(0)
