@@ -1,11 +1,11 @@
 import { homedir } from 'os'
 import { createHash, randomUUID } from 'crypto'
 import { MCP_NAMES, type AppConfig, type AppLog, type DeployAlert, type WatcherState } from '../shared/types'
+import { findRule, matchProject } from '../shared/vars'
 import { GCHAT_OFFICIAL_READ_TOOLS, GCHAT_OFFICIAL_WRITE_TOOLS } from './mcp'
-import { runClaudeCapture } from './proc'
+import { runClaudeCapture, runGeminiCapture } from './proc'
 import { store } from './store'
-import { secrets } from './secrets'
-import { formatAlert, sendTelegram } from './telegram'
+import { ensureWatcherPolicy, geminiReadTools, geminiWatcherArgs } from './gemini'
 
 const CYCLE_TIMEOUT_MS = 4 * 60_000
 const FIRST_LOOKBACK_MS = 6 * 60 * 60_000
@@ -19,6 +19,9 @@ const OVERLAP_MS = 2 * 60_000
  *   --disallowedTools         → bloqueio explícito das de escrita (deny vence allow)
  *   --permission-mode default → ignora um "bypassPermissions" que esteja nas suas configs
  * O Claude só devolve JSON; quem manda o Telegram é o app.
+ *
+ * Com o provedor Gemini (poupa os tokens do Claude), a trava vem do próprio Gemini CLI:
+ * só o servidor ccc-gchat carregado + política que libera só a leitura (ver gemini.ts).
  */
 export class Watcher {
   private timer: NodeJS.Timeout | null = null
@@ -29,7 +32,9 @@ export class Watcher {
 
   constructor(
     private notify: (s: WatcherState) => void,
-    private log: (l: AppLog) => void
+    private log: (l: AppLog) => void,
+    /** O que fazer com cada pedido novo (Telegram, respostas, regras) */
+    private onNewAlert: (a: DeployAlert) => Promise<void>
   ) {}
 
   getState(): WatcherState {
@@ -51,6 +56,8 @@ export class Watcher {
     if (wants && !cfg.integrations.gchat.enabled) blocked = 'Configure o Google Chat em Configurações → Integrações.'
     else if (wants && cfg.integrations.gchat.mode === 'custom' && toolList(cfg).allowed.length === 0)
       blocked = 'Modo personalizado: informe as ferramentas de leitura permitidas.'
+    else if (wants && cfg.watcher.provider === 'gemini' && geminiReadTools(cfg).length === 0)
+      blocked = 'Gemini: informe as ferramentas de leitura do Google Chat.'
 
     if (!wants || blocked) {
       if (this.active) this.log({ kind: 'info', text: '[Vigia] desligado' })
@@ -96,52 +103,68 @@ export class Watcher {
     const startedAt = Date.now()
 
     try {
-      const { allowed, disallowed } = toolList(cfg)
-      const args = [
-        '-p',
-        '--output-format',
-        'json',
-        '--tools',
-        '',
-        '--permission-mode',
-        'default',
-        '--allowedTools',
-        allowed.join(','),
-        '--max-budget-usd',
-        '1'
-      ]
-      if (disallowed.length) args.push('--disallowedTools', disallowed.join(','))
-      if (cfg.watcher.model && /^[\w.-]+$/.test(cfg.watcher.model)) args.push('--model', cfg.watcher.model)
+      const prompt = buildPrompt(cfg, startedAt)
+      const provider = cfg.watcher.provider
+      let resultText: string
+      let costLabel = ''
 
-      const r = await runClaudeCapture(args, {
-        cwd: homedir(),
-        stdin: buildPrompt(cfg, startedAt),
-        timeoutMs: CYCLE_TIMEOUT_MS
-      })
+      if (provider === 'gemini') {
+        const policy = ensureWatcherPolicy(cfg)
+        if (!policy.ok) throw new Error(policy.message)
+        const r = await runGeminiCapture(geminiWatcherArgs(cfg), { cwd: homedir(), stdin: prompt, timeoutMs: CYCLE_TIMEOUT_MS })
+        if (r.spawnError || r.timedOut) throw new Error(r.spawnError ?? 'Tempo esgotado (4 min).')
+        const envelope = parseLastJson(r.stdout) as { response?: string; error?: { message?: string } | string; stats?: Record<string, any> } | null
+        if (!envelope) throw new Error((r.stderr || r.stdout).trim().split('\n').slice(-2).join(' ') || `código ${r.code}`)
+        if (envelope.error) {
+          const em = typeof envelope.error === 'string' ? envelope.error : (envelope.error.message ?? 'erro')
+          throw new Error(`Gemini: ${String(em).slice(0, 300)}`)
+        }
+        resultText = String(envelope.response ?? '')
+        costLabel = ' · Gemini'
+      } else {
+        const { allowed, disallowed } = toolList(cfg)
+        const args = [
+          '-p',
+          '--output-format',
+          'json',
+          '--tools',
+          '',
+          '--permission-mode',
+          'default',
+          '--allowedTools',
+          allowed.join(','),
+          '--max-budget-usd',
+          '1'
+        ]
+        if (disallowed.length) args.push('--disallowedTools', disallowed.join(','))
+        if (cfg.watcher.model && /^[\w.-]+$/.test(cfg.watcher.model)) args.push('--model', cfg.watcher.model)
 
-      if (r.spawnError || r.timedOut) throw new Error(r.spawnError ?? 'Tempo esgotado (4 min).')
+        const r = await runClaudeCapture(args, { cwd: homedir(), stdin: prompt, timeoutMs: CYCLE_TIMEOUT_MS })
+        if (r.spawnError || r.timedOut) throw new Error(r.spawnError ?? 'Tempo esgotado (4 min).')
 
-      const envelope = parseLastJson(r.stdout) as
-        | { result?: string; is_error?: boolean; total_cost_usd?: number; permission_denials?: unknown[] }
-        | null
-      if (!envelope) throw new Error((r.stderr || r.stdout).trim().split('\n').slice(-2).join(' ') || `código ${r.code}`)
-      if (envelope.is_error) throw new Error(`Claude: ${String(envelope.result ?? 'erro').slice(0, 300)}`)
-
-      if (Array.isArray(envelope.permission_denials) && envelope.permission_denials.length) {
-        this.log({
-          kind: 'tool',
-          text: `[Vigia] ${envelope.permission_denials.length} tentativa(s) de ferramenta bloqueada(s) pela regra de só-leitura.`
-        })
+        const envelope = parseLastJson(r.stdout) as
+          | { result?: string; is_error?: boolean; total_cost_usd?: number; permission_denials?: unknown[] }
+          | null
+        if (!envelope) throw new Error((r.stderr || r.stdout).trim().split('\n').slice(-2).join(' ') || `código ${r.code}`)
+        if (envelope.is_error) throw new Error(`Claude: ${String(envelope.result ?? 'erro').slice(0, 300)}`)
+        if (Array.isArray(envelope.permission_denials) && envelope.permission_denials.length) {
+          this.log({
+            kind: 'tool',
+            text: `[Vigia] ${envelope.permission_denials.length} tentativa(s) de ferramenta bloqueada(s) pela regra de só-leitura.`
+          })
+        }
+        resultText = String(envelope.result ?? '')
+        costLabel = typeof envelope.total_cost_usd === 'number' ? ` · US$ ${envelope.total_cost_usd.toFixed(4)}` : ''
       }
 
-      const payload = parseLastJson(String(envelope.result ?? '')) as { requests?: unknown[] } | null
-      if (!payload || !Array.isArray(payload.requests)) throw new Error('Resposta do Claude sem o JSON esperado.')
+      const payload = parseLastJson(resultText) as { requests?: unknown[] } | null
+      if (!payload || !Array.isArray(payload.requests)) throw new Error('Resposta da IA sem o JSON esperado.')
 
       const seen = new Set(cfg.watcher.seen)
       const fresh: DeployAlert[] = []
       const seenIds: string[] = []
       for (const raw of payload.requests) {
-        const a = toAlert(raw)
+        const a = toAlert(raw, cfg)
         if (!a) continue
         seenIds.push(a.messageId)
         if (seen.has(a.messageId)) continue
@@ -149,13 +172,19 @@ export class Watcher {
         fresh.push(a)
       }
 
-      const cost = typeof envelope.total_cost_usd === 'number' ? ` · US$ ${envelope.total_cost_usd.toFixed(4)}` : ''
+      const cost = costLabel
       store.recordWatcherCycle(startedAt, fresh, seenIds)
       const summary = fresh.length ? `${fresh.length} pedido(s) novo(s)` : 'nenhum pedido novo'
       this.log({ kind: fresh.length ? 'success' : 'info', text: `[Vigia] verificado: ${summary}${cost}` })
       this.set({ lastResult: `${new Date().toLocaleTimeString()} · ${summary}` })
 
-      for (const a of fresh) await this.alert(a, cfg)
+      for (const a of fresh) {
+        try {
+          await this.onNewAlert(a)
+        } catch (err) {
+          this.log({ kind: 'error', text: `[Vigia] erro ao tratar pedido: ${(err as Error).message}` })
+        }
+      }
     } catch (err) {
       const msg = (err as Error).message
       this.log({ kind: 'error', text: `[Vigia] falha: ${msg}` })
@@ -167,20 +196,6 @@ export class Watcher {
         this.schedule(store.get().watcher.intervalMin * 60_000)
       }
     }
-  }
-
-  private async alert(a: DeployAlert, cfg: AppConfig) {
-    this.log({
-      kind: 'error',
-      text: `🚨 Pedido de deploy: ${a.requester || '?'} pediu ${a.card || a.branch || 'deploy'} → ${a.environment || '?'} · aguardando sua aprovação`
-    })
-    if (!secrets.get('telegram.token') || !cfg.telegram.chatId) {
-      store.patchAlert(a.id, { telegram: 'off' })
-      return
-    }
-    const r = await sendTelegram(cfg.telegram.chatId, formatAlert(a))
-    store.patchAlert(a.id, { telegram: r.ok ? 'sent' : 'failed' })
-    if (!r.ok) this.log({ kind: 'error', text: `[Telegram] falha ao avisar: ${r.message}` })
   }
 
   stop(): void {
@@ -211,6 +226,7 @@ function buildPrompt(cfg: AppConfig, now: number): string {
   const since = cfg.watcher.lastCheckAt ? cfg.watcher.lastCheckAt - OVERLAP_MS : now - FIRST_LOOKBACK_MS
   const sinceIso = new Date(since).toISOString()
   const recentSeen = cfg.watcher.seen.slice(-80)
+  const projectNames = cfg.projects.map((p) => p.name).join(', ')
   return [
     'Você é um vigia somente-leitura do Google Chat.',
     `Use APENAS as ferramentas de leitura do servidor MCP "${MCP_NAMES.gchat}". NUNCA envie mensagens, nunca marque nada como lido, nunca altere configurações, nunca altere código.`,
@@ -219,8 +235,14 @@ function buildPrompt(cfg: AppConfig, now: number): string {
     cfg.watcher.focus.trim() ? `Foque nestes espaços/pessoas: ${cfg.watcher.focus.trim()}` : '',
     recentSeen.length ? `Ignore mensagens com estes IDs (já tratadas): ${recentSeen.join(', ')}` : '',
     '',
+    projectNames ? `Projetos/repos que eu conheço (use o nome exato se o pedido citar um deles): ${projectNames}` : '',
+    '',
+    'Para cada pedido, faça um resumo de uma frase (o que, onde, para quando) e liste o que ficou faltando para executar',
+    '(ex: "ambiente não informado", "não diz qual card", "não diz qual projeto"). Urgência: "alta" se pedirem pressa/urgente/agora, "baixa" se disserem sem pressa, senão "normal".',
+    'Para dar para responder depois, informe o identificador do espaço (ex: spaces/AAAA) e da thread, se houver.',
+    '',
     'Responda SOMENTE com um JSON neste formato, sem texto antes ou depois e sem bloco de código:',
-    '{"requests":[{"messageId":"identificador único da mensagem","requester":"quem pediu","card":"card/ticket (ex: PROJ-123) ou vazio","branch":"branch ou vazio","environment":"ambiente","summary":"resumo curto do pedido","space":"nome do espaço/conversa","link":"link da mensagem ou vazio","messageTime":"data/hora da mensagem"}]}',
+    '{"requests":[{"messageId":"identificador único da mensagem","requester":"quem pediu","card":"card/ticket (ex: PROJ-123) ou vazio","branch":"branch ou vazio","environment":"ambiente ou vazio","project":"projeto/repo citado ou vazio","summary":"resumo de uma frase","missing":["o que faltou"],"urgency":"baixa|normal|alta","space":"nome do espaço/conversa","spaceId":"spaces/…","threadId":"spaces/…/threads/… ou vazio","link":"link da mensagem ou vazio","messageTime":"data/hora da mensagem"}]}',
     'Se não houver pedidos, responda {"requests":[]}.'
   ]
     .filter((l) => l !== '')
@@ -259,7 +281,7 @@ export function parseLastJson(text: string): unknown {
   return null
 }
 
-function toAlert(raw: unknown): DeployAlert | null {
+function toAlert(raw: unknown, cfg: AppConfig): DeployAlert | null {
   if (!raw || typeof raw !== 'object') return null
   const r = raw as Record<string, unknown>
   const s = (k: string, max = 300) => (typeof r[k] === 'string' ? (r[k] as string).trim().slice(0, max) : '')
@@ -272,10 +294,25 @@ function toAlert(raw: unknown): DeployAlert | null {
   const messageId =
     s('messageId', 300) ||
     'h:' + createHash('sha1').update([requester, card, branch, environment, summary].join('|')).digest('hex').slice(0, 16)
-  return {
+  const projectHint = s('project', 120)
+  const project = matchProject(projectHint, cfg.projects)
+  const urgency = s('urgency', 10).toLowerCase()
+  const alert: DeployAlert = {
     id: randomUUID(),
     createdAt: Date.now(),
     messageId,
+    missing: Array.isArray(r.missing)
+      ? (r.missing as unknown[]).filter((m): m is string => typeof m === 'string' && !!m.trim()).map((m) => m.trim().slice(0, 120)).slice(0, 5)
+      : [],
+    urgency: urgency === 'alta' || urgency === 'baixa' ? urgency : 'normal',
+    projectHint,
+    projectId: project?.id ?? '',
+    // Só identificadores (sem espaços); servidores diferentes usam formatos diferentes
+    spaceId: /^[\w/.:@-]+$/.test(s('spaceId', 200)) ? s('spaceId', 200) : '',
+    threadId: /^[\w/.:@-]+$/.test(s('threadId', 200)) ? s('threadId', 200) : '',
+    ruleId: '',
+    telegramMessageId: null,
+    history: [],
     requester,
     card,
     branch,
@@ -287,4 +324,6 @@ function toAlert(raw: unknown): DeployAlert | null {
     status: 'pending',
     telegram: 'off'
   }
+  alert.ruleId = findRule(alert, cfg.rules)?.id ?? ''
+  return alert
 }

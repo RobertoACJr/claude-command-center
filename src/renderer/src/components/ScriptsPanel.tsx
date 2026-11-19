@@ -1,4 +1,4 @@
-import { Copy, FileCode2, FolderTree, Globe2, Loader2, Pencil, Play, Plus, Sparkles, SquareTerminal, Trash2 } from 'lucide-react'
+import { Copy, FileCode2, FolderTree, Gem, Globe2, Loader2, Pencil, Play, Plus, Sparkles, SquareTerminal, Trash2 } from 'lucide-react'
 import type { Project, Script } from '@shared/types'
 import { Button, EmptyState, IconButton } from './ui'
 import { cn, extractProjectKeys, extractUserVariables, targetLabel } from '../lib/utils'
@@ -24,7 +24,7 @@ export function ScriptRow({
   compact?: boolean
   actions: ScriptActions
 }) {
-  const isClaude = s.type === 'claude'
+  const isAi = s.type !== 'terminal'
   const vars = extractUserVariables(s.content)
   const pvars = extractProjectKeys(s.content)
   return (
@@ -38,10 +38,16 @@ export function ScriptRow({
         className={cn(
           'flex shrink-0 items-center justify-center rounded-lg',
           compact ? 'h-7 w-7' : 'h-9 w-9',
-          isClaude ? 'bg-violet/15 text-purple' : 'bg-zinc-800 text-zinc-300'
+          isAi ? 'bg-violet/15 text-purple' : 'bg-zinc-800 text-zinc-300'
         )}
       >
-        {isClaude ? <Sparkles size={compact ? 13 : 16} /> : <SquareTerminal size={compact ? 13 : 16} />}
+        {s.type === 'gemini' ? (
+          <Gem size={compact ? 13 : 16} />
+        ) : s.type === 'claude' ? (
+          <Sparkles size={compact ? 13 : 16} />
+        ) : (
+          <SquareTerminal size={compact ? 13 : 16} />
+        )}
       </div>
 
       <div className="min-w-0 flex-1">

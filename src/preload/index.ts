@@ -16,6 +16,11 @@ function subscribe<T>(channel: string, cb: (v: T) => void): () => void {
 }
 
 const api: CommandCenterApi = {
+  // Fase 6
+  sendReply: (alertId, replyId) => ipcRenderer.invoke('alert:sendReply', alertId, replyId),
+  geminiCheck: () => ipcRenderer.invoke('gemini:check'),
+  geminiSetup: () => ipcRenderer.invoke('gemini:setup'),
+
   // Fase 5
   projectStart: (id) => ipcRenderer.invoke('project:start', id),
   projectStop: (id) => ipcRenderer.invoke('project:stop', id),

@@ -4,6 +4,8 @@ import { join } from 'path'
 import type {
   AlertStatus,
   AppConfig,
+  AutomationRule,
+  ReplyTemplate,
   DeployAlert,
   IntegrationId,
   Project,
@@ -24,20 +26,37 @@ function defaults(): AppConfig {
     integrations: {
       github: { enabled: false, readOnly: true },
       jira: { enabled: false, url: '', email: '' },
-      gchat: { enabled: false, mode: 'official', clientId: '', callbackPort: 8765, readTools: '' },
+      gchat: { enabled: false, mode: 'official', clientId: '', callbackPort: 8765, readTools: '', sendTool: '' },
       lastApplied: {}
     },
-    telegram: { chatId: '' },
+    telegram: { chatId: '', interactive: true },
     watcher: {
       enabled: false,
       autoWhenOff: true,
       intervalMin: 3,
       focus: '',
       model: '',
+      provider: 'claude',
       lastCheckAt: null,
       seen: []
     },
-    alerts: []
+    alerts: [],
+    ai: { geminiCommand: 'gemini' },
+    replies: [
+      {
+        id: 'recebido',
+        name: 'Recebido',
+        text: 'Oi {{solicitante}}! Recebi o pedido de {{card}} em {{ambiente}}. Assim que eu subir, aviso aqui. 👍',
+        autoOnDetect: false
+      },
+      {
+        id: 'feito',
+        name: 'Feito',
+        text: '{{card}} já está em {{ambiente}}, {{solicitante}}. ✅',
+        autoOnDetect: false
+      }
+    ],
+    rules: []
   }
 }
 
@@ -70,7 +89,7 @@ function normalize(raw: unknown): AppConfig {
     scripts: Array.isArray(r.scripts) ? (r.scripts as Script[]).filter((s) => s && s.id).map(normScript) : [],
     ui: {
       consoleExpanded: Boolean(r.ui?.consoleExpanded),
-      consoleMode: r.ui?.consoleMode === 'claude' ? 'claude' : 'terminal'
+      consoleMode: r.ui?.consoleMode === 'claude' || r.ui?.consoleMode === 'gemini' ? r.ui.consoleMode : 'terminal'
     },
     integrations: {
       github: { enabled: bool(gi?.enabled, false), readOnly: bool(gi?.readOnly, true) },
@@ -80,23 +99,60 @@ function normalize(raw: unknown): AppConfig {
         mode: ci?.mode === 'custom' ? 'custom' : 'official',
         clientId: str(ci?.clientId).trim(),
         callbackPort: num(ci?.callbackPort, 8765, 1024, 65535),
-        readTools: str(ci?.readTools)
+        readTools: str(ci?.readTools),
+        sendTool: str(ci?.sendTool).trim()
       },
       lastApplied: r.integrations?.lastApplied && typeof r.integrations.lastApplied === 'object'
         ? r.integrations.lastApplied
         : {}
     },
-    telegram: { chatId: str(r.telegram?.chatId).trim() },
+    telegram: { chatId: str(r.telegram?.chatId).trim(), interactive: bool(r.telegram?.interactive, true) },
     watcher: {
       enabled: bool(w?.enabled, d.watcher.enabled),
       autoWhenOff: bool(w?.autoWhenOff, d.watcher.autoWhenOff),
       intervalMin: num(w?.intervalMin, 3, 1, 120),
       focus: str(w?.focus),
       model: str(w?.model).trim(),
+      provider: w?.provider === 'gemini' ? 'gemini' : 'claude',
       lastCheckAt: typeof w?.lastCheckAt === 'number' ? w.lastCheckAt : null,
       seen: Array.isArray(w?.seen) ? w.seen.filter((x) => typeof x === 'string').slice(-500) : []
     },
-    alerts: Array.isArray(r.alerts) ? (r.alerts as DeployAlert[]).filter((a) => a && a.id).slice(-200) : []
+    alerts: Array.isArray(r.alerts) ? (r.alerts as DeployAlert[]).filter((a) => a && a.id).map(normAlert).slice(-200) : [],
+    ai: { geminiCommand: str(r.ai?.geminiCommand, 'gemini').trim() || 'gemini' },
+    replies: Array.isArray(r.replies) ? (r.replies as ReplyTemplate[]).filter((x) => x && x.id).map(normReply) : d.replies,
+    rules: Array.isArray(r.rules) ? (r.rules as AutomationRule[]).filter((x) => x && x.id).map(normRule) : []
+  }
+}
+
+function normAlert(a: DeployAlert): DeployAlert {
+  return {
+    ...a,
+    missing: Array.isArray(a.missing) ? a.missing.filter((m) => typeof m === 'string') : [],
+    urgency: a.urgency === 'alta' || a.urgency === 'baixa' ? a.urgency : 'normal',
+    projectHint: str(a.projectHint),
+    projectId: str(a.projectId),
+    spaceId: str(a.spaceId),
+    threadId: str(a.threadId),
+    ruleId: str(a.ruleId),
+    telegramMessageId: typeof a.telegramMessageId === 'number' ? a.telegramMessageId : null,
+    history: Array.isArray(a.history) ? a.history.filter((h) => typeof h === 'string').slice(-30) : []
+  }
+}
+
+function normReply(x: ReplyTemplate): ReplyTemplate {
+  return { id: x.id, name: str(x.name), text: str(x.text), autoOnDetect: bool(x.autoOnDetect, false) }
+}
+
+function normRule(x: AutomationRule): AutomationRule {
+  return {
+    id: x.id,
+    name: str(x.name),
+    enabled: bool(x.enabled, true),
+    environments: str(x.environments),
+    projectId: str(x.projectId),
+    scriptId: str(x.scriptId),
+    mode: x.mode === 'auto' || x.mode === 'telegram' ? x.mode : 'suggest',
+    replyOnApproveId: str(x.replyOnApproveId)
   }
 }
 
@@ -129,7 +185,7 @@ function normScript(s: Script): Script {
         : t?.kind === 'ask'
           ? { kind: 'ask' }
           : { kind: 'global' }
-  return { ...s, type: s.type === 'claude' ? 'claude' : 'terminal', target }
+  return { ...s, type: s.type === 'claude' || s.type === 'gemini' ? s.type : 'terminal', target }
 }
 
 type Listener = (cfg: AppConfig) => void
@@ -250,6 +306,9 @@ class ConfigStore {
       if (patch.integrations?.gchat) d.integrations.gchat = { ...d.integrations.gchat, ...patch.integrations.gchat }
       if (patch.telegram) d.telegram = { ...d.telegram, ...patch.telegram }
       if (patch.watcher) d.watcher = { ...d.watcher, ...patch.watcher }
+      if (patch.ai) d.ai = { ...d.ai, ...patch.ai }
+      if (patch.replies) d.replies = patch.replies
+      if (patch.rules) d.rules = patch.rules
     })
   }
 
@@ -274,14 +333,27 @@ class ConfigStore {
     })
   }
 
-  patchAlert(id: string, patch: Partial<Pick<DeployAlert, 'status' | 'telegram'>>): AppConfig {
+  patchAlert(
+    id: string,
+    patch: Partial<Pick<DeployAlert, 'status' | 'telegram' | 'telegramMessageId'>>,
+    historyLine?: string
+  ): AppConfig {
+    const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     return this.update((d) => {
-      d.alerts = d.alerts.map((a) => (a.id === id ? { ...a, ...patch } : a))
+      d.alerts = d.alerts.map((a) =>
+        a.id === id
+          ? { ...a, ...patch, history: historyLine ? [...a.history, `${stamp} ${historyLine}`].slice(-30) : a.history }
+          : a
+      )
     })
   }
 
-  setAlertStatus(id: string, status: AlertStatus): AppConfig {
-    return this.patchAlert(id, { status })
+  getAlert(id: string): DeployAlert | undefined {
+    return this.data.alerts.find((a) => a.id === id)
+  }
+
+  setAlertStatus(id: string, status: AlertStatus, via = 'no app'): AppConfig {
+    return this.patchAlert(id, { status }, `${status === 'approved' ? 'aprovado' : status === 'dismissed' ? 'descartado' : 'reaberto'} ${via}`)
   }
 
   clearResolvedAlerts(): AppConfig {

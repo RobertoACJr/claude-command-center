@@ -41,7 +41,7 @@ import {
 type Confirm = { kind: 'project'; item: Project } | { kind: 'script'; item: Script } | null
 
 const MAX_LINES = 4000
-const FIXED_TITLES: Record<string, string> = { console: 'Console', claude: 'Claude', system: 'Sistema' }
+const FIXED_TITLES: Record<string, string> = { console: 'Console', claude: 'Claude', gemini: 'Gemini', system: 'Sistema' }
 
 function newTab(key: string, title: string): TabState {
   return { key, title, lines: [], status: 'idle', exitCode: null, running: [], unread: false }
@@ -78,7 +78,7 @@ export default function App() {
   const lineId = useRef(0)
   const activeRef = useRef(activeTab)
   activeRef.current = activeTab
-  /** runId → pasta da conversa do Claude (para continuar a conversa) */
+  /** runId → chave da conversa ("claude:<pasta>" / "gemini:<pasta>") para continuar depois */
   const chatRuns = useRef(new Map<string, string>())
   const nextChatCwd = useRef<string | null>(null)
 
@@ -143,7 +143,7 @@ export default function App() {
         switch (e.type) {
           case 'start':
             ensureTab(e.tab, e.title)
-            if (e.tab === 'claude' && nextChatCwd.current) {
+            if ((e.tab === 'claude' || e.tab === 'gemini') && nextChatCwd.current) {
               chatRuns.current.set(e.runId, nextChatCwd.current)
               nextChatCwd.current = null
             }
@@ -267,8 +267,9 @@ export default function App() {
       { kind: kind === 'terminal' ? 'cmd' : 'user', text: variables ? fillVariables(content, variables) : content }
     ])
     activate(opts.tab)
-    const resumeSessionId = kind === 'claude' && opts.chat ? chatSessions[cwd] : undefined
-    if (kind === 'claude' && opts.chat) nextChatCwd.current = cwd
+    const chatKey = `${kind}:${cwd}`
+    const resumeSessionId = kind !== 'terminal' && opts.chat ? chatSessions[chatKey] : undefined
+    if (kind !== 'terminal' && opts.chat) nextChatCwd.current = chatKey
     await window.api.run({ kind, content, variables, cwd, tab: opts.tab, title: opts.title, resumeSessionId })
   }
 
@@ -393,16 +394,13 @@ export default function App() {
     const mode = config.ui.consoleMode
     if (mode === 'terminal' && /^(clear|cls)$/i.test(text)) return clearTab('console')
     // Texto literal: {{x}} não é tratado como variável (variables = undefined)
-    execute(mode, text, undefined, consoleCwd, {
-      tab: mode === 'claude' ? 'claude' : 'console',
-      title: mode === 'claude' ? 'Claude' : 'Console',
-      chat: mode === 'claude'
-    })
+    const tab = mode === 'terminal' ? 'console' : mode
+    execute(mode, text, undefined, consoleCwd, { tab, title: FIXED_TITLES[tab], chat: mode !== 'terminal' })
   }
 
   const setMode = (m: ConsoleMode) => {
     save(window.api.saveUi({ consoleMode: m }))
-    if (termOpen && (activeTab === 'console' || activeTab === 'claude')) activate(m === 'claude' ? 'claude' : 'console')
+    if (termOpen && ['console', 'claude', 'gemini'].includes(activeTab)) activate(m === 'terminal' ? 'console' : m)
   }
   const toggleExpand = () => config && save(window.api.saveUi({ consoleExpanded: !config.ui.consoleExpanded }))
 
@@ -460,6 +458,9 @@ export default function App() {
       <AlertsBar
         alerts={config.alerts}
         scripts={config.scripts}
+        projects={config.projects}
+        replies={config.replies}
+        rules={config.rules}
         onApprove={approveAlert}
         onDismiss={dismissAlert}
         onApproveAndRun={approveAndRun}
@@ -482,14 +483,15 @@ export default function App() {
         onModeChange={setMode}
         onSubmit={submitConsole}
         onNewChat={() => {
+          const mode = config.ui.consoleMode
           setChatSessions((s) => {
             const next = { ...s }
-            delete next[consoleCwd]
+            delete next[`${mode}:${consoleCwd}`]
             return next
           })
-          log('info', '— nova conversa com o Claude —', 'claude')
+          log('info', '— nova conversa —', mode === 'terminal' ? 'console' : mode)
         }}
-        hasChat={!!chatSessions[consoleCwd]}
+        hasChat={!!chatSessions[`${config.ui.consoleMode}:${consoleCwd}`]}
         targets={[
           ...config.projects.map((p) => ({ value: p.id, label: p.name })),
           { value: 'global', label: 'Global (Home)' }

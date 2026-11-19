@@ -11,7 +11,10 @@ import { RunManager } from './runner'
 import { RemoteManager } from './remote'
 import { secrets } from './secrets'
 import { applyIntegration, integrationLogin, integrationStatus } from './mcp'
-import { detectChatId, formatDecision, sendTelegram } from './telegram'
+import { detectChatId, escapeHtml, formatAlert, registerBot, sendTelegram, sendTelegramMessage, TelegramBot } from './telegram'
+import { Automation } from './automation'
+import { geminiCheck, geminiSetup } from './gemini'
+import { setGeminiCommand } from './proc'
 import { Watcher } from './watcher'
 import { ProjectProcesses } from './projects'
 import { AppTray, applyOpenAtLogin } from './tray'
@@ -39,6 +42,7 @@ function send(channel: string, payload: unknown): void {
 
 const runs = new RunManager((e) => {
   projects.handleRunEvent(e)
+  automation.handleRunEvent(e)
   send('run:event', e)
 })
 const projects = new ProjectProcesses(runs, (states) => {
@@ -57,13 +61,107 @@ const notifiedCrash = new Set<string>()
 const remote = new RemoteManager((sessions) => send('remote:update', sessions))
 
 const appLog = (l: AppLog) => send('app:log', l)
+const automation = new Automation(runs, appLog)
 const watcher = new Watcher(
   (s) => {
     send('watcher:state', s)
     tray.update(store.get(), s.phase === 'idle' || s.phase === 'checking')
   },
-  appLog
+  appLog,
+  (a) => automation.onNewAlert(a)
 )
+
+// ---------- Telegram: botões e comandos ----------
+const fmtTime = (t: number) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+async function telegramStatus(): Promise<string> {
+  const cfg = store.get()
+  const st = watcher.getState()
+  const pending = cfg.alerts.filter((a) => a.status === 'pending')
+  const running = projects
+    .list()
+    .filter((s) => s.state === 'running' || s.state === 'starting')
+    .map((s) => cfg.projects.find((p) => p.id === s.projectId)?.name ?? '?')
+  return [
+    cfg.status === 'off' ? `🌙 <b>Ausente</b> desde ${fmtTime(cfg.statusSince)}` : `🟣 <b>Online</b> (no PC)`,
+    `👁 Vigia: ${st.phase === 'idle' || st.phase === 'checking' ? 'ligado' : st.phase === 'blocked' ? 'bloqueado' : 'desligado'}${st.lastResult ? ` · último: ${escapeHtml(st.lastResult)}` : ''}`,
+    `🔔 Pedidos pendentes: ${pending.length}`,
+    `▶ Projetos rodando: ${running.length ? escapeHtml(running.join(', ')) : 'nenhum'}`,
+    `📡 Remote Control: ${remote.activeCount()} sessão(ões)`
+  ].join('\n')
+}
+
+const HELP = [
+  '<b>Comandos</b>',
+  '/status · como está o PC',
+  '/pendentes · pedidos aguardando você (com botões)',
+  '/ausente · liga o modo Ausente',
+  '/online · volta ao modo Online',
+  '/vigia · verifica o Google Chat agora'
+].join('\n')
+
+const bot = new TelegramBot({
+  settings: () => ({ chatId: store.get().telegram.chatId, interactive: store.get().telegram.interactive }),
+  log: (text, kind = 'info') => appLog({ kind, text }),
+  onCallback: async (data) => {
+    const [kind, id] = data.split(':')
+    if (kind === 'ap') return (await automation.approve(id, 'pelo Telegram', false)).message
+    if (kind === 'ds') return (await automation.dismiss(id, 'pelo Telegram')).message
+    if (kind === 'rr') return (await automation.approve(id, 'pelo Telegram', true)).message
+    if (kind === 'on') {
+      setPresence('on', id === 'keep')
+      return id === 'keep' ? 'Online, sessões remotas mantidas.' : 'Online, sessões remotas encerradas.'
+    }
+    return 'Ação desconhecida.'
+  },
+  onCommand: async (cmd) => {
+    const cfg = store.get()
+    const chat = cfg.telegram.chatId
+    const say = (html: string) => sendTelegramMessage(chat, html)
+    switch (cmd) {
+      case 'status':
+        await say(await telegramStatus())
+        break
+      case 'ausente':
+        setPresence('off')
+        await say('🌙 Modo <b>Ausente</b> ligado. Vigia e Remote Control automáticos ativos.')
+        break
+      case 'online':
+        if (remote.activeCount() > 0) {
+          await sendTelegramMessage(chat, `Há ${remote.activeCount()} sessão(ões) de Remote Control abertas. O que faço com elas?`, [
+            [
+              { text: 'Encerrar sessões', callback_data: 'on:end' },
+              { text: 'Manter ligadas', callback_data: 'on:keep' }
+            ]
+          ])
+        } else {
+          setPresence('on', false)
+          await say('🟣 Modo <b>Online</b>.')
+        }
+        break
+      case 'pendentes': {
+        const pending = cfg.alerts.filter((a) => a.status === 'pending')
+        if (!pending.length) {
+          await say('Nenhum pedido pendente. 🎉')
+          break
+        }
+        for (const a of pending.slice(-5)) {
+          const name = cfg.projects.find((p) => p.id === a.projectId)?.name ?? ''
+          const r = await sendTelegramMessage(chat, formatAlert(a, name), automation.telegramButtons(a))
+          if (r.messageId) store.patchAlert(a.id, { telegramMessageId: r.messageId })
+        }
+        break
+      }
+      case 'vigia':
+        watcher.runNow()
+        await say('👁 Verificando o Google Chat agora…')
+        break
+      default:
+        await say(HELP)
+    }
+  }
+})
+registerBot(bot)
 
 function showWindow(what?: 'alerts' | 'terminals' | 'go-online') {
   if (!mainWindow) createWindow()
@@ -106,6 +204,7 @@ const tray = new AppTray(trayIcon, {
 let lastPending = -1
 let lastOpenAtLogin: boolean | null = null
 store.onChange((cfg) => {
+  setGeminiCommand(cfg.ai.geminiCommand)
   remote.sync(cfg)
   watcher.evaluate(cfg)
   projects.sync(cfg)
@@ -268,13 +367,15 @@ function registerIpc(): void {
   ipcMain.handle('watcher:runNow', () => watcher.runNow())
   ipcMain.handle('watcher:setEnabled', (_e, enabled: boolean) => store.setWatcherEnabled(Boolean(enabled)))
   ipcMain.handle('alerts:setStatus', async (_e, id: string, status: AlertStatus) => {
-    const cfg = store.setAlertStatus(id, status)
-    const alert = cfg.alerts.find((a) => a.id === id)
-    if (alert && status !== 'pending' && alert.telegram === 'sent' && secrets.get('telegram.token')) {
-      void sendTelegram(cfg.telegram.chatId, formatDecision(alert, status === 'approved'))
-    }
-    return cfg
+    // Pelo app: aprovar/descartar atualiza também a mensagem do Telegram e manda a resposta da regra
+    if (status === 'approved') await automation.approve(id, 'no app', false)
+    else if (status === 'dismissed') await automation.dismiss(id, 'no app')
+    else store.setAlertStatus(id, status)
+    return store.get()
   })
+  ipcMain.handle('alert:sendReply', (_e, alertId: string, replyId: string) => automation.sendReply(alertId, replyId, 'manual'))
+  ipcMain.handle('gemini:check', () => geminiCheck())
+  ipcMain.handle('gemini:setup', () => geminiSetup(store.get()))
   ipcMain.handle('alerts:clearResolved', () => store.clearResolvedAlerts())
 
   ipcMain.handle('dialog:pickFolder', async (_e, defaultPath?: string) => {
@@ -297,6 +398,8 @@ if (!gotLock) {
   app.whenReady().then(() => {
     if (process.platform === 'win32') app.setAppUserModelId('com.jraya.claude-command-center')
     const cfg = store.load()
+    setGeminiCommand(cfg.ai.geminiCommand)
+    bot.start()
     registerIpc()
     createWindow()
     // Se o app abriu já em OFF, sobe as sessões remotas e o Vigia
@@ -315,6 +418,7 @@ if (!gotLock) {
   // Encerra tudo que o app abriu: nada de processo órfão/zumbi
   app.on('before-quit', () => {
     quitting = true
+    bot.stop()
     projects.stopPolling()
     tray.destroy()
     watcher.stop()

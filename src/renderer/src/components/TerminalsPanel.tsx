@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import {
   Ban,
+  Gem,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -44,7 +45,7 @@ export interface TabState {
   unread: boolean
 }
 
-export const FIXED_TABS = ['console', 'claude', 'system'] as const
+export const FIXED_TABS = ['console', 'claude', 'gemini', 'system'] as const
 
 const kindCls: Record<LineKind, string> = {
   info: 'text-zinc-500',
@@ -254,8 +255,8 @@ export function TerminalsPanel({
               })}
             </div>
             <div className="flex shrink-0 items-center gap-0.5 px-2">
-              {mode === 'claude' && active === 'claude' && hasChat && (
-                <IconButton title="Nova conversa com o Claude" tone="accent" onClick={onNewChat}>
+              {mode !== 'terminal' && active === mode && hasChat && (
+                <IconButton title="Nova conversa" tone="accent" onClick={onNewChat}>
                   <MessageSquarePlus size={14} />
                 </IconButton>
               )}
@@ -294,6 +295,8 @@ export function TerminalsPanel({
                   ? 'Digite um comando abaixo. Cada script e cada projeto em execução ganham uma aba própria.'
                   : active === 'claude'
                     ? 'Converse com o Claude pelo campo abaixo (modo Claude).'
+                    : active === 'gemini'
+                      ? 'Converse com o Gemini pelo campo abaixo (modo Gemini). Sem terminal, ele só lê e analisa.'
                     : active === 'system'
                       ? 'Logs do app: Vigia, MCPs, Telegram, Remote Control.'
                       : 'Sem saída ainda.'}
@@ -336,7 +339,8 @@ export function TerminalsPanel({
           {(
             [
               ['terminal', 'Terminal', SquareTerminal],
-              ['claude', 'Claude', Sparkles]
+              ['claude', 'Claude', Sparkles],
+              ['gemini', 'Gemini', Gem]
             ] as const
           ).map(([m, label, Icon]) => (
             <button
@@ -373,7 +377,7 @@ export function TerminalsPanel({
         </div>
 
         <div className="flex h-8 min-w-0 flex-1 items-center rounded-lg border border-line bg-bg px-2.5 focus-within:border-violet/70">
-          <ChevronRight size={14} className={mode === 'claude' ? 'text-purple' : 'text-zinc-500'} />
+          <ChevronRight size={14} className={mode !== 'terminal' ? 'text-purple' : 'text-zinc-500'} />
           <input
             ref={inputRef}
             value={input}
@@ -384,8 +388,10 @@ export function TerminalsPanel({
               mode === 'terminal'
                 ? 'Digite um comando… (Ctrl+C para parar)'
                 : hasChat
-                  ? 'Continue a conversa com o Claude…'
-                  : 'Pergunte ou dê uma ordem ao Claude…'
+                  ? `Continue a conversa com o ${mode === 'gemini' ? 'Gemini' : 'Claude'}…`
+                  : mode === 'gemini'
+                    ? 'Peça uma análise ao Gemini…'
+                    : 'Pergunte ou dê uma ordem ao Claude…'
             }
             className="h-full min-w-0 flex-1 bg-transparent px-2 font-mono text-[12.5px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none"
           />

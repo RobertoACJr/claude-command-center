@@ -1,12 +1,15 @@
 import { useState } from 'react'
-import { BellRing, Check, ChevronDown, ChevronUp, ExternalLink, Play, Send, X } from 'lucide-react'
-import type { DeployAlert, Script } from '@shared/types'
+import { AlertTriangle, BellRing, Check, ChevronDown, ChevronUp, ExternalLink, FolderGit2, History, Loader2, MessageSquareReply, Play, Send, X } from 'lucide-react'
+import type { AutomationRule, DeployAlert, Project, ReplyTemplate, Script } from '@shared/types'
 import { Button, IconButton } from './ui'
 import { cn } from '../lib/utils'
 
 export function AlertsBar({
   alerts,
   scripts,
+  projects,
+  replies,
+  rules,
   onApprove,
   onDismiss,
   onApproveAndRun,
@@ -14,6 +17,9 @@ export function AlertsBar({
 }: {
   alerts: DeployAlert[]
   scripts: Script[]
+  projects: Project[]
+  replies: ReplyTemplate[]
+  rules: AutomationRule[]
   onApprove: (a: DeployAlert) => void
   onDismiss: (a: DeployAlert) => void
   onApproveAndRun: (a: DeployAlert, s: Script) => void
@@ -62,6 +68,9 @@ export function AlertsBar({
               key={a.id}
               a={a}
               scripts={scripts}
+              projects={projects}
+              replies={replies}
+              rule={rules.find((r) => r.id === a.ruleId)}
               onApprove={onApprove}
               onDismiss={onDismiss}
               onApproveAndRun={onApproveAndRun}
@@ -76,18 +85,39 @@ export function AlertsBar({
 function AlertCard({
   a,
   scripts,
+  projects,
+  replies,
+  rule,
   onApprove,
   onDismiss,
   onApproveAndRun
 }: {
   a: DeployAlert
   scripts: Script[]
+  projects: Project[]
+  replies: ReplyTemplate[]
+  rule: AutomationRule | undefined
   onApprove: (a: DeployAlert) => void
   onDismiss: (a: DeployAlert) => void
   onApproveAndRun: (a: DeployAlert, s: Script) => void
 }) {
-  const [scriptId, setScriptId] = useState('')
+  // A regra que casou já deixa o script escolhido
+  const [scriptId, setScriptId] = useState(rule?.scriptId ?? '')
+  const [replyId, setReplyId] = useState(replies[0]?.id ?? '')
+  const [sending, setSending] = useState(false)
+  const [replyMsg, setReplyMsg] = useState<string | null>(null)
+  const [showHistory, setShowHistory] = useState(false)
   const pending = a.status === 'pending'
+  const project = projects.find((p) => p.id === a.projectId)
+
+  const sendReply = async () => {
+    if (!replyId) return
+    setSending(true)
+    setReplyMsg(null)
+    const r = await window.api.sendReply(a.id, replyId)
+    setSending(false)
+    setReplyMsg(r.ok ? '✓ enviada' : `✖ ${r.message}`)
+  }
   const chip = (label: string, v: string) =>
     v ? (
       <span className="rounded-md border border-line bg-bg px-1.5 py-0.5 font-mono text-[11px] text-zinc-300">
@@ -106,6 +136,9 @@ function AlertCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-sm text-zinc-100">
+            {a.urgency === 'alta' && (
+              <span className="mr-1.5 rounded bg-red-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-red-300">URGENTE</span>
+            )}
             <b>{a.requester || 'Alguém'}</b>
             <span className="text-zinc-500"> pediu </span>
             {a.card || a.branch || 'um deploy'}
@@ -117,10 +150,27 @@ function AlertCard({
             )}
           </div>
           {a.summary && <div className="selectable mt-0.5 text-xs text-zinc-400">{a.summary}</div>}
+          {a.missing.length > 0 && (
+            <div className="mt-1 flex items-start gap-1 text-[11px] text-amber-300">
+              <AlertTriangle size={11} className="mt-0.5 shrink-0" /> Faltou: {a.missing.join('; ')}
+            </div>
+          )}
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
             {chip('card', a.card)}
             {chip('branch', a.branch)}
             {chip('env', a.environment)}
+            {(project || a.projectHint) && (
+              <span
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px]',
+                  project ? 'border-violet/30 bg-violet/10 text-purple' : 'border-line text-zinc-500'
+                )}
+                title={project ? 'Projeto cadastrado associado ao pedido' : 'Citado no pedido, mas não casa com nenhum projeto cadastrado'}
+              >
+                <FolderGit2 size={10} /> {project?.name ?? `${a.projectHint}?`}
+              </span>
+            )}
+            {rule && <span className="text-[11px] text-zinc-500">regra: {rule.name}</span>}
             {a.space && <span className="text-[11px] text-zinc-600">#{a.space}</span>}
             <span className="text-[11px] text-zinc-600">
               {a.messageTime || new Date(a.createdAt).toLocaleString()}
@@ -139,6 +189,11 @@ function AlertCard({
               <ExternalLink size={13} />
             </IconButton>
           )}
+          {a.history.length > 0 && (
+            <IconButton title="Histórico do pedido" onClick={() => setShowHistory(!showHistory)}>
+              <History size={13} />
+            </IconButton>
+          )}
           {!pending && (
             <span className={cn('text-xs', a.status === 'approved' ? 'text-emerald-400' : 'text-zinc-500')}>
               {a.status === 'approved' ? 'Aprovado' : 'Descartado'}
@@ -146,6 +201,35 @@ function AlertCard({
           )}
         </div>
       </div>
+
+      {showHistory && (
+        <ul className="selectable mt-2 space-y-0.5 border-t border-line pt-2 font-mono text-[11px] text-zinc-500">
+          {a.history.map((h, i) => (
+            <li key={i}>{h}</li>
+          ))}
+        </ul>
+      )}
+
+      {replies.length > 0 && (
+        <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-line pt-2.5">
+          <MessageSquareReply size={13} className="text-zinc-500" />
+          <select
+            value={replyId}
+            onChange={(e) => setReplyId(e.target.value)}
+            className="h-7 max-w-[200px] cursor-pointer rounded-md border border-line bg-bg px-2 text-xs text-zinc-300 focus:outline-none"
+          >
+            {replies.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.name}
+              </option>
+            ))}
+          </select>
+          <Button size="sm" disabled={sending || !a.spaceId} onClick={sendReply} title={a.spaceId ? 'Responder na conversa do pedido' : 'O Vigia não informou a conversa deste pedido'}>
+            {sending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} Responder no chat
+          </Button>
+          {replyMsg && <span className={cn('text-[11px]', replyMsg.startsWith('✓') ? 'text-emerald-400' : 'text-red-400')}>{replyMsg}</span>}
+        </div>
+      )}
 
       {pending && (
         <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-line pt-2.5">

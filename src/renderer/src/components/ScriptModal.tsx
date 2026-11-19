@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { FileCode2, FolderOpen, Sparkles, SquareTerminal } from 'lucide-react'
+import { FileCode2, FolderOpen, Gem, Sparkles, SquareTerminal } from 'lucide-react'
 import type { Project, Script, ScriptTarget, ScriptType } from '@shared/types'
 import { Button, Field, Modal, inputCls } from './ui'
 import { cn, extractProjectKeys, extractUserVariables, uid } from '../lib/utils'
@@ -111,11 +111,12 @@ export function ScriptModal({
       </Field>
 
       <Field label="Tipo">
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-3 gap-2">
           {(
             [
               ['terminal', 'Terminal', 'Bash / PowerShell', SquareTerminal],
-              ['claude', 'Ordem para o Claude', 'Prompt no Claude Code', Sparkles]
+              ['claude', 'Ordem para o Claude', 'Prompt no Claude Code', Sparkles],
+              ['gemini', 'Ordem para o Gemini', 'Análise (sem executar)', Gem]
             ] as const
           ).map(([value, label, sub, Icon]) => (
             <button
@@ -181,7 +182,7 @@ export function ScriptModal({
       </Field>
 
       <Field
-        label={type === 'terminal' ? 'Comando' : 'Prompt para o Claude'}
+        label={type === 'terminal' ? 'Comando' : type === 'gemini' ? 'Prompt para o Gemini' : 'Prompt para o Claude'}
         hint={
           <span>
             <code className="text-purple">{'{{variavel}}'}</code> pede o valor na hora;{' '}

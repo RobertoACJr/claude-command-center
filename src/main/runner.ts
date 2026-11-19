@@ -2,7 +2,7 @@ import type { ChildProcess } from 'child_process'
 import { existsSync } from 'fs'
 import { randomUUID } from 'crypto'
 import type { RunEvent, RunLineKind, RunRequest } from '../shared/types'
-import { IS_WIN, LineSplitter, killTree, killTreeSync, spawnClaude, spawnShell } from './proc'
+import { IS_WIN, LineSplitter, killTree, killTreeSync, spawnClaude, spawnGemini, spawnShell } from './proc'
 
 type Emit = (e: RunEvent) => void
 type DistOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
@@ -73,7 +73,12 @@ export class RunManager {
 
     let child: ChildProcess
     try {
-      child = req.kind === 'terminal' ? this.startTerminal(runId, req) : this.startClaude(runId, req)
+      child =
+        req.kind === 'terminal'
+          ? this.startTerminal(runId, req)
+          : req.kind === 'gemini'
+            ? this.startGemini(runId, req)
+            : this.startClaude(runId, req)
     } catch (err) {
       setTimeout(() => {
         this.emit({ runId, type: 'error', message: String(err) })
@@ -89,12 +94,17 @@ export class RunManager {
         err.code === 'ENOENT'
           ? req.kind === 'claude'
             ? 'CLI `claude` não encontrado no PATH. Instale o Claude Code e confira com `claude --version`.'
-            : 'Shell não encontrado.'
+            : req.kind === 'gemini'
+              ? 'CLI do Gemini não encontrado. Confira o comando em Configurações → IAs.'
+              : 'Shell não encontrado.'
           : err.message
       this.emit({ runId, type: 'error', message: msg })
     })
     child.on('close', (code, signal) => {
       this.runs.delete(runId)
+      if (code === 127 && req.kind !== 'terminal') {
+        this.emit({ runId, type: 'error', message: `CLI \`${req.kind}\` não encontrado no PATH.` })
+      }
       const killed = this.stopped.delete(runId)
       this.emit({ runId, type: 'exit', code, signal: signal ?? null, killed })
     })
@@ -205,6 +215,87 @@ export class RunManager {
     child.stdin?.on('error', () => {
       /* processo morreu antes de ler o stdin */
     })
+    child.stdin?.end(prompt)
+    return child
+  }
+
+  /**
+   * Gemini CLI em modo não interativo, com eventos em JSONL (--output-format stream-json).
+   * Sem terminal, tudo que pediria aprovação (shell, editar arquivo…) é negado pelo próprio CLI.
+   */
+  private startGemini(runId: string, req: RunRequest): ChildProcess {
+    const prompt = req.variables ? fillPrompt(req.content, req.variables) : req.content
+    const args = ['--output-format', 'stream-json', '--approval-mode', 'default']
+    if (req.resumeSessionId && /^[\w-]{6,80}$/.test(req.resumeSessionId)) args.push('--resume', req.resumeSessionId)
+    const child = spawnGemini(args, req.cwd, { stdin: true })
+    let sentSession = false
+    let text = '' // pedaços (delta) da resposta até fechar uma linha
+
+    // Emite as linhas completas; com all=true, também o resto que ficou sem \n
+    const flushText = (all: boolean) => {
+      const parts = text.split('\n')
+      text = parts.pop() ?? ''
+      for (const l of parts) push('claude', l)
+      if (all && text) {
+        push('claude', text)
+        text = ''
+      }
+    }
+
+    const push = this.pipeLines(runId, child, (line) => {
+      if (!line.trim()) return
+      let msg: Record<string, any>
+      try {
+        msg = JSON.parse(line)
+      } catch {
+        return push('stdout', line)
+      }
+      const sid = msg.session_id ?? msg.sessionId
+      if (sid && !sentSession && typeof sid === 'string') {
+        sentSession = true
+        this.emit({ runId, type: 'session', sessionId: sid })
+      }
+      switch (msg.type) {
+        case 'message': {
+          if (msg.role === 'user') break
+          const c = typeof msg.content === 'string' ? msg.content : typeof msg.text === 'string' ? msg.text : ''
+          text += c
+          if (!msg.delta) text += '\n'
+          flushText(false)
+          break
+        }
+        case 'tool_use': {
+          flushText(true)
+          const name = msg.tool_name ?? msg.name ?? 'ferramenta'
+          push('tool', '⚙ ' + summarizeToolInput(String(name), msg.parameters ?? msg.args ?? msg.input))
+          break
+        }
+        case 'tool_result':
+          if (msg.status === 'error' || msg.error) {
+            const t = typeof msg.error === 'string' ? msg.error : (msg.error?.message ?? msg.output ?? 'erro')
+            push('stderr', '  ↳ ' + String(t).split('\n')[0].slice(0, 200))
+          }
+          break
+        case 'error':
+          push('stderr', String(msg.message ?? msg.error ?? 'erro'))
+          break
+        case 'result': {
+          flushText(true)
+          if (msg.status === 'error' || msg.error) push('stderr', `Gemini terminou com erro: ${msg.error?.message ?? msg.error ?? ''}`)
+          const st = msg.stats ?? {}
+          const tokens = st.total_tokens ?? st.totalTokens
+          const ms = st.duration_ms ?? st.durationMs
+          push('info', `✓ concluído${ms ? ` ${(ms / 1000).toFixed(1)}s` : ''}${tokens ? ` · ${tokens} tokens` : ''}`)
+          break
+        }
+      }
+    })
+
+    child.on('close', () => {
+      if (text.trim()) push('claude', text)
+      text = ''
+    })
+    child.stdin?.on('error', () => {})
     child.stdin?.end(prompt)
     return child
   }

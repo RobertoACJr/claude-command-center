@@ -63,22 +63,47 @@ export function spawnShell(command: string, cwd: string, env?: Record<string, st
  * Roda o CLI `claude` com argumentos fixos (nunca texto do usuário nos args).
  * O prompt, quando houver, vai pelo stdin.
  */
+/**
+ * Roda um CLI (claude, gemini…) com argumentos fixos: nunca texto do usuário nos args.
+ * O prompt, quando houver, vai pelo stdin.
+ */
+export function spawnCli(
+  bin: string,
+  args: string[],
+  cwd: string,
+  opts?: { stdin?: boolean; env?: Record<string, string> }
+): ChildProcess {
+  const stdio: SpawnOptions['stdio'] = [opts?.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe']
+  if (IS_WIN) {
+    // cmd.exe resolve .exe / .cmd pelo PATH e repassa o stdin
+    const exe = /\s/.test(bin) ? `"${bin.replace(/"/g, '')}"` : bin
+    const line = [exe, ...args.map((a) => (/^[\w./:=-]+$/.test(a) ? a : `"${a.replace(/"/g, '')}"`))].join(' ')
+    return spawn(line, [], { cwd, env: baseEnv(opts?.env), windowsHide: true, shell: true, stdio })
+  }
+  const line = 'exec ' + [bin, ...args].map(bashQuote).join(' ')
+  return spawn('/bin/bash', ['-lc', line], { cwd, env: baseEnv(opts?.env), detached: true, stdio })
+}
+
 export function spawnClaude(
   args: string[],
   cwd: string,
   opts?: { stdin?: boolean; env?: Record<string, string> }
 ): ChildProcess {
   // CCC_CLAUDE_BIN permite apontar para um executável específico do Claude Code
-  const bin = process.env.CCC_CLAUDE_BIN || 'claude'
-  const stdio: SpawnOptions['stdio'] = [opts?.stdin ? 'pipe' : 'ignore', 'pipe', 'pipe']
-  if (IS_WIN) {
-    // cmd.exe resolve claude.exe / claude.cmd pelo PATH e repassa o stdin
-    const exe = /\s/.test(bin) ? `"${bin}"` : bin
-    const line = [exe, ...args.map((a) => (/^[\w./:=-]+$/.test(a) ? a : `"${a.replace(/"/g, '')}"`))].join(' ')
-    return spawn(line, [], { cwd, env: baseEnv(opts?.env), windowsHide: true, shell: true, stdio })
-  }
-  const line = 'exec ' + [bin, ...args].map(bashQuote).join(' ')
-  return spawn('/bin/bash', ['-lc', line], { cwd, env: baseEnv(opts?.env), detached: true, stdio })
+  return spawnCli(process.env.CCC_CLAUDE_BIN || 'claude', args, cwd, opts)
+}
+
+/** Comando do Gemini CLI: configurável no app (padrão `gemini`) ou por CCC_GEMINI_BIN */
+let geminiBin = 'gemini'
+export function setGeminiCommand(cmd: string): void {
+  geminiBin = cmd.trim() || 'gemini'
+}
+export function spawnGemini(
+  args: string[],
+  cwd: string,
+  opts?: { stdin?: boolean; env?: Record<string, string> }
+): ChildProcess {
+  return spawnCli(process.env.CCC_GEMINI_BIN || geminiBin, args, cwd, opts)
 }
 
 /** Encerra o processo e todos os filhos. Resolve quando o processo terminou (ou após o timeout). */
@@ -169,9 +194,25 @@ function clean(line: string): string {
 export function runClaudeCapture(
   args: string[],
   opts: { cwd: string; stdin?: string; env?: Record<string, string>; timeoutMs?: number; onLine?: (l: string) => void }
+) {
+  return runCapture('claude', args, opts)
+}
+
+export function runGeminiCapture(
+  args: string[],
+  opts: { cwd: string; stdin?: string; env?: Record<string, string>; timeoutMs?: number; onLine?: (l: string) => void }
+) {
+  return runCapture('gemini', args, opts)
+}
+
+function runCapture(
+  which: 'claude' | 'gemini',
+  args: string[],
+  opts: { cwd: string; stdin?: string; env?: Record<string, string>; timeoutMs?: number; onLine?: (l: string) => void }
 ): Promise<{ code: number | null; stdout: string; stderr: string; timedOut: boolean; spawnError?: string }> {
   return new Promise((resolve) => {
-    const child = spawnClaude(args, opts.cwd, { stdin: opts.stdin !== undefined, env: opts.env })
+    const spawnFn = which === 'claude' ? spawnClaude : spawnGemini
+    const child = spawnFn(args, opts.cwd, { stdin: opts.stdin !== undefined, env: opts.env })
     let stdout = ''
     let stderr = ''
     let timedOut = false
@@ -188,7 +229,7 @@ export function runClaudeCapture(
       if (opts.onLine) stripAnsi(d).split(/\r?\n/).filter(Boolean).forEach(opts.onLine)
     })
     child.on('error', (e: NodeJS.ErrnoException) => {
-      spawnError = e.code === 'ENOENT' ? 'CLI `claude` não encontrado no PATH.' : e.message
+      spawnError = e.code === 'ENOENT' ? `CLI \`${which}\` não encontrado no PATH.` : e.message
     })
     const timer = opts.timeoutMs
       ? setTimeout(() => {
@@ -199,6 +240,8 @@ export function runClaudeCapture(
     child.on('close', (code) => {
       if (timer) clearTimeout(timer)
       if (opts.onLine) split.flush().forEach(opts.onLine)
+      // No Linux o bash responde 127 quando o comando não existe (não vira ENOENT)
+      if (code === 127 && !spawnError) spawnError = `CLI \`${which}\` não encontrado no PATH.`
       resolve({ code, stdout: stripAnsi(stdout), stderr: stripAnsi(stderr), timedOut, spawnError })
     })
     if (opts.stdin !== undefined) {

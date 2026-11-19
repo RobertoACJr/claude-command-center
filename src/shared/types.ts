@@ -20,7 +20,10 @@ export interface Project {
   vars: ProjectVar[]
 }
 
-export type ScriptType = 'terminal' | 'claude'
+export type ScriptType = 'terminal' | 'claude' | 'gemini'
+
+/** IAs que o app sabe chamar */
+export type AiProvider = 'claude' | 'gemini'
 
 export type ScriptTarget =
   /** Script do projeto: aparece dentro do card do projeto */
@@ -39,7 +42,7 @@ export interface Script {
   createdAt: number
 }
 
-export type ConsoleMode = 'terminal' | 'claude'
+export type ConsoleMode = 'terminal' | 'claude' | 'gemini'
 
 export interface UiState {
   consoleExpanded: boolean
@@ -77,14 +80,18 @@ export interface IntegrationsConfig {
     mode: 'official' | 'custom'
     clientId: string
     callbackPort: number
-    /** Só modo custom: ferramentas de LEITURA que o Vigia pode usar (ex: mcp__ccc-gchat__list_messages) */
+    /** Só modo custom: ferramentas de LEITURA que o Vigia pode usar (ex: list_messages) */
     readTools: string
+    /** Só modo custom: a ferramenta que ENVIA mensagem (usada só para as respostas cadastradas) */
+    sendTool: string
   }
   lastApplied: Partial<Record<IntegrationId, { ok: boolean; at: number; message: string }>>
 }
 
 export interface TelegramConfig {
   chatId: string
+  /** Botões (Aprovar/Descartar/Rodar) e comandos (/status, /ausente…) no Telegram */
+  interactive: boolean
 }
 
 export interface WatcherConfig {
@@ -95,8 +102,10 @@ export interface WatcherConfig {
   intervalMin: number
   /** Espaços/pessoas para focar (texto livre que vai no prompt) */
   focus: string
-  /** Modelo do Claude para o ciclo (vazio = padrão) */
+  /** Modelo para o ciclo (vazio = padrão do provedor) */
   model: string
+  /** Qual IA lê o Google Chat (Gemini poupa os tokens do Claude) */
+  provider: AiProvider
   lastCheckAt: number | null
   /** IDs de mensagens já alertadas (dedupe) */
   seen: string[]
@@ -104,8 +113,25 @@ export interface WatcherConfig {
 
 export type AlertStatus = 'pending' | 'approved' | 'dismissed'
 
+export type Urgency = 'baixa' | 'normal' | 'alta'
+
 export interface DeployAlert {
   id: string
+  /** O que ficou faltando no pedido (ex: "ambiente não informado") */
+  missing: string[]
+  urgency: Urgency
+  /** Projeto/repo citado na mensagem, como a IA entendeu */
+  projectHint: string
+  /** Projeto cadastrado que o app associou (vazio = nenhum) */
+  projectId: string
+  /** IDs para responder na conversa certa */
+  spaceId: string
+  threadId: string
+  /** Regra de automação que casou com o pedido */
+  ruleId: string
+  telegramMessageId: number | null
+  /** Histórico curto do que aconteceu com o pedido */
+  history: string[]
   createdAt: number
   messageId: string
   requester: string
@@ -118,6 +144,41 @@ export interface DeployAlert {
   messageTime: string
   status: AlertStatus
   telegram: 'sent' | 'failed' | 'off'
+}
+
+/** Resposta pronta para mandar no Google Chat. Variáveis: {{solicitante}} {{card}} {{branch}} {{ambiente}} {{projeto}} */
+export interface ReplyTemplate {
+  id: string
+  name: string
+  text: string
+  /** Enviar sozinha assim que o pedido é detectado (ex: "Recebido!") */
+  autoOnDetect: boolean
+}
+
+/**
+ * suggest  = só sugere o script no card do pedido
+ * telegram = Telegram ganha o botão "Aprovar e rodar"
+ * auto     = roda sozinho ao detectar (nunca em produção)
+ */
+export type RuleMode = 'suggest' | 'telegram' | 'auto'
+
+export interface AutomationRule {
+  id: string
+  name: string
+  enabled: boolean
+  /** Ambientes separados por vírgula; * = qualquer (exceto produção no modo auto) */
+  environments: string
+  /** Projeto específico ('' = qualquer) */
+  projectId: string
+  scriptId: string
+  mode: RuleMode
+  /** Resposta enviada no chat quando o pedido é aprovado ('' = nenhuma) */
+  replyOnApproveId: string
+}
+
+export interface AiConfig {
+  /** Comando do Gemini CLI (ex: gemini, ou um caminho completo) */
+  geminiCommand: string
 }
 
 export interface AppConfig {
@@ -133,6 +194,9 @@ export interface AppConfig {
   telegram: TelegramConfig
   watcher: WatcherConfig
   alerts: DeployAlert[]
+  ai: AiConfig
+  replies: ReplyTemplate[]
+  rules: AutomationRule[]
 }
 
 export interface SecretsStatus {
@@ -146,6 +210,9 @@ export interface SettingsPatch {
   integrations?: Partial<Omit<IntegrationsConfig, 'lastApplied'>>
   telegram?: Partial<TelegramConfig>
   watcher?: Partial<Omit<WatcherConfig, 'seen' | 'lastCheckAt'>>
+  ai?: Partial<AiConfig>
+  replies?: ReplyTemplate[]
+  rules?: AutomationRule[]
   /** string = grava, null = apaga, ausente = mantém */
   secrets?: Partial<Record<SecretKey, string | null>>
 }
@@ -227,6 +294,11 @@ export interface RemoteSession {
 }
 
 export interface CommandCenterApi {
+  // Fase 6
+  sendReply(alertId: string, replyId: string): Promise<OpResult>
+  geminiCheck(): Promise<OpResult>
+  geminiSetup(): Promise<OpResult>
+
   // Fase 5
   projectStart(projectId: string): Promise<OpResult>
   projectStop(projectId: string): Promise<void>

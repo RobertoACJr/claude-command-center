@@ -54,6 +54,28 @@ Engrenagem no header → **Configurações & Integrações**.
   O Claude devolve JSON; o app deduplica pelo ID da mensagem, cria o alerta, avisa no Telegram e **espera você**:
   "Aprovar e executar" abre o script escolhido com `{{card}}`, `{{branch}}`, `{{ambiente}}`/`{{env}}`, `{{solicitante}}` já preenchidos.
 
+## Fase 6: Vigia 2.0 + Gemini
+
+- **Gemini CLI** como segunda IA (Configurações → IAs): modo *Gemini* no console, scripts "Ordem para o Gemini" e
+  Vigia com Gemini (poupa os tokens do Claude). Sem terminal, o Gemini nega sozinho tudo que pediria aprovação.
+  - Vigia com Gemini: carrega só o servidor `ccc-gchat` (`--allowed-mcp-server-names`) e o app escreve
+    `~/.gemini/policies/claude-command-center.toml` liberando só as ferramentas de leitura (e negando o envio),
+    valendo só para execuções sem terminal.
+  - "Preparar Google Chat no Gemini" registra o `ccc-gchat` no Gemini a partir do JSON do modo personalizado.
+    No modo oficial (OAuth do Google), configure no próprio Gemini com o nome `ccc-gchat`.
+  - Atenção: para contas gratuitas/Google One, o Google trocou o Gemini CLI pelo Antigravity CLI (jun/2026).
+- **Resumo melhor**: cada pedido vem com resumo de uma frase, o que faltou, urgência e o projeto citado
+  (associado ao projeto cadastrado pelo nome ou pela variável `apelidos`).
+- **Respostas cadastradas** (Configurações → Automação): textos com `{{solicitante}} {{card}} {{branch}} {{ambiente}} {{projeto}}`.
+  Envio manual pelo card do pedido, automático ao detectar ("Recebido"), ou ao aprovar (por regra).
+  O envio usa o Claude com uma única ferramenta liberada (a de enviar mensagem); o texto é montado pelo app.
+- **Regras**: ambiente(s) + projeto → script, com três modos: só sugerir, botão "Aprovar e rodar" no Telegram,
+  ou rodar sozinho. **Trava fixa:** ambientes que parecem produção (prod, produção, prd, live, main, master)
+  nunca rodam sozinhos nem pelo Telegram. E o script só roda se todas as variáveis estiverem preenchidas.
+- **Telegram com botões e comandos**: ✅ Aprovar / 🗑 Descartar / ▶ Aprovar e rodar; o app edita a mensagem com o
+  desfecho e avisa quando o script termina. Comandos: `/status`, `/pendentes`, `/ausente`, `/online`, `/vigia`.
+  Só o Chat ID configurado é obedecido. O bot usa long polling (se outro programa já lê o bot, ele pausa e avisa).
+
 ## Fase 5: dia a dia
 
 - **Projetos executáveis**: no cadastro, "Como executar" (ex: `npm run dev`) e, opcionalmente, a porta.
@@ -119,6 +141,9 @@ src/
   main/watcher.ts        ciclo do Modo Vigia (só leitura) + alertas
   main/projects.ts       execução dos projetos (▶/■), monitor de porta
   main/tray.ts           ícone na bandeja + abrir com o sistema
+  main/gemini.ts         Gemini CLI: política só-leitura, registrar ccc-gchat, args do Vigia
+  main/automation.ts     pedidos: Telegram, respostas, regras, trava de produção
+  shared/vars.ts         variáveis, associação de projeto, regras (usado pelo main e pela interface)
   preload/index.ts       contextBridge → window.api
   renderer/src/
     App.tsx              estado + orquestração
@@ -133,5 +158,5 @@ src/
 - [x] Fase 3: MCPs (GitHub, Jira, Google Chat), Telegram, Modo Vigia com aprovação
 - [x] Fase 4: instaladores (AppImage + .deb para Ubuntu, NSIS .exe para Windows)
 - [x] Fase 5: projetos executáveis, terminais em abas, scripts de projeto + ações globais, Remote Control por projeto, modo Ausente, bandeja
-- [ ] Fase 6: Vigia 2.0 (resumo melhor, respostas cadastradas, regras automáticas, Telegram com botões) + Gemini
+- [x] Fase 6: Vigia 2.0 (resumo melhor, respostas cadastradas, regras automáticas, Telegram com botões) + Gemini
 - [ ] Fase 7: build no GitHub Actions + atualização automática

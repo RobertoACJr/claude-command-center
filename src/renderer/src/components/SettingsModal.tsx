@@ -1,6 +1,12 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import {
   AppWindow,
+  Bot,
+  Gem,
+  MessageSquareReply,
+  Plus,
+  Trash2,
+  Workflow,
   Bell,
   Eye,
   Github,
@@ -16,7 +22,11 @@ import {
   Zap
 } from 'lucide-react'
 import type {
+  AiProvider,
   AppConfig,
+  AutomationRule,
+  ReplyTemplate,
+  RuleMode,
   IntegrationId,
   OpResult,
   SecretKey,
@@ -25,9 +35,10 @@ import type {
   WatcherState
 } from '@shared/types'
 import { Button, Field, Modal, Toggle, inputCls } from './ui'
-import { cn } from '../lib/utils'
+import { cn, uid } from '../lib/utils'
+import { isProdEnv } from '@shared/vars'
 
-type Tab = 'general' | 'integrations' | 'telegram' | 'watcher'
+type Tab = 'general' | 'integrations' | 'ai' | 'telegram' | 'watcher' | 'automation'
 
 export function SettingsModal({
   open,
@@ -59,9 +70,11 @@ export function SettingsModal({
         {(
           [
             ['general', 'Geral', AppWindow],
-            ['integrations', 'Integrações MCP', Plug],
+            ['integrations', 'Integrações', Plug],
+            ['ai', 'IAs', Gem],
             ['telegram', 'Telegram', Bell],
-            ['watcher', 'Modo Vigia', Eye]
+            ['watcher', 'Modo Vigia', Eye],
+            ['automation', 'Automação', Workflow]
           ] as const
         ).map(([id, label, Icon]) => (
           <button
@@ -89,6 +102,8 @@ export function SettingsModal({
       {tab === 'integrations' && <IntegrationsTab config={config} sec={sec} save={save} />}
       {tab === 'telegram' && <TelegramTab config={config} sec={sec} save={save} />}
       {tab === 'watcher' && <WatcherTab config={config} watcher={watcher} save={save} />}
+      {tab === 'ai' && <AiTab config={config} save={save} />}
+      {tab === 'automation' && <AutomationTab config={config} save={save} />}
     </Modal>
   )
 }
@@ -441,6 +456,17 @@ function IntegrationsTab({ config, sec, save }: { config: AppConfig; sec: Secret
                 placeholder="list_messages, search_messages"
               />
             </Field>
+            <Field
+              label="Ferramenta de ENVIO (opcional)"
+              hint="Só para as respostas cadastradas (Automação). Fica bloqueada no Vigia, que só lê."
+            >
+              <input
+                className={inputCls + ' font-mono text-xs'}
+                value={gc.sendTool}
+                onChange={(e) => setGc({ ...gc, sendTool: e.target.value })}
+                placeholder="send_message"
+              />
+            </Field>
           </>
         )}
 
@@ -561,6 +587,12 @@ function TelegramTab({ config, sec, save }: { config: AppConfig; sec: SecretsSta
           <Spin on={busy === 'test'} /> <Zap size={12} /> Testar Notificação
         </Button>
       </div>
+      <Toggle
+        checked={config.telegram.interactive}
+        onChange={(v) => save({ telegram: { interactive: v } })}
+        label="Botões e comandos no Telegram"
+        hint="Pedidos chegam com Aprovar / Descartar (e Aprovar e rodar, se uma regra permitir). Comandos: /status, /pendentes, /ausente, /online, /vigia. Só o seu Chat ID é obedecido."
+      />
       <Result r={result} />
     </Section>
   )
@@ -580,7 +612,8 @@ function WatcherTab({ config, watcher, save }: { config: AppConfig; watcher: Wat
         autoWhenOff: w.autoWhenOff,
         intervalMin: w.intervalMin,
         focus: w.focus,
-        model: w.model
+        model: w.model,
+        provider: w.provider
       }
     })
     setSaved(true)
@@ -590,6 +623,29 @@ function WatcherTab({ config, watcher, save }: { config: AppConfig; watcher: Wat
   return (
     <div className="space-y-3">
       <Section icon={<Eye size={15} />} title="Monitorar Google Chat">
+        <Field label="Quem lê o chat" hint="O Gemini faz a triagem e poupa os tokens do Claude para o desenvolvimento.">
+          <div className="grid grid-cols-2 gap-2">
+            {(
+              [
+                ['claude', 'Claude Code', 'claude -p, ferramentas só de leitura'],
+                ['gemini', 'Gemini CLI', 'gemini, política só de leitura']
+              ] as Array<[AiProvider, string, string]>
+            ).map(([p, label, sub]) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setW({ ...w, provider: p })}
+                className={cn(
+                  'cursor-pointer rounded-lg border p-2.5 text-left transition-colors',
+                  w.provider === p ? 'border-violet/70 bg-violet/10' : 'border-line bg-bg hover:border-zinc-600'
+                )}
+              >
+                <div className="text-sm text-zinc-100">{label}</div>
+                <div className="text-[11px] text-zinc-500">{sub}</div>
+              </button>
+            ))}
+          </div>
+        </Field>
         <Toggle
           checked={w.enabled}
           onChange={(v) => setW({ ...w, enabled: v })}
@@ -612,7 +668,7 @@ function WatcherTab({ config, watcher, save }: { config: AppConfig; watcher: Wat
               onChange={(e) => setW({ ...w, intervalMin: Number(e.target.value) || 3 })}
             />
           </Field>
-          <Field label="Modelo (opcional)" hint="Vazio = padrão do Claude Code. Ex: sonnet, haiku.">
+          <Field label="Modelo (opcional)" hint={w.provider === 'gemini' ? 'Vazio = padrão. Ex: flash, pro.' : 'Vazio = padrão. Ex: sonnet, haiku.'}>
             <input
               className={inputCls}
               value={w.model}
@@ -646,10 +702,22 @@ function WatcherTab({ config, watcher, save }: { config: AppConfig; watcher: Wat
       <div className="flex gap-2.5 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.05] p-3 text-xs leading-relaxed text-zinc-400">
         <ShieldCheck size={16} className="mt-0.5 shrink-0 text-emerald-400" />
         <div>
-          <b className="text-emerald-300">Regra de segurança garantida por permissão, não só por instrução.</b> Cada
-          ciclo roda <code>claude -p</code> sem nenhuma ferramenta embutida (sem terminal, sem editar arquivos), com
-          apenas as ferramentas de <i>leitura</i> do Google Chat liberadas e as de escrita bloqueadas. O Claude só
-          devolve um JSON; quem avisa o Telegram é o app. Nada é executado até você aprovar aqui.
+          <b className="text-emerald-300">Regra de segurança garantida por permissão, não só por instrução.</b>{' '}
+          {w.provider === 'gemini' ? (
+            <>
+              Cada ciclo roda o Gemini CLI sem terminal, carregando só o servidor <code>ccc-gchat</code>, com uma
+              política (<code>~/.gemini/policies/claude-command-center.toml</code>) que libera só a <i>leitura</i> e
+              nega o envio. Sem terminal, tudo que pediria aprovação é negado pelo próprio Gemini.
+            </>
+          ) : (
+            <>
+              Cada ciclo roda <code>claude -p</code> sem nenhuma ferramenta embutida (sem terminal, sem editar
+              arquivos), com apenas as ferramentas de <i>leitura</i> do Google Chat liberadas e as de escrita
+              bloqueadas.
+            </>
+          )}{' '}
+          A IA só devolve um JSON; quem avisa o Telegram é o app. Nada roda sem você aprovar, exceto regras automáticas
+          que você criar (e nunca em produção).
         </div>
       </div>
     </div>
@@ -675,5 +743,227 @@ function GeneralTab({ config, save }: { config: AppConfig; save: SaveFn }) {
         hint="Abre escondido na bandeja. Só funciona no app instalado (não no npm run dev)."
       />
     </Section>
+  )
+}
+
+// ---------------------------------------------------------------- IAs
+
+function AiTab({ config, save }: { config: AppConfig; save: SaveFn }) {
+  const [cmd, setCmd] = useState(config.ai.geminiCommand)
+  const [result, setResult] = useState<OpResult | null>(null)
+  const { busy, run } = useBusy()
+  const persist = () => save({ ai: { geminiCommand: cmd.trim() || 'gemini' } })
+
+  return (
+    <div className="space-y-3">
+      <Section icon={<Bot size={15} />} title="Claude Code">
+        <p className="text-xs text-zinc-500">
+          Usa o <code>claude</code> do seu PATH (login feito no próprio Claude Code). Ele cuida das ordens de
+          desenvolvimento, do Remote Control e do envio das respostas no Google Chat.
+        </p>
+      </Section>
+      <Section icon={<Gem size={15} />} title="Gemini CLI">
+        <p className="text-xs leading-relaxed text-zinc-500">
+          Use para triagem (Modo Vigia), análises e scripts do tipo "Ordem para o Gemini". Sem terminal, o Gemini não
+          executa nada que precise de aprovação (comandos, edição de arquivos). Atenção: para contas gratuitas e do
+          Google One, o Google trocou o Gemini CLI pelo Antigravity CLI em junho de 2026; pode ser preciso usar uma
+          chave de API ou um plano pago.
+        </p>
+        <Field label="Comando" hint="Ex: gemini, ou o caminho completo do executável.">
+          <input className={inputCls + ' font-mono text-xs'} value={cmd} onChange={(e) => setCmd(e.target.value)} placeholder="gemini" />
+        </Field>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={!!busy}
+            onClick={() =>
+              run('check', async () => {
+                await persist()
+                setResult(await window.api.geminiCheck())
+              })
+            }
+          >
+            <Spin on={busy === 'check'} /> Salvar e testar
+          </Button>
+          <Button
+            size="sm"
+            disabled={!!busy}
+            onClick={() =>
+              run('setup', async () => {
+                await persist()
+                setResult(await window.api.geminiSetup())
+              })
+            }
+            title="Registra o ccc-gchat no Gemini (modo personalizado) e escreve a política só-leitura do Vigia"
+          >
+            <Spin on={busy === 'setup'} /> Preparar Google Chat no Gemini
+          </Button>
+        </div>
+        <Result r={result} />
+      </Section>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------- Automação
+
+const MODE_LABEL: Record<RuleMode, string> = {
+  suggest: 'Só sugerir o script no pedido',
+  telegram: 'Botão "Aprovar e rodar" no Telegram',
+  auto: 'Rodar sozinho ao detectar'
+}
+
+function AutomationTab({ config, save }: { config: AppConfig; save: SaveFn }) {
+  const [replies, setReplies] = useState<ReplyTemplate[]>(config.replies)
+  const [rules, setRules] = useState<AutomationRule[]>(config.rules)
+  const [saved, setSaved] = useState(false)
+
+  const persist = async () => {
+    await save({
+      replies: replies.filter((r) => r.name.trim() && r.text.trim()),
+      rules: rules.filter((r) => r.name.trim() && r.scriptId)
+    })
+    setSaved(true)
+    setTimeout(() => setSaved(false), 1500)
+  }
+
+  const setReply = (i: number, patch: Partial<ReplyTemplate>) => setReplies((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+  const setRule = (i: number, patch: Partial<AutomationRule>) => setRules((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)))
+
+  return (
+    <div className="space-y-3">
+      <Section
+        icon={<MessageSquareReply size={15} />}
+        title="Respostas cadastradas"
+        right={
+          <Button size="sm" onClick={() => setReplies((rs) => [...rs, { id: uid(), name: '', text: '', autoOnDetect: false }])}>
+            <Plus size={12} /> Resposta
+          </Button>
+        }
+      >
+        <p className="text-xs text-zinc-500">
+          Enviadas na conversa do pedido. Variáveis: <code className="text-purple">{'{{solicitante}} {{card}} {{branch}} {{ambiente}} {{projeto}}'}</code>.
+          O envio usa o Claude com só a ferramenta de enviar mensagem liberada; o texto é montado pelo app.
+        </p>
+        {replies.map((r, i) => (
+          <div key={r.id} className="space-y-2 rounded-lg border border-line bg-bg p-2.5">
+            <div className="flex items-center gap-2">
+              <input className={inputCls + ' flex-1'} value={r.name} onChange={(e) => setReply(i, { name: e.target.value })} placeholder="Nome (ex: Recebido)" />
+              <IconBtn title="Remover" onClick={() => setReplies((rs) => rs.filter((_, j) => j !== i))} />
+            </div>
+            <textarea className={inputCls + ' min-h-[56px] text-xs'} value={r.text} onChange={(e) => setReply(i, { text: e.target.value })} placeholder="Texto da mensagem" />
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
+              <input type="checkbox" checked={r.autoOnDetect} onChange={(e) => setReply(i, { autoOnDetect: e.target.checked })} />
+              Enviar sozinha assim que o pedido for detectado
+            </label>
+          </div>
+        ))}
+      </Section>
+
+      <Section
+        icon={<Workflow size={15} />}
+        title="Regras"
+        right={
+          <Button
+            size="sm"
+            onClick={() =>
+              setRules((rs) => [
+                ...rs,
+                { id: uid(), name: '', enabled: true, environments: 'beta', projectId: '', scriptId: '', mode: 'suggest', replyOnApproveId: '' }
+              ])
+            }
+          >
+            <Plus size={12} /> Regra
+          </Button>
+        }
+      >
+        <p className="text-xs text-zinc-500">
+          Quando um pedido casar com o ambiente (e projeto) da regra, o app liga o script a ele. A primeira regra que casar
+          vale. <b className="text-zinc-300">Trava fixa:</b> ambientes que parecem produção (prod, produção, prd, live,
+          main, master) nunca rodam sozinhos nem pelo Telegram, só aprovando no PC.
+        </p>
+        {rules.map((r, i) => {
+          const prodWarn = r.mode !== 'suggest' && r.environments.split(',').some((e) => isProdEnv(e) || e.trim() === '*')
+          return (
+            <div key={r.id} className="space-y-2 rounded-lg border border-line bg-bg p-2.5">
+              <div className="flex items-center gap-2">
+                <input type="checkbox" checked={r.enabled} onChange={(e) => setRule(i, { enabled: e.target.checked })} title="Ativa" />
+                <input className={inputCls + ' flex-1'} value={r.name} onChange={(e) => setRule(i, { name: e.target.value })} placeholder="Nome (ex: Beta automático)" />
+                <IconBtn title="Remover" onClick={() => setRules((rs) => rs.filter((_, j) => j !== i))} />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Ambientes">
+                  <input className={inputCls + ' text-xs'} value={r.environments} onChange={(e) => setRule(i, { environments: e.target.value })} placeholder="beta, homolog (* = qualquer)" />
+                </Field>
+                <Field label="Projeto">
+                  <select className={inputCls + ' text-xs'} value={r.projectId} onChange={(e) => setRule(i, { projectId: e.target.value })}>
+                    <option value="">Qualquer (o do pedido)</option>
+                    {config.projects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Script">
+                  <select className={inputCls + ' text-xs'} value={r.scriptId} onChange={(e) => setRule(i, { scriptId: e.target.value })}>
+                    <option value="">Escolha…</option>
+                    {config.scripts.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="O que fazer">
+                  <select className={inputCls + ' text-xs'} value={r.mode} onChange={(e) => setRule(i, { mode: e.target.value as RuleMode })}>
+                    {(Object.keys(MODE_LABEL) as RuleMode[]).map((m) => (
+                      <option key={m} value={m}>
+                        {MODE_LABEL[m]}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+              <Field label="Resposta ao aprovar">
+                <select className={inputCls + ' text-xs'} value={r.replyOnApproveId} onChange={(e) => setRule(i, { replyOnApproveId: e.target.value })}>
+                  <option value="">Nenhuma</option>
+                  {replies.map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.name || '(sem nome)'}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {prodWarn && (
+                <div className="text-[11px] text-amber-300">
+                  ⚠ Pedidos de produção casam com esta regra, mas nunca vão rodar sozinhos/pelo Telegram: só aprovando no PC.
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </Section>
+
+      <div className="flex justify-end">
+        <Button variant="primary" onClick={persist}>
+          {saved ? 'Salvo ✓' : 'Salvar respostas e regras'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function IconBtn({ title, onClick }: { title: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-zinc-500 hover:bg-red-500/10 hover:text-red-400"
+    >
+      <Trash2 size={13} />
+    </button>
   )
 }
