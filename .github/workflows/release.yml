@@ -1,11 +1,14 @@
 # Gera os instaladores em máquinas Windows e Ubuntu do GitHub e publica na página de Releases.
-# Dispara ao enviar uma tag de versão (git tag v0.6.0 && git push origin v0.6.0)
+# Dispara ao enviar uma tag de versão (git tag v0.6.0 && git push origin v0.6.0),
+# ao publicar uma Release pela página do GitHub (Releases → Draft a new release → tag nova v0.6.0),
 # ou manualmente pela aba Actions (sem publicar release, só artefatos).
 name: Instaladores
 
 on:
   push:
     tags: ['v*']
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:

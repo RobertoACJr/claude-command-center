@@ -100,6 +100,9 @@ git tag v0.7.0
 git push origin main v0.7.0
 ```
 
+Ou, sem terminal: no GitHub, **Releases → Draft a new release**, crie a tag nova (ex: `v0.7.0`) e publique;
+o workflow roda e anexa os instaladores na própria release em alguns minutos.
+
 Pela aba **Actions → Instaladores → Run workflow** dá para gerar sem publicar (os arquivos ficam como artefatos do run).
 Para gerar localmente: `npm run build:linux` (no Ubuntu) ou `npm run build:win` (no Windows); saem em `release/<versão>/`.
 
