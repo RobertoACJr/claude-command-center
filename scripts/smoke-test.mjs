@@ -21,7 +21,8 @@ function findExecutable() {
 }
 
 const exe = findExecutable()
-// Perfil limpo: o teste nunca usa nem altera dados reais
+// Perfil limpo no Linux (HOME temporário). No Windows o Electron usa a pasta real do usuário:
+// rodando localmente, o teste alterna o modo Online/Ausente do seu config.json (no CI a máquina é descartável).
 const home = mkdtempSync(join(tmpdir(), 'ccc-smoke-'))
 const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, '.config'), APPDATA: join(home, 'AppData') }
 const args = [`--remote-debugging-port=${PORT}`]
