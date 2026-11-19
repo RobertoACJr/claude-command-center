@@ -1,26 +1,111 @@
 # Claude Command Center
 
-Painel desktop (Electron + React + TypeScript + Tailwind v4) para gerenciar projetos, scripts e ordens para o Claude Code.
+Painel desktop para Windows e Ubuntu: seus projetos (rodar, parar, branch), scripts e ações globais,
+ordens para o Claude Code e o Gemini, Remote Control, Modo Vigia no Google Chat com aviso e aprovação pelo Telegram.
 
-## Rodar em desenvolvimento
+## Instalar
+
+Baixe o instalador na página de **[Releases](https://github.com/RobertoACJr/claude-command-center/releases/latest)**.
+
+### Ubuntu
+
+1. Baixe o `claude-command-center_X.Y.Z_amd64.deb`.
+2. Instale (o `apt` resolve as dependências):
+   ```bash
+   sudo apt install ./claude-command-center_*_amd64.deb
+   ```
+3. Abra pelo menu de aplicativos (**Claude Command Center**) ou rode `claude-command-center` no terminal.
+
+Para desinstalar: `sudo apt remove claude-command-center`.
+
+> Também tem o `.AppImage` (não instala nada: `chmod +x` e execute). Ele precisa do `libfuse2`
+> (`sudo apt install libfuse2t64` no 24.04) e, no Ubuntu 24.04, pode esbarrar na restrição do AppArmor ao sandbox do
+> Chromium. Por isso o `.deb` é o recomendado.
+
+### Windows
+
+1. Baixe o `claude-command-center-setup-X.Y.Z.exe` e execute.
+2. O instalador não é assinado, então o Windows mostra **"O Windows protegeu o computador"**:
+   clique em **Mais informações → Executar assim mesmo**.
+3. Escolha a pasta e conclua. Ele cria atalho na área de trabalho e no menu Iniciar.
+
+Para desinstalar: Configurações → Aplicativos → Claude Command Center.
+
+### Atualizar
+
+Baixe a versão nova e instale por cima (no Ubuntu, o mesmo `sudo apt install ./…deb`). Projetos, scripts, regras e
+tokens ficam fora do app e não são apagados.
+
+## O que precisa estar instalado no PC
+
+| Para… | Instale | Confira com |
+|---|---|---|
+| Tudo que envolve Claude (ordens, Remote Control, Vigia, respostas no chat) | [Claude Code](https://docs.claude.com/en/docs/claude-code) e faça login | `claude --version` |
+| Branch dos projetos e scripts git | git | `git --version` |
+| Modo Gemini / Vigia com Gemini (opcional) | Gemini CLI, com login ou chave de API | `gemini --version` |
+| MCP do Jira (opcional) | [uv](https://docs.astral.sh/uv/) | `uvx --version` |
+
+**Não precisa de Node.js** para usar o app instalado (só para desenvolver).
+
+## Primeiros passos
+
+1. **+ Projeto**: nome, pasta, "Como executar" (ex: `npm run dev`), porta e variáveis (ex: `remote`, `branch_principal`).
+2. **+ Ação** (ações globais) ou **+** dentro do card (scripts do projeto). Use `{{variavel}}` e `{{projeto.chave}}`.
+3. **Remote Control**: antes do primeiro uso, rode `claude remote-control` uma vez num terminal em cada pasta de projeto
+   e responda `y` (confiança na pasta e ativação).
+4. **Engrenagem** → Integrações (GitHub, Jira, Google Chat), Telegram, Modo Vigia, Automação.
+
+## Levar a configuração de um PC para outro (Windows ⇄ Ubuntu)
+
+Copie o `config.json` da pasta de dados do app de um PC para o outro (com o app fechado):
+
+- Windows: `%APPDATA%\Claude Command Center\config.json`
+- Ubuntu: `~/.config/Claude Command Center/config.json`
+
+Depois, ajuste as **pastas dos projetos** (os caminhos mudam entre Windows e Linux) e informe os **tokens de novo**
+em Configurações: o `secrets.json` é cifrado pelo cofre do sistema de cada PC e não funciona em outra máquina.
+O caminho exato da pasta de dados aparece na primeira linha da aba *Sistema* dos Terminais.
+
+## Desenvolvimento
+
+Requisitos: **Node.js 22 LTS** (mínimo 20.19 ou 22.12, exigência do Vite 7) e git.
 
 ```bash
-npm install
-npm run dev
+# Ubuntu (via nvm)
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+nvm install 22
+
+# Windows (PowerShell)
+winget install OpenJS.NodeJS.LTS
 ```
 
-Requisitos: **Node.js 22 LTS** (mínimo 20.19 ou 22.12, exigência do Vite 7) e git no PATH. Confira com `node -v`.
+```bash
+git clone https://github.com/RobertoACJr/claude-command-center.git
+cd claude-command-center
+npm install
+npm run dev          # abre o app em modo desenvolvimento
+npm run typecheck    # checagem de tipos
+```
 
-## Onde ficam os dados
+### Publicar uma versão nova
 
-`config.json` na pasta `userData` do Electron:
+Os instaladores são gerados pelo GitHub Actions (`.github/workflows/release.yml`) numa máquina Windows e numa Ubuntu,
+passam por um **teste de fumaça** (abre o app empacotado, confere as telas principais, roda um comando no console e
+troca para o modo Ausente) e são publicados na página de Releases:
 
-- Windows: `%APPDATA%\claude-command-center\config.json`
-- Linux: `~/.config/claude-command-center/config.json`
+```bash
+npm version 0.7.0 --no-git-tag-version   # atualiza o package.json
+git commit -am "v0.7.0"
+git tag v0.7.0
+git push origin main v0.7.0
+```
 
-O caminho exato aparece na primeira linha do console do app.
+Pela aba **Actions → Instaladores → Run workflow** dá para gerar sem publicar (os arquivos ficam como artefatos do run).
+Para gerar localmente: `npm run build:linux` (no Ubuntu) ou `npm run build:win` (no Windows); saem em `release/<versão>/`.
 
-## Fase 2: como a execução funciona
+## Como funciona
+
+### Execução (terminal, Claude, Remote Control)
 
 - **Terminal**: Linux usa `/bin/bash -lc` (login shell, pega o PATH do nvm/`~/.local/bin`). Windows usa `pwsh` se instalado, senão `powershell.exe`.
   Cada comando roda separado na pasta escolhida (o `cd` não persiste entre comandos; use o seletor de pasta do console).
@@ -35,7 +120,7 @@ O caminho exato aparece na primeira linha do console do app.
   sem terminal o CLI não consegue perguntar e sai.
 - `CCC_CLAUDE_BIN=/caminho/do/claude` força um executável específico do Claude Code.
 
-## Fase 3: integrações, Telegram e Modo Vigia
+### Integrações, Telegram e Modo Vigia
 
 Engrenagem no header → **Configurações & Integrações**.
 
@@ -54,29 +139,7 @@ Engrenagem no header → **Configurações & Integrações**.
   O Claude devolve JSON; o app deduplica pelo ID da mensagem, cria o alerta, avisa no Telegram e **espera você**:
   "Aprovar e executar" abre o script escolhido com `{{card}}`, `{{branch}}`, `{{ambiente}}`/`{{env}}`, `{{solicitante}}` já preenchidos.
 
-## Fase 6: Vigia 2.0 + Gemini
-
-- **Gemini CLI** como segunda IA (Configurações → IAs): modo *Gemini* no console, scripts "Ordem para o Gemini" e
-  Vigia com Gemini (poupa os tokens do Claude). Sem terminal, o Gemini nega sozinho tudo que pediria aprovação.
-  - Vigia com Gemini: carrega só o servidor `ccc-gchat` (`--allowed-mcp-server-names`) e o app escreve
-    `~/.gemini/policies/claude-command-center.toml` liberando só as ferramentas de leitura (e negando o envio),
-    valendo só para execuções sem terminal.
-  - "Preparar Google Chat no Gemini" registra o `ccc-gchat` no Gemini a partir do JSON do modo personalizado.
-    No modo oficial (OAuth do Google), configure no próprio Gemini com o nome `ccc-gchat`.
-  - Atenção: para contas gratuitas/Google One, o Google trocou o Gemini CLI pelo Antigravity CLI (jun/2026).
-- **Resumo melhor**: cada pedido vem com resumo de uma frase, o que faltou, urgência e o projeto citado
-  (associado ao projeto cadastrado pelo nome ou pela variável `apelidos`).
-- **Respostas cadastradas** (Configurações → Automação): textos com `{{solicitante}} {{card}} {{branch}} {{ambiente}} {{projeto}}`.
-  Envio manual pelo card do pedido, automático ao detectar ("Recebido"), ou ao aprovar (por regra).
-  O envio usa o Claude com uma única ferramenta liberada (a de enviar mensagem); o texto é montado pelo app.
-- **Regras**: ambiente(s) + projeto → script, com três modos: só sugerir, botão "Aprovar e rodar" no Telegram,
-  ou rodar sozinho. **Trava fixa:** ambientes que parecem produção (prod, produção, prd, live, main, master)
-  nunca rodam sozinhos nem pelo Telegram. E o script só roda se todas as variáveis estiverem preenchidas.
-- **Telegram com botões e comandos**: ✅ Aprovar / 🗑 Descartar / ▶ Aprovar e rodar; o app edita a mensagem com o
-  desfecho e avisa quando o script termina. Comandos: `/status`, `/pendentes`, `/ausente`, `/online`, `/vigia`.
-  Só o Chat ID configurado é obedecido. O bot usa long polling (se outro programa já lê o bot, ele pausa e avisa).
-
-## Fase 5: dia a dia
+### Projetos, terminais, ações globais, modo Ausente e bandeja
 
 - **Projetos executáveis**: no cadastro, "Como executar" (ex: `npm run dev`) e, opcionalmente, a porta.
   O card mostra ▶ Executar / ■ Parar / ↻ Reiniciar e o estado: *Rodando há X · :porta*, *Parado*, *Caiu (código N)*
@@ -100,29 +163,27 @@ Engrenagem no header → **Configurações & Integrações**.
   "Abrir junto com o sistema" (só no app instalado). No Ubuntu/GNOME o ícone precisa da extensão AppIndicator
   (já vem no Ubuntu).
 
-## Fase 4: gerar os instaladores
+### Vigia 2.0, automação e Gemini
 
-Gere cada instalador **no próprio sistema** (o .exe no Windows, o .deb/AppImage no Ubuntu).
-Gerar o de Windows a partir do Linux exige o Wine, e o contrário não funciona.
-
-```bash
-# Ubuntu
-npm install
-npm run build:linux      # → release/0.1.0/claude-command-center_0.1.0_amd64.deb e .AppImage
-
-# Windows (PowerShell)
-npm install
-npm run build:win        # → release\0.1.0\claude-command-center-setup-0.1.0.exe
-```
-
-- **Ubuntu: prefira o .deb** (`sudo apt install ./release/0.1.0/claude-command-center_0.1.0_amd64.deb`): ele cria o
-  atalho no menu de aplicativos. O AppImage precisa do `libfuse2` (`sudo apt install libfuse2t64` no 24.04)
-  e, no 24.04, pode esbarrar na restrição do AppArmor ao sandbox do Chromium.
-- **Windows:** o instalador não é assinado, então o SmartScreen mostra "O Windows protegeu o computador".
-  Clique em *Mais informações → Executar assim mesmo*. Ele cria atalho na área de trabalho e no menu Iniciar.
-- `npm run build:unpack` gera só a pasta do app, sem instalador. Serve para testar rápido.
-- Ícones em `build/` (fonte: `build/icon.svg`; PNGs em `build/icons/`, `build/icon.ico` para o Windows).
-- Seus dados (`config.json`, `secrets.json`) ficam fora do app, na pasta userData. Reinstalar ou atualizar não apaga nada.
+- **Gemini CLI** como segunda IA (Configurações → IAs): modo *Gemini* no console, scripts "Ordem para o Gemini" e
+  Vigia com Gemini (poupa os tokens do Claude). Sem terminal, o Gemini nega sozinho tudo que pediria aprovação.
+  - Vigia com Gemini: carrega só o servidor `ccc-gchat` (`--allowed-mcp-server-names`) e o app escreve
+    `~/.gemini/policies/claude-command-center.toml` liberando só as ferramentas de leitura (e negando o envio),
+    valendo só para execuções sem terminal.
+  - "Preparar Google Chat no Gemini" registra o `ccc-gchat` no Gemini a partir do JSON do modo personalizado.
+    No modo oficial (OAuth do Google), configure no próprio Gemini com o nome `ccc-gchat`.
+  - Atenção: para contas gratuitas/Google One, o Google trocou o Gemini CLI pelo Antigravity CLI (jun/2026).
+- **Resumo melhor**: cada pedido vem com resumo de uma frase, o que faltou, urgência e o projeto citado
+  (associado ao projeto cadastrado pelo nome ou pela variável `apelidos`).
+- **Respostas cadastradas** (Configurações → Automação): textos com `{{solicitante}} {{card}} {{branch}} {{ambiente}} {{projeto}}`.
+  Envio manual pelo card do pedido, automático ao detectar ("Recebido"), ou ao aprovar (por regra).
+  O envio usa o Claude com uma única ferramenta liberada (a de enviar mensagem); o texto é montado pelo app.
+- **Regras**: ambiente(s) + projeto → script, com três modos: só sugerir, botão "Aprovar e rodar" no Telegram,
+  ou rodar sozinho. **Trava fixa:** ambientes que parecem produção (prod, produção, prd, live, main, master)
+  nunca rodam sozinhos nem pelo Telegram. E o script só roda se todas as variáveis estiverem preenchidas.
+- **Telegram com botões e comandos**: ✅ Aprovar / 🗑 Descartar / ▶ Aprovar e rodar; o app edita a mensagem com o
+  desfecho e avisa quando o script termina. Comandos: `/status`, `/pendentes`, `/ausente`, `/online`, `/vigia`.
+  Só o Chat ID configurado é obedecido. O bot usa long polling (se outro programa já lê o bot, ele pausa e avisa).
 
 ## Estrutura
 
@@ -159,4 +220,5 @@ src/
 - [x] Fase 4: instaladores (AppImage + .deb para Ubuntu, NSIS .exe para Windows)
 - [x] Fase 5: projetos executáveis, terminais em abas, scripts de projeto + ações globais, Remote Control por projeto, modo Ausente, bandeja
 - [x] Fase 6: Vigia 2.0 (resumo melhor, respostas cadastradas, regras automáticas, Telegram com botões) + Gemini
-- [ ] Fase 7: build no GitHub Actions + atualização automática
+- [x] Fase 7 (parte 1): instaladores no GitHub Actions + Releases
+- [ ] Fase 7 (parte 2): atualização automática

@@ -97,7 +97,8 @@ try {
       if (!el) return false
       el.click(); return true
     })()`)
-  const bodyText = () => evaluate('document.body.innerText')
+  // textContent (e não innerText): ignora o text-transform: uppercase dos rótulos
+  const bodyText = () => evaluate('document.body.textContent')
 
   await cdp('Runtime.enable')
   await cdp('Log.enable')
@@ -114,6 +115,7 @@ try {
   const apiKeys = await evaluate('Object.keys(window.api || {}).length')
   if (!(apiKeys > 30)) fail(`window.api incompleta (${apiKeys} funções)`)
   console.log(`✓ Tela principal carregou · window.api com ${apiKeys} funções`)
+  console.log(`  pasta de dados: ${await evaluate('window.api.configPath()')}`)
 
   // 2) Configurações: todas as abas
   if (!(await clickByText('Configurações & Integrações'))) fail('Botão de configurações não encontrado')
