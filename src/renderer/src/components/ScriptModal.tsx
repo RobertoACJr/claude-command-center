@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { FileCode2, FolderOpen, Sparkles, SquareTerminal } from 'lucide-react'
 import type { Project, Script, ScriptTarget, ScriptType } from '@shared/types'
 import { Button, Field, Modal, inputCls } from './ui'
-import { cn, extractVariables, uid } from '../lib/utils'
+import { cn, extractProjectKeys, extractUserVariables, uid } from '../lib/utils'
 
 function encodeTarget(t: ScriptTarget): string {
   return t.kind === 'project' ? `project:${t.projectId}` : t.kind
@@ -11,12 +11,15 @@ function encodeTarget(t: ScriptTarget): string {
 export function ScriptModal({
   open,
   initial,
+  presetTarget,
   projects,
   onClose,
   onSave
 }: {
   open: boolean
   initial: Script | null
+  /** Ao criar: 'ask' (ação global) ou 'project:<id>' (script do projeto) */
+  presetTarget?: string
   projects: Project[]
   onClose: () => void
   onSave: (s: Script) => void
@@ -31,12 +34,18 @@ export function ScriptModal({
     if (!open) return
     setName(initial?.name ?? '')
     setType(initial?.type ?? 'terminal')
-    setTargetKey(initial ? encodeTarget(initial.target) : projects[0] ? `project:${projects[0].id}` : 'global')
+    setTargetKey(initial ? encodeTarget(initial.target) : (presetTarget ?? 'ask'))
     setCustomPath(initial?.target.kind === 'custom' ? initial.target.path : '')
     setContent(initial?.content ?? '')
-  }, [open, initial, projects])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initial])
 
-  const vars = useMemo(() => extractVariables(content), [content])
+  const vars = useMemo(() => extractUserVariables(content), [content])
+  const pkeys = useMemo(() => extractProjectKeys(content), [content])
+  const ownerProject = targetKey.startsWith('project:') ? projects.find((p) => p.id === targetKey.slice(8)) : undefined
+  const missing = ownerProject
+    ? pkeys.filter((k) => k !== 'nome' && k !== 'pasta' && !ownerProject.vars.some((v) => v.key === k))
+    : []
 
   const target: ScriptTarget =
     targetKey === 'custom'
@@ -70,7 +79,15 @@ export function ScriptModal({
       open={open}
       onClose={onClose}
       width="max-w-xl"
-      title={initial ? 'Editar script' : 'Novo script'}
+      title={
+        initial
+          ? 'Editar script'
+          : targetKey === 'ask'
+            ? 'Nova ação global'
+            : ownerProject
+              ? `Novo script · ${ownerProject.name}`
+              : 'Novo script'
+      }
       icon={<FileCode2 size={16} />}
       footer={
         <>
@@ -122,10 +139,20 @@ export function ScriptModal({
         </div>
       </Field>
 
-      <Field label="Executar em">
+      <Field
+        label="Onde roda"
+        hint={
+          targetKey === 'ask'
+            ? 'Ação global: na hora de executar você escolhe o projeto, e {{projeto.chave}} pega as variáveis dele.'
+            : ownerProject
+              ? 'Script do projeto: aparece dentro do card dele.'
+              : undefined
+        }
+      >
         <select className={inputCls} value={targetKey} onChange={(e) => setTargetKey(e.target.value)}>
+          <option value="ask">Ação global: escolher o projeto na hora</option>
           {projects.length > 0 && (
-            <optgroup label="Projetos cadastrados">
+            <optgroup label="Script de um projeto">
               {projects.map((p) => (
                 <option key={p.id} value={`project:${p.id}`}>
                   {p.name}
@@ -157,10 +184,29 @@ export function ScriptModal({
         label={type === 'terminal' ? 'Comando' : 'Prompt para o Claude'}
         hint={
           <span>
-            Use <code className="text-purple">{'{{variavel}}'}</code> para pedir valores na hora de executar.
+            <code className="text-purple">{'{{variavel}}'}</code> pede o valor na hora;{' '}
+            <code className="text-purple">{'{{projeto.chave}}'}</code> usa a variável do projeto (
+            <code>nome</code> e <code>pasta</code> sempre existem).
+            {pkeys.length > 0 && (
+              <span className="ml-1">
+                Do projeto:{' '}
+                {pkeys.map((k) => (
+                  <span
+                    key={k}
+                    className={cn(
+                      'mr-1 rounded px-1 font-mono',
+                      missing.includes(k) ? 'bg-red-500/15 text-red-300' : 'bg-white/5 text-zinc-300'
+                    )}
+                    title={missing.includes(k) ? 'Este projeto não define essa variável' : undefined}
+                  >
+                    {k}
+                  </span>
+                ))}
+              </span>
+            )}
             {vars.length > 0 && (
               <span className="ml-1">
-                Detectadas:{' '}
+                Pedidas na hora:{' '}
                 {vars.map((v) => (
                   <span key={v} className="mr-1 rounded bg-violet/15 px-1 font-mono text-purple">
                     {v}
@@ -178,7 +224,7 @@ export function ScriptModal({
           spellCheck={false}
           placeholder={
             type === 'terminal'
-              ? 'git fetch && git checkout {{branch}} && npm install'
+              ? 'git fetch {{projeto.remote}} && git checkout {{branch}} && git merge {{projeto.remote}}/{{projeto.branch_principal}}'
               : 'Revise o diff da branch {{branch}} e liste possíveis bugs.'
           }
         />

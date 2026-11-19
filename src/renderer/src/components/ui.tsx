@@ -19,7 +19,7 @@ export function Button({
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet/60',
         size === 'sm' ? 'h-7 px-2.5 text-xs' : 'h-9 px-3.5 text-sm',
         variant === 'primary' &&
-          'bg-gradient-to-b from-purple to-violet text-white shadow-[0_0_18px_-6px_rgba(168,85,247,0.8)] hover:brightness-110',
+          'bg-gradient-to-b from-purple to-violet text-white shadow-[0_0_18px_-6px_var(--color-purple)] hover:brightness-110',
         variant === 'outline' && 'border border-line bg-card-2 text-zinc-200 hover:border-violet/60 hover:text-white',
         variant === 'ghost' && 'text-zinc-400 hover:bg-white/5 hover:text-zinc-100',
         variant === 'danger' && 'border border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20',

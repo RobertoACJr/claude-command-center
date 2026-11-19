@@ -1,18 +1,32 @@
 export type PresenceStatus = 'on' | 'off'
 
+export interface ProjectVar {
+  key: string
+  value: string
+}
+
 export interface Project {
   id: string
   name: string
   path: string
-  /** Ativar Claude Remote Control quando o status for OFF */
+  /** Ligar o Claude Remote Control automaticamente no modo Ausente */
   remoteEnabled: boolean
   createdAt: number
+  /** Como executar o projeto (ex: npm run dev). Vazio = projeto sem execução */
+  runCommand: string
+  /** Porta para checar se está no ar (opcional) */
+  port: number | null
+  /** Variáveis do projeto, usadas em ações globais como {{projeto.chave}} */
+  vars: ProjectVar[]
 }
 
 export type ScriptType = 'terminal' | 'claude'
 
 export type ScriptTarget =
+  /** Script do projeto: aparece dentro do card do projeto */
   | { kind: 'project'; projectId: string }
+  /** Ação global: pergunta o projeto na hora de rodar e usa as variáveis dele */
+  | { kind: 'ask' }
   | { kind: 'custom'; path: string }
   | { kind: 'global' }
 
@@ -30,6 +44,15 @@ export type ConsoleMode = 'terminal' | 'claude'
 export interface UiState {
   consoleExpanded: boolean
   consoleMode: ConsoleMode
+}
+
+export interface GeneralPrefs {
+  /** Fechar a janela só esconde (app continua na bandeja) */
+  closeToTray: boolean
+  /** Abrir junto com o sistema */
+  openAtLogin: boolean
+  /** Já mostrou o aviso "continuo rodando na bandeja" */
+  trayHintShown: boolean
 }
 
 // ---------- Fase 3: integrações, Telegram, Vigia ----------
@@ -100,6 +123,9 @@ export interface DeployAlert {
 export interface AppConfig {
   version: 1
   status: PresenceStatus
+  /** Desde quando está no status atual */
+  statusSince: number
+  general: GeneralPrefs
   projects: Project[]
   scripts: Script[]
   ui: UiState
@@ -116,6 +142,7 @@ export interface SecretsStatus {
 }
 
 export interface SettingsPatch {
+  general?: Partial<Omit<GeneralPrefs, 'trayHintShown'>>
   integrations?: Partial<Omit<IntegrationsConfig, 'lastApplied'>>
   telegram?: Partial<TelegramConfig>
   watcher?: Partial<Omit<WatcherConfig, 'seen' | 'lastCheckAt'>>
@@ -146,8 +173,15 @@ export interface AppLog {
 
 // ---------- Fase 2: execução ----------
 
+/** Cada aba do painel de Terminais */
+export type TabKey = string // 'console' | 'claude' | 'system' | `script:${id}` | `project:${id}`
+
 export interface RunRequest {
   kind: ScriptType
+  /** Aba onde a saída aparece */
+  tab: TabKey
+  /** Título da aba */
+  title: string
   /** Texto do script/comando, ainda com {{variaveis}} */
   content: string
   /** Valores das {{variaveis}}. Ausente = texto literal (console), sem substituição */
@@ -161,10 +195,22 @@ export interface RunRequest {
 export type RunLineKind = 'stdout' | 'stderr' | 'claude' | 'tool' | 'info'
 
 export type RunEvent =
-  | { runId: string; type: 'lines'; lines: Array<{ kind: RunLineKind; text: string }> }
-  | { runId: string; type: 'session'; sessionId: string }
-  | { runId: string; type: 'exit'; code: number | null; signal: string | null; killed: boolean }
-  | { runId: string; type: 'error'; message: string }
+  | { runId: string; tab: TabKey; type: 'start'; title: string; kind: ScriptType; startedAt: number }
+  | { runId: string; tab: TabKey; type: 'lines'; lines: Array<{ kind: RunLineKind; text: string }> }
+  | { runId: string; tab: TabKey; type: 'session'; sessionId: string }
+  | { runId: string; tab: TabKey; type: 'exit'; code: number | null; signal: string | null; killed: boolean }
+  | { runId: string; tab: TabKey; type: 'error'; message: string }
+
+/** Estado de execução de um projeto (botão ▶/■ do card) */
+export interface ProjectRunState {
+  projectId: string
+  state: 'stopped' | 'starting' | 'running' | 'crashed' | 'external'
+  runId?: string
+  startedAt?: number
+  exitCode?: number | null
+  /** true/false se o projeto tem porta configurada; null = sem porta */
+  portOpen: boolean | null
+}
 
 export type RemoteState = 'starting' | 'active' | 'needs-setup' | 'error' | 'stopping'
 
@@ -181,6 +227,17 @@ export interface RemoteSession {
 }
 
 export interface CommandCenterApi {
+  // Fase 5
+  projectStart(projectId: string): Promise<OpResult>
+  projectStop(projectId: string): Promise<void>
+  projectRestart(projectId: string): Promise<OpResult>
+  projectStates(): Promise<ProjectRunState[]>
+  onProjectStates(cb: (s: ProjectRunState[]) => void): () => void
+  remoteSetManual(projectId: string, on: boolean): Promise<void>
+  /** keepRemote: ao voltar para Online, manter as sessões remotas abertas */
+  setPresence(status: PresenceStatus, opts?: { keepRemote?: boolean }): Promise<AppConfig>
+  onShowWindowRequest(cb: (what: 'alerts' | 'terminals' | 'go-online') => void): () => void
+
   // Fase 2
   run(req: RunRequest): Promise<string>
   stop(runId: string): Promise<void>

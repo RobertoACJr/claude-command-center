@@ -1,9 +1,10 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Notification, shell } from 'electron'
 import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 // Ícone da janela (Linux usa no dock/alt-tab; no Windows o .exe já carrega o build/icon.ico)
 import appIcon from '../../build/icons/512x512.png?asset'
+import trayIcon from '../../build/icons/64x64.png?asset'
 import { configFilePath, store } from './store'
 import { getGitBranch } from './git'
 import { RunManager } from './runner'
@@ -12,8 +13,11 @@ import { secrets } from './secrets'
 import { applyIntegration, integrationLogin, integrationStatus } from './mcp'
 import { detectChatId, formatDecision, sendTelegram } from './telegram'
 import { Watcher } from './watcher'
+import { ProjectProcesses } from './projects'
+import { AppTray, applyOpenAtLogin } from './tray'
 import type {
   AlertStatus,
+  AppConfig,
   AppLog,
   IntegrationId,
   PresenceStatus,
@@ -26,23 +30,115 @@ import type {
 } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
+/** true quando o usuário pediu para sair de verdade (não só fechar a janela) */
+let quitting = false
 
 function send(channel: string, payload: unknown): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload)
 }
 
-const runs = new RunManager((e) => send('run:event', e))
+const runs = new RunManager((e) => {
+  projects.handleRunEvent(e)
+  send('run:event', e)
+})
+const projects = new ProjectProcesses(runs, (states) => {
+  send('project:states', states)
+  // Aviso nativo se um projeto cair sozinho
+  for (const s of states) {
+    if (s.state === 'crashed' && !notifiedCrash.has(s.projectId)) {
+      notifiedCrash.add(s.projectId)
+      const p = store.get().projects.find((x) => x.id === s.projectId)
+      notify(`${p?.name ?? 'Projeto'} caiu`, `Saiu com código ${s.exitCode ?? '?'}. Veja o terminal do projeto.`, 'terminals')
+    }
+    if (s.state !== 'crashed') notifiedCrash.delete(s.projectId)
+  }
+})
+const notifiedCrash = new Set<string>()
 const remote = new RemoteManager((sessions) => send('remote:update', sessions))
 
 const appLog = (l: AppLog) => send('app:log', l)
-const watcher = new Watcher((s) => send('watcher:state', s), appLog)
+const watcher = new Watcher(
+  (s) => {
+    send('watcher:state', s)
+    tray.update(store.get(), s.phase === 'idle' || s.phase === 'checking')
+  },
+  appLog
+)
 
-// Toda mudança de config: Remote Control e Vigia se reconciliam, e a interface recebe a versão nova
+function showWindow(what?: 'alerts' | 'terminals' | 'go-online') {
+  if (!mainWindow) createWindow()
+  if (mainWindow?.isMinimized()) mainWindow.restore()
+  mainWindow?.show()
+  mainWindow?.focus()
+  if (what) send('window:show', what)
+}
+
+function notify(title: string, body: string, open?: 'alerts' | 'terminals') {
+  if (!Notification.isSupported()) return
+  const n = new Notification({ title, body, icon: appIcon })
+  n.on('click', () => showWindow(open))
+  n.show()
+}
+
+/** Mudança de presença. Indo para Ausente, o que já roda continua; voltando, o renderer pergunta. */
+function setPresence(status: PresenceStatus, keepRemote = true): AppConfig {
+  remote.presenceChanged(status === 'off' ? true : keepRemote)
+  return store.setStatus(status)
+}
+
+const tray = new AppTray(trayIcon, {
+  show: () => showWindow(),
+  showAlerts: () => showWindow('alerts'),
+  setAway: () => setPresence('off'),
+  goOnline: () => {
+    // Com sessões remotas abertas, quem decide encerrar ou manter é você (na janela)
+    if (remote.activeCount() > 0) showWindow('go-online')
+    else setPresence('on', false)
+  },
+  toggleWatcher: () => store.setWatcherEnabled(!store.get().watcher.enabled),
+  quit: () => {
+    quitting = true
+    app.quit()
+  }
+})
+
+// Toda mudança de config: Remote Control, Vigia, processos e bandeja se reconciliam; a interface recebe a versão nova
+let lastPending = -1
+let lastOpenAtLogin: boolean | null = null
 store.onChange((cfg) => {
   remote.sync(cfg)
   watcher.evaluate(cfg)
+  projects.sync(cfg)
+  syncGeneral(cfg)
+  const st = watcher.getState()
+  tray.update(cfg, st.phase === 'idle' || st.phase === 'checking')
+  const pending = cfg.alerts.filter((a) => a.status === 'pending').length
+  if (lastPending >= 0 && pending > lastPending) {
+    const a = cfg.alerts.filter((x) => x.status === 'pending').at(-1)
+    notify(
+      '🚨 Pedido de deploy',
+      a ? `${a.requester || 'Alguém'} pediu ${a.card || a.branch || 'deploy'} → ${a.environment || '?'}` : 'Novo pedido',
+      'alerts'
+    )
+  }
+  lastPending = pending
   send('config:changed', cfg)
 })
+
+/** Bandeja e "abrir com o sistema" acompanham as preferências */
+function syncGeneral(cfg: AppConfig) {
+  if (cfg.general.closeToTray && !tray.exists()) tray.create()
+  if (!cfg.general.closeToTray && tray.exists()) tray.destroy()
+  if (lastOpenAtLogin !== cfg.general.openAtLogin) {
+    const firstRun = lastOpenAtLogin === null
+    lastOpenAtLogin = cfg.general.openAtLogin
+    // Na primeira passada só aplica se estiver ligado (não mexe no sistema à toa)
+    if (!firstRun || cfg.general.openAtLogin) {
+      const warn = applyOpenAtLogin(cfg.general.openAtLogin)
+      if (warn && !firstRun) appLog({ kind: 'info', text: warn })
+    }
+  }
+}
 
 const INTEGRATIONS: IntegrationId[] = ['github', 'jira', 'gchat']
 const SECRET_KEYS: SecretKey[] = ['github.pat', 'jira.token', 'gchat.clientSecret', 'gchat.customJson', 'telegram.token']
@@ -72,7 +168,26 @@ function createWindow(): void {
     }
   })
 
-  mainWindow.on('ready-to-show', () => mainWindow?.show())
+  // Abriu com o sistema (--hidden): fica só na bandeja
+  const startHidden = process.argv.includes('--hidden') && store.get().general.closeToTray
+  mainWindow.on('ready-to-show', () => {
+    if (!startHidden) mainWindow?.show()
+  })
+
+  // Fechar a janela só esconde: Vigia, Remote Control e projetos continuam rodando
+  mainWindow.on('close', (e) => {
+    const cfg = store.get()
+    if (quitting || !cfg.general.closeToTray || !tray.exists()) return
+    e.preventDefault()
+    mainWindow?.hide()
+    if (!cfg.general.trayHintShown) {
+      notify('Continuo rodando aqui', 'O app está na bandeja, ao lado do relógio. Use "Sair" no menu dele para encerrar tudo.')
+      store.markTrayHintShown()
+    }
+  })
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
 
   // Links externos abrem no navegador, nunca dentro do app
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -89,7 +204,10 @@ function createWindow(): void {
 
 function registerIpc(): void {
   ipcMain.handle('config:get', () => store.get())
-  ipcMain.handle('config:setStatus', (_e, status: PresenceStatus) => store.setStatus(status))
+  ipcMain.handle('config:setStatus', (_e, status: PresenceStatus) => setPresence(status))
+  ipcMain.handle('presence:set', (_e, status: PresenceStatus, opts?: { keepRemote?: boolean }) =>
+    setPresence(status === 'off' ? 'off' : 'on', opts?.keepRemote ?? true)
+  )
   ipcMain.handle('projects:save', (_e, p: Project) => store.saveProject(p))
   ipcMain.handle('projects:delete', (_e, id: string) => store.deleteProject(id))
   ipcMain.handle('scripts:save', (_e, s: Script) => store.saveScript(s))
@@ -98,6 +216,13 @@ function registerIpc(): void {
   ipcMain.handle('git:branch', (_e, path: string) => getGitBranch(path))
   ipcMain.handle('sys:home', () => homedir())
   ipcMain.handle('sys:configPath', () => configFilePath())
+
+  // Fase 5: projetos executáveis, Remote Control por projeto
+  ipcMain.handle('project:start', (_e, id: string) => projects.start(id))
+  ipcMain.handle('project:stop', (_e, id: string) => projects.stop(id))
+  ipcMain.handle('project:restart', (_e, id: string) => projects.restart(id))
+  ipcMain.handle('project:states', () => projects.list())
+  ipcMain.handle('remote:setManual', (_e, id: string, on: boolean) => remote.setManual(id, Boolean(on)))
 
   // Fase 2: execução
   ipcMain.handle('run:start', (_e, req: RunRequest) => runs.start(req))
@@ -167,12 +292,7 @@ const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore()
-      mainWindow.focus()
-    }
-  })
+  app.on('second-instance', () => showWindow())
 
   app.whenReady().then(() => {
     if (process.platform === 'win32') app.setAppUserModelId('com.jraya.claude-command-center')
@@ -180,6 +300,9 @@ if (!gotLock) {
     registerIpc()
     createWindow()
     // Se o app abriu já em OFF, sobe as sessões remotas e o Vigia
+    syncGeneral(cfg)
+    projects.sync(cfg)
+    tray.update(cfg, false)
     mainWindow?.webContents.once('did-finish-load', () => {
       remote.sync(cfg)
       watcher.evaluate(cfg)
@@ -191,6 +314,9 @@ if (!gotLock) {
 
   // Encerra tudo que o app abriu: nada de processo órfão/zumbi
   app.on('before-quit', () => {
+    quitting = true
+    projects.stopPolling()
+    tray.destroy()
     watcher.stop()
     runs.stopAllSync()
     remote.stopAllSync()
@@ -205,6 +331,7 @@ if (!gotLock) {
   }
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit()
+    // Com a bandeja ativa a janela só se esconde, então isto só roda quando a bandeja está desligada
+    if (process.platform !== 'darwin' && !tray.exists()) app.quit()
   })
 }

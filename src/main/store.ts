@@ -16,6 +16,8 @@ function defaults(): AppConfig {
   return {
     version: 1,
     status: 'on',
+    statusSince: Date.now(),
+    general: { closeToTray: true, openAtLogin: false, trayHintShown: false },
     projects: [],
     scripts: [],
     ui: { consoleExpanded: false, consoleMode: 'terminal' },
@@ -58,8 +60,14 @@ function normalize(raw: unknown): AppConfig {
   return {
     version: 1,
     status: r.status === 'off' ? 'off' : 'on',
-    projects: Array.isArray(r.projects) ? (r.projects as Project[]).filter((p) => p && p.id) : [],
-    scripts: Array.isArray(r.scripts) ? (r.scripts as Script[]).filter((s) => s && s.id) : [],
+    statusSince: typeof r.statusSince === 'number' ? r.statusSince : Date.now(),
+    general: {
+      closeToTray: bool(r.general?.closeToTray, true),
+      openAtLogin: bool(r.general?.openAtLogin, false),
+      trayHintShown: bool(r.general?.trayHintShown, false)
+    },
+    projects: Array.isArray(r.projects) ? (r.projects as Project[]).filter((p) => p && p.id).map(normProject) : [],
+    scripts: Array.isArray(r.scripts) ? (r.scripts as Script[]).filter((s) => s && s.id).map(normScript) : [],
     ui: {
       consoleExpanded: Boolean(r.ui?.consoleExpanded),
       consoleMode: r.ui?.consoleMode === 'claude' ? 'claude' : 'terminal'
@@ -90,6 +98,38 @@ function normalize(raw: unknown): AppConfig {
     },
     alerts: Array.isArray(r.alerts) ? (r.alerts as DeployAlert[]).filter((a) => a && a.id).slice(-200) : []
   }
+}
+
+function normProject(p: Project): Project {
+  const port = Number(p.port)
+  return {
+    id: p.id,
+    name: str(p.name),
+    path: str(p.path),
+    remoteEnabled: bool(p.remoteEnabled, false),
+    createdAt: typeof p.createdAt === 'number' ? p.createdAt : Date.now(),
+    runCommand: str(p.runCommand).trim(),
+    port: Number.isInteger(port) && port > 0 && port < 65536 ? port : null,
+    vars: Array.isArray(p.vars)
+      ? p.vars
+          .filter((v) => v && typeof v.key === 'string')
+          .map((v) => ({ key: v.key.trim().replace(/[^\w.-]/g, '_'), value: str(v.value) }))
+          .filter((v) => v.key)
+      : []
+  }
+}
+
+function normScript(s: Script): Script {
+  const t = s.target as Script['target'] | undefined
+  const target: Script['target'] =
+    t?.kind === 'project' && typeof t.projectId === 'string'
+      ? { kind: 'project', projectId: t.projectId }
+      : t?.kind === 'custom' && typeof t.path === 'string'
+        ? { kind: 'custom', path: t.path }
+        : t?.kind === 'ask'
+          ? { kind: 'ask' }
+          : { kind: 'global' }
+  return { ...s, type: s.type === 'claude' ? 'claude' : 'terminal', target }
 }
 
 type Listener = (cfg: AppConfig) => void
@@ -150,7 +190,14 @@ class ConfigStore {
 
   setStatus(status: AppConfig['status']): AppConfig {
     return this.update((d) => {
+      if (d.status !== status) d.statusSince = Date.now()
       d.status = status
+    })
+  }
+
+  markTrayHintShown(): AppConfig {
+    return this.update((d) => {
+      d.general.trayHintShown = true
     })
   }
 
@@ -165,9 +212,10 @@ class ConfigStore {
   deleteProject(id: string): AppConfig {
     return this.update((d) => {
       d.projects = d.projects.filter((x) => x.id !== id)
+      // Scripts do projeto viram ações globais (perguntam o projeto na hora)
       d.scripts = d.scripts.map(
         (s): Script =>
-          s.target.kind === 'project' && s.target.projectId === id ? { ...s, target: { kind: 'global' } } : s
+          s.target.kind === 'project' && s.target.projectId === id ? { ...s, target: { kind: 'ask' } } : s
       )
     })
   }
@@ -196,6 +244,7 @@ class ConfigStore {
 
   saveSettings(patch: SettingsPatch): AppConfig {
     return this.update((d) => {
+      if (patch.general) d.general = { ...d.general, ...patch.general }
       if (patch.integrations?.github) d.integrations.github = { ...d.integrations.github, ...patch.integrations.github }
       if (patch.integrations?.jira) d.integrations.jira = { ...d.integrations.jira, ...patch.integrations.jira }
       if (patch.integrations?.gchat) d.integrations.gchat = { ...d.integrations.gchat, ...patch.integrations.gchat }

@@ -22,6 +22,8 @@ export class RemoteManager {
   /** Sessões que terminaram com erro/setup pendente: ficam visíveis até o próximo sync/restart */
   private finished = new Map<string, RemoteSession>()
   private lastConfig: AppConfig | null = null
+  /** Escolha manual por projeto (botão no card): true = ligado, false = desligado. Sem entrada = automático */
+  private overrides = new Map<string, boolean>()
 
   constructor(private notify: (sessions: RemoteSession[]) => void) {}
 
@@ -36,9 +38,12 @@ export class RemoteManager {
   sync(config: AppConfig): void {
     this.lastConfig = config
     const desired = new Map<string, Project>()
-    if (config.status === 'off') {
-      for (const p of config.projects) if (p.remoteEnabled) desired.set(p.id, p)
+    for (const p of config.projects) {
+      const auto = config.status === 'off' && p.remoteEnabled
+      if (this.overrides.has(p.id) ? this.overrides.get(p.id) : auto) desired.set(p.id, p)
     }
+    // Esquece escolhas de projetos que foram excluídos
+    for (const id of this.overrides.keys()) if (!config.projects.some((p) => p.id === id)) this.overrides.delete(id)
 
     // Para o que não deveria estar rodando (ou mudou de pasta)
     for (const [id, entry] of this.entries) {
@@ -53,6 +58,27 @@ export class RemoteManager {
       if (!this.entries.has(id) && !this.finished.has(id)) this.start(p)
     }
     this.changed()
+  }
+
+  /** Botão do card: liga/desliga o Remote Control deste projeto, independente do modo */
+  setManual(projectId: string, on: boolean): void {
+    this.overrides.set(projectId, on)
+    if (!on) this.finished.delete(projectId)
+    if (this.lastConfig) this.sync(this.lastConfig)
+  }
+
+  /**
+   * Mudança de presença. Volta ao comportamento automático; com keepRunning,
+   * as sessões abertas agora continuam (viram "ligadas manualmente").
+   */
+  presenceChanged(keepRunning: boolean): void {
+    const running = [...this.entries.keys()]
+    this.overrides.clear()
+    if (keepRunning) for (const id of running) this.overrides.set(id, true)
+  }
+
+  activeCount(): number {
+    return [...this.entries.values()].filter((e) => e.session.state !== 'stopping').length
   }
 
   /** Tenta de novo um projeto que falhou (ou reinicia um ativo). */
@@ -158,6 +184,7 @@ export class RemoteManager {
 
   async stopAll(): Promise<void> {
     this.lastConfig = null
+    this.overrides.clear()
     this.finished.clear()
     await Promise.all([...this.entries.keys()].map((id) => this.stop(id)))
   }

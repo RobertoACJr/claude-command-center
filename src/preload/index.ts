@@ -1,5 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AppConfig, AppLog, CommandCenterApi, RemoteSession, RunEvent, WatcherState } from '../shared/types'
+import type {
+  AppConfig,
+  AppLog,
+  CommandCenterApi,
+  ProjectRunState,
+  RemoteSession,
+  RunEvent,
+  WatcherState
+} from '../shared/types'
 
 function subscribe<T>(channel: string, cb: (v: T) => void): () => void {
   const h = (_e: Electron.IpcRendererEvent, v: T) => cb(v)
@@ -8,6 +16,16 @@ function subscribe<T>(channel: string, cb: (v: T) => void): () => void {
 }
 
 const api: CommandCenterApi = {
+  // Fase 5
+  projectStart: (id) => ipcRenderer.invoke('project:start', id),
+  projectStop: (id) => ipcRenderer.invoke('project:stop', id),
+  projectRestart: (id) => ipcRenderer.invoke('project:restart', id),
+  projectStates: () => ipcRenderer.invoke('project:states'),
+  onProjectStates: (cb) => subscribe<ProjectRunState[]>('project:states', cb),
+  remoteSetManual: (id, on) => ipcRenderer.invoke('remote:setManual', id, on),
+  setPresence: (status, opts) => ipcRenderer.invoke('presence:set', status, opts),
+  onShowWindowRequest: (cb) => subscribe<'alerts' | 'terminals' | 'go-online'>('window:show', cb),
+
   getConfig: () => ipcRenderer.invoke('config:get'),
   setStatus: (status) => ipcRenderer.invoke('config:setStatus', status),
   saveProject: (p) => ipcRenderer.invoke('projects:save', p),

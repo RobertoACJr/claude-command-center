@@ -54,6 +54,30 @@ Engrenagem no header → **Configurações & Integrações**.
   O Claude devolve JSON; o app deduplica pelo ID da mensagem, cria o alerta, avisa no Telegram e **espera você**:
   "Aprovar e executar" abre o script escolhido com `{{card}}`, `{{branch}}`, `{{ambiente}}`/`{{env}}`, `{{solicitante}}` já preenchidos.
 
+## Fase 5: dia a dia
+
+- **Projetos executáveis**: no cadastro, "Como executar" (ex: `npm run dev`) e, opcionalmente, a porta.
+  O card mostra ▶ Executar / ■ Parar / ↻ Reiniciar e o estado: *Rodando há X · :porta*, *Parado*, *Caiu (código N)*
+  ou *Rodando fora do app* (a porta já estava ocupada por outro processo). Se o projeto cair, aparece uma notificação.
+- **Terminais em abas**: botão **Terminais** na barra de baixo. Abas fixas *Console*, *Claude* e *Sistema*
+  (logs do Vigia, MCPs, Telegram), mais uma aba por projeto em execução e uma por script. Cada aba tem parar,
+  copiar log, limpar e tela cheia. Ctrl+C no campo de comando para a aba ativa.
+- **Scripts do projeto × ações globais**:
+  - *Scripts do projeto* ficam dentro do card do projeto (botão + no card).
+  - *Ações globais* (coluna da direita) perguntam o projeto na hora de rodar.
+  - *Variáveis do projeto* (no cadastro): `branch_principal = master`, `remote = xxx`… Use `{{projeto.chave}}`
+    no script; `{{projeto.nome}}` e `{{projeto.pasta}}` sempre existem. Se o projeto não tiver a variável, o app avisa antes de rodar.
+  - Exemplo de ação global "Subir card em beta": `git fetch {{projeto.remote}} && git push {{projeto.remote}} {{card}}:{{projeto.branch_beta}}`
+  - Botão **Duplicar** em qualquer script.
+- **Remote Control por projeto**: switch "Remote" no card liga/desliga a qualquer hora. O toggle do cadastro agora
+  significa "ligar automaticamente no modo Ausente".
+- **Modo Ausente** (azul-petróleo): liga o Vigia e o Remote Control automático, com uma faixa mostrando desde quando.
+  Ao voltar para Online com sessões remotas abertas, o app pergunta se encerra ou mantém.
+- **Bandeja**: fechar a janela mantém o app rodando ao lado do relógio (Vigia, Remote Control e projetos continuam).
+  O menu do ícone tem Online/Ausente, Vigia, pedidos pendentes e *Sair*. Em Configurações → Geral: desligar isso e
+  "Abrir junto com o sistema" (só no app instalado). No Ubuntu/GNOME o ícone precisa da extensão AppIndicator
+  (já vem no Ubuntu).
+
 ## Fase 4: gerar os instaladores
 
 Gere cada instalador **no próprio sistema** (o .exe no Windows, o .deb/AppImage no Ubuntu).
@@ -93,6 +117,8 @@ src/
   main/mcp.ts            claude mcp add/get/login para GitHub, Jira, Google Chat
   main/telegram.ts       sendMessage / getUpdates
   main/watcher.ts        ciclo do Modo Vigia (só leitura) + alertas
+  main/projects.ts       execução dos projetos (▶/■), monitor de porta
+  main/tray.ts           ícone na bandeja + abrir com o sistema
   preload/index.ts       contextBridge → window.api
   renderer/src/
     App.tsx              estado + orquestração
@@ -106,3 +132,6 @@ src/
 - [x] Fase 2: execução real (bash/PowerShell, `claude -p` em streaming, Remote Control automático no OFF)
 - [x] Fase 3: MCPs (GitHub, Jira, Google Chat), Telegram, Modo Vigia com aprovação
 - [x] Fase 4: instaladores (AppImage + .deb para Ubuntu, NSIS .exe para Windows)
+- [x] Fase 5: projetos executáveis, terminais em abas, scripts de projeto + ações globais, Remote Control por projeto, modo Ausente, bandeja
+- [ ] Fase 6: Vigia 2.0 (resumo melhor, respostas cadastradas, regras automáticas, Telegram com botões) + Gemini
+- [ ] Fase 7: build no GitHub Actions + atualização automática

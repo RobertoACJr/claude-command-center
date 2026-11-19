@@ -46,13 +46,9 @@ export function Header({
           <Settings size={16} />
         </button>
         <div className="hidden text-right text-xs leading-tight sm:block">
-          <div className={on ? 'text-zinc-400' : 'text-amber-300'}>
-            {on ? 'Você está no PC' : 'Modo ausente'}
-          </div>
+          <div className={on ? 'text-zinc-400' : 'text-purple'}>{on ? 'Você está no PC' : 'Modo ausente'}</div>
           <div className="text-zinc-600">
-            {on
-              ? `${remoteCount} projeto(s) com Remote Control`
-              : `Remote Control ativo em ${remoteActive}/${remoteCount}`}
+            {remoteActive > 0 ? `Remote Control ativo em ${remoteActive}` : `${remoteCount} projeto(s) com Remote automático`}
           </div>
         </div>
 
@@ -61,35 +57,32 @@ export function Header({
           role="switch"
           aria-checked={on}
           onClick={onToggle}
-          title="Alternar status ON / OFF"
-          className={cn(
-            'relative flex h-11 w-[188px] cursor-pointer items-center rounded-full border p-1 transition-all',
-            on ? 'border-violet/60 bg-violet/10 glow-violet' : 'border-line bg-card'
-          )}
+          title={on ? 'Ir para o modo Ausente' : 'Voltar ao PC (Online)'}
+          className="relative flex h-11 w-[204px] cursor-pointer items-center rounded-full border border-violet/60 bg-violet/10 p-1 transition-all glow-violet"
         >
           <span
             className={cn(
-              'absolute top-1 h-9 w-[90px] rounded-full transition-all duration-300',
-              on ? 'left-1 bg-gradient-to-b from-purple to-violet' : 'left-[94px] bg-zinc-800'
+              'absolute top-1 h-9 w-[98px] rounded-full bg-gradient-to-b from-purple to-violet transition-all duration-300',
+              on ? 'left-1' : 'left-[102px]'
             )}
           />
           <span
             className={cn(
-              'relative z-10 flex w-[90px] items-center justify-center gap-1.5 text-xs font-semibold',
+              'relative z-10 flex w-[98px] items-center justify-center gap-1.5 text-xs font-semibold',
               on ? 'text-white' : 'text-zinc-500'
             )}
           >
             <span className={cn('h-2 w-2 rounded-full', on ? 'bg-emerald-400' : 'bg-zinc-600')} />
-            ON
+            Online
           </span>
           <span
             className={cn(
-              'relative z-10 flex w-[90px] items-center justify-center gap-1.5 text-xs font-semibold',
-              on ? 'text-zinc-500' : 'text-amber-300'
+              'relative z-10 flex w-[98px] items-center justify-center gap-1.5 text-xs font-semibold',
+              on ? 'text-zinc-500' : 'text-white'
             )}
           >
-            <span className={cn('h-2 w-2 rounded-full', on ? 'bg-zinc-600' : 'bg-amber-400 animate-pulse')} />
-            OFF
+            <span className={cn('h-2 w-2 rounded-full', on ? 'bg-zinc-600' : 'animate-pulse bg-white')} />
+            Ausente
           </span>
         </button>
       </div>

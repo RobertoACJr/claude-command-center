@@ -51,14 +51,23 @@ textarea,
   background-clip: padding-box;
 }
 
-::selection {
-  background: rgba(139, 92, 246, 0.45);
-}
 
 .glow-violet {
   box-shadow:
-    0 0 0 1px rgba(139, 92, 246, 0.45),
-    0 0 24px -4px rgba(139, 92, 246, 0.55);
+    0 0 0 1px color-mix(in srgb, var(--color-violet) 45%, transparent),
+    0 0 24px -4px color-mix(in srgb, var(--color-violet) 55%, transparent);
+}
+
+/* Modo Ausente: o destaque vira azul-petróleo em todo o app */
+[data-mode='away'] {
+  --color-violet: #0e7490;
+  --color-purple: #3cb8cf;
+}
+::selection {
+  background: color-mix(in srgb, var(--color-violet) 45%, transparent);
+}
+body {
+  transition: background-color 300ms;
 }
 
 @keyframes fade-in {

@@ -5,6 +5,8 @@ import type { RunEvent, RunLineKind, RunRequest } from '../shared/types'
 import { IS_WIN, LineSplitter, killTree, killTreeSync, spawnClaude, spawnShell } from './proc'
 
 type Emit = (e: RunEvent) => void
+type DistOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
+type EventNoTab = DistOmit<RunEvent, 'tab'>
 
 const VAR_RE = /\{\{\s*([A-Za-z_][\w.-]*)\s*\}\}/g
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -41,11 +43,25 @@ export class RunManager {
   private runs = new Map<string, ChildProcess>()
   private stopped = new Set<string>()
 
-  constructor(private emit: Emit) {}
+  /** runId → aba do painel de Terminais */
+  private tabs = new Map<string, string>()
+
+  constructor(private emitRaw: Emit) {}
+
+  private emit(e: EventNoTab): void {
+    this.emitRaw({ ...e, tab: this.tabs.get(e.runId) ?? 'console' } as RunEvent)
+    if (e.type === 'exit') this.tabs.delete(e.runId)
+  }
+
+  isRunning(runId: string | undefined): boolean {
+    return !!runId && this.runs.has(runId)
+  }
 
   start(req: RunRequest): string {
     const runId = randomUUID()
     const cwd = req.cwd
+    this.tabs.set(runId, req.tab || 'console')
+    this.emit({ runId, type: 'start', title: req.title || req.label || 'Execução', kind: req.kind, startedAt: Date.now() })
 
     if (!cwd || !existsSync(cwd)) {
       setTimeout(() => {

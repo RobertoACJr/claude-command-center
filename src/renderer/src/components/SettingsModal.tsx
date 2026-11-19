@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import {
+  AppWindow,
   Bell,
   Eye,
   Github,
@@ -26,7 +27,7 @@ import type {
 import { Button, Field, Modal, Toggle, inputCls } from './ui'
 import { cn } from '../lib/utils'
 
-type Tab = 'integrations' | 'telegram' | 'watcher'
+type Tab = 'general' | 'integrations' | 'telegram' | 'watcher'
 
 export function SettingsModal({
   open,
@@ -39,7 +40,7 @@ export function SettingsModal({
   watcher: WatcherState
   onClose: () => void
 }) {
-  const [tab, setTab] = useState<Tab>('integrations')
+  const [tab, setTab] = useState<Tab>('general')
   const [sec, setSec] = useState<SecretsStatus>({ set: [], encrypted: true })
 
   const refreshSecrets = () => window.api.secretsStatus().then(setSec)
@@ -57,6 +58,7 @@ export function SettingsModal({
       <div className="-mt-1 flex gap-1 rounded-lg border border-line bg-bg p-1">
         {(
           [
+            ['general', 'Geral', AppWindow],
             ['integrations', 'Integrações MCP', Plug],
             ['telegram', 'Telegram', Bell],
             ['watcher', 'Modo Vigia', Eye]
@@ -83,6 +85,7 @@ export function SettingsModal({
         </div>
       )}
 
+      {tab === 'general' && <GeneralTab config={config} save={save} />}
       {tab === 'integrations' && <IntegrationsTab config={config} sec={sec} save={save} />}
       {tab === 'telegram' && <TelegramTab config={config} sec={sec} save={save} />}
       {tab === 'watcher' && <WatcherTab config={config} watcher={watcher} save={save} />}
@@ -650,5 +653,27 @@ function WatcherTab({ config, watcher, save }: { config: AppConfig; watcher: Wat
         </div>
       </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------- Geral
+
+function GeneralTab({ config, save }: { config: AppConfig; save: SaveFn }) {
+  const g = config.general
+  return (
+    <Section icon={<AppWindow size={15} />} title="Janela e sistema">
+      <Toggle
+        checked={g.closeToTray}
+        onChange={(v) => save({ general: { closeToTray: v } })}
+        label="Fechar a janela mantém o app rodando na bandeja"
+        hint="O Vigia, o Remote Control e os projetos em execução continuam. Para encerrar tudo, use Sair no menu do ícone ao lado do relógio."
+      />
+      <Toggle
+        checked={g.openAtLogin}
+        onChange={(v) => save({ general: { openAtLogin: v } })}
+        label="Abrir junto com o sistema"
+        hint="Abre escondido na bandeja. Só funciona no app instalado (não no npm run dev)."
+      />
+    </Section>
   )
 }
