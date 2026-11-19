@@ -44,6 +44,24 @@ jobs:
       - name: Gerar instalador
         run: npm run ${{ matrix.script }}
 
+      - name: Teste de fumaça (abre o app empacotado)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb > /dev/null
+          xvfb-run -a --server-args="-screen 0 1440x900x24" node scripts/smoke-test.mjs
+
+      - name: Teste de fumaça (abre o app empacotado)
+        if: runner.os == 'Windows'
+        run: node scripts/smoke-test.mjs
+
+      - name: Prints do teste
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prints-${{ matrix.os }}
+          path: smoke-*.jpg
+          if-no-files-found: ignore
+
       - name: Guardar artefatos
         uses: actions/upload-artifact@v4
         with:
