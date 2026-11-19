@@ -2,6 +2,8 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, shell } from 'electron'
 import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
+// Ícone da janela (Linux usa no dock/alt-tab; no Windows o .exe já carrega o build/icon.ico)
+import appIcon from '../../build/icons/512x512.png?asset'
 import { configFilePath, store } from './store'
 import { getGitBranch } from './git'
 import { RunManager } from './runner'
@@ -61,6 +63,7 @@ function createWindow(): void {
     title: 'Claude Command Center',
     backgroundColor: '#09090B',
     autoHideMenuBar: true,
+    ...(process.platform === 'linux' ? { icon: appIcon } : {}),
     webPreferences: {
       preload: preloadPath(),
       contextIsolation: true,

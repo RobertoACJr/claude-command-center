@@ -1,0 +1,54 @@
+# Empacotamento: npm run build:linux (AppImage + deb) / npm run build:win (instalador NSIS .exe)
+appId: com.jraya.claude-command-center
+productName: Claude Command Center
+copyright: Copyright © 2026 Roberto
+directories:
+  buildResources: build
+  output: release/${version}
+
+# Só o código já compilado pelo electron-vite. React & cia já estão embutidos no bundle do renderer.
+files:
+  - out/**
+  - package.json
+  - '!**/*.map'
+
+# Linux (Ubuntu)
+linux:
+  target:
+    - AppImage
+    - deb
+  icon: build/icons
+  category: Development
+  executableName: claude-command-center
+  synopsis: Painel de projetos, scripts e Claude Code
+  description: Painel desktop para projetos, scripts, Claude Code, Remote Control e alertas de deploy.
+  maintainer: Roberto <RobertoACJr@users.noreply.github.com>
+  desktop:
+    entry:
+      Keywords: claude;terminal;deploy;scripts;
+appImage:
+  artifactName: ${name}-${version}-${arch}.AppImage
+deb:
+  artifactName: ${name}_${version}_${arch}.deb
+  packageCategory: devel
+
+# Windows
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+  executableName: ClaudeCommandCenter
+nsis:
+  artifactName: ${name}-setup-${version}.exe
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Claude Command Center
+  uninstallDisplayName: Claude Command Center
+  deleteAppDataOnUninstall: false
+
+# Sem publicação automática (não sobe nada para o GitHub Releases)
+publish: null

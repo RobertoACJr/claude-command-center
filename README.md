@@ -54,6 +54,30 @@ Engrenagem no header → **Configurações & Integrações**.
   O Claude devolve JSON; o app deduplica pelo ID da mensagem, cria o alerta, avisa no Telegram e **espera você**:
   "Aprovar e executar" abre o script escolhido com `{{card}}`, `{{branch}}`, `{{ambiente}}`/`{{env}}`, `{{solicitante}}` já preenchidos.
 
+## Fase 4: gerar os instaladores
+
+Gere cada instalador **no próprio sistema** (o .exe no Windows, o .deb/AppImage no Ubuntu).
+Gerar o de Windows a partir do Linux exige o Wine, e o contrário não funciona.
+
+```bash
+# Ubuntu
+npm install
+npm run build:linux      # → release/0.1.0/claude-command-center_0.1.0_amd64.deb e .AppImage
+
+# Windows (PowerShell)
+npm install
+npm run build:win        # → release\0.1.0\claude-command-center-setup-0.1.0.exe
+```
+
+- **Ubuntu: prefira o .deb** (`sudo apt install ./release/0.1.0/claude-command-center_0.1.0_amd64.deb`): ele cria o
+  atalho no menu de aplicativos. O AppImage precisa do `libfuse2` (`sudo apt install libfuse2t64` no 24.04)
+  e, no 24.04, pode esbarrar na restrição do AppArmor ao sandbox do Chromium.
+- **Windows:** o instalador não é assinado, então o SmartScreen mostra "O Windows protegeu o computador".
+  Clique em *Mais informações → Executar assim mesmo*. Ele cria atalho na área de trabalho e no menu Iniciar.
+- `npm run build:unpack` gera só a pasta do app, sem instalador. Serve para testar rápido.
+- Ícones em `build/` (fonte: `build/icon.svg`; PNGs em `build/icons/`, `build/icon.ico` para o Windows).
+- Seus dados (`config.json`, `secrets.json`) ficam fora do app, na pasta userData. Reinstalar ou atualizar não apaga nada.
+
 ## Estrutura
 
 ```
@@ -81,4 +105,4 @@ src/
 - [x] Fase 1: UI, CRUD de projetos/scripts, persistência JSON, detecção de branch, variáveis `{{x}}`, console dock
 - [x] Fase 2: execução real (bash/PowerShell, `claude -p` em streaming, Remote Control automático no OFF)
 - [x] Fase 3: MCPs (GitHub, Jira, Google Chat), Telegram, Modo Vigia com aprovação
-- [ ] Fase 4: instaladores
+- [x] Fase 4: instaladores (AppImage + .deb para Ubuntu, NSIS .exe para Windows)

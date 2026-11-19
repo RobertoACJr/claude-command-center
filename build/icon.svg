@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16161D"/>
+      <stop offset="1" stop-color="#09090B"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#C084FC"/>
+      <stop offset="0.55" stop-color="#A855F7"/>
+      <stop offset="1" stop-color="#7C3AED"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.55" r="0.55">
+      <stop offset="0" stop-color="#8B5CF6" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#8B5CF6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="url(#bg)"/>
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="url(#glow)"/>
+  <rect x="66" y="66" width="892" height="892" rx="206" fill="none" stroke="#8B5CF6" stroke-opacity="0.55" stroke-width="6"/>
+  <!-- prompt > -->
+  <path d="M286 352 L486 512 L286 672" fill="none" stroke="url(#accent)" stroke-width="92" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- cursor _ -->
+  <rect x="540" y="626" width="220" height="88" rx="44" fill="url(#accent)"/>
+  <!-- sparkle -->
+  <path d="M742 250 C752 312 770 330 832 340 C770 350 752 368 742 430 C732 368 714 350 652 340 C714 330 732 312 742 250 Z" fill="#E9D5FF"/>
+</svg>
