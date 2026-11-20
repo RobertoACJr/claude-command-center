@@ -1,4 +1,4 @@
-import { Copy, FileCode2, FolderTree, Gem, Globe2, Loader2, Pencil, Play, Plus, Sparkles, SquareTerminal, Trash2 } from 'lucide-react'
+import { Bot, Copy, FileCode2, FolderTree, Gem, Globe2, Loader2, Pencil, Play, Plus, Sparkles, SquareTerminal, Trash2 } from 'lucide-react'
 import type { Project, Script } from '@shared/types'
 import { Button, EmptyState, IconButton } from './ui'
 import { cn, extractProjectKeys, extractUserVariables, targetLabel } from '../lib/utils'
@@ -41,7 +41,9 @@ export function ScriptRow({
           isAi ? 'bg-violet/15 text-purple' : 'bg-zinc-800 text-zinc-300'
         )}
       >
-        {s.type === 'gemini' ? (
+        {s.type === 'codex' ? (
+          <Bot size={compact ? 13 : 16} />
+        ) : s.type === 'gemini' ? (
           <Gem size={compact ? 13 : 16} />
         ) : s.type === 'claude' ? (
           <Sparkles size={compact ? 13 : 16} />
@@ -79,7 +81,7 @@ export function ScriptRow({
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5">
-        <div className="flex opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="flex opacity-50 transition-opacity group-hover:opacity-100">
           <IconButton title="Editar" tone="accent" onClick={() => actions.onEdit(s)}>
             <Pencil size={13} />
           </IconButton>

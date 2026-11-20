@@ -50,5 +50,8 @@ nsis:
   uninstallDisplayName: Claude Command Center
   deleteAppDataOnUninstall: false
 
-# Sem publicação automática (não sobe nada para o GitHub Releases)
-publish: null
+# Onde o app procura atualizações (o upload é feito pelo workflow; o build roda com --publish never)
+publish:
+  provider: github
+  owner: RobertoACJr
+  repo: claude-command-center

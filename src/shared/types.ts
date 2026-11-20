@@ -18,9 +18,44 @@ export interface Project {
   port: number | null
   /** Variáveis do projeto, usadas em ações globais como {{projeto.chave}} */
   vars: ProjectVar[]
+  /** Como o Claude lida com permissões neste projeto */
+  claudeMode: ClaudeMode
+  /** Regras "sempre permitir" (formato do Claude Code, ex: Bash(git status:*)) */
+  allowedTools: string[]
 }
 
-export type ScriptType = 'terminal' | 'claude' | 'gemini'
+/**
+ * ask      = pergunta no app (e no Telegram, se Ausente) o que não estiver liberado
+ * edits    = pode editar arquivos sem perguntar; comandos ainda perguntam
+ * readonly = nada que precise de permissão (bloqueia sem perguntar)
+ */
+export type ClaudeMode = 'ask' | 'edits' | 'readonly'
+
+export interface ClaudePerms {
+  claudeMode: ClaudeMode
+  allowedTools: string[]
+}
+
+export type ApprovalDecision = 'allow' | 'deny' | 'always'
+
+/** Pedido de permissão do Claude esperando você */
+export interface ApprovalRequest {
+  id: string
+  runId: string
+  projectId: string
+  /** Nome do projeto ou "Global" */
+  scopeName: string
+  toolName: string
+  /** Resumo legível (ex: o comando do Bash, o arquivo do Edit) */
+  summary: string
+  /** Entrada completa da ferramenta, para conferir */
+  detail: string
+  /** Regra que "Sempre permitir" vai gravar */
+  rule: string
+  createdAt: number
+}
+
+export type ScriptType = 'terminal' | 'claude' | 'gemini' | 'codex'
 
 /** IAs que o app sabe chamar */
 export type AiProvider = 'claude' | 'gemini'
@@ -42,7 +77,7 @@ export interface Script {
   createdAt: number
 }
 
-export type ConsoleMode = 'terminal' | 'claude' | 'gemini'
+export type ConsoleMode = 'terminal' | 'claude' | 'gemini' | 'codex'
 
 export interface UiState {
   consoleExpanded: boolean
@@ -179,6 +214,8 @@ export interface AutomationRule {
 export interface AiConfig {
   /** Comando do Gemini CLI (ex: gemini, ou um caminho completo) */
   geminiCommand: string
+  /** Comando do Codex CLI / ChatGPT (ex: codex) */
+  codexCommand: string
 }
 
 export interface AppConfig {
@@ -195,6 +232,8 @@ export interface AppConfig {
   watcher: WatcherConfig
   alerts: DeployAlert[]
   ai: AiConfig
+  /** Permissões do Claude fora de um projeto (console em Global, ações sem projeto) */
+  claudeGlobal: ClaudePerms
   replies: ReplyTemplate[]
   rules: AutomationRule[]
 }
@@ -211,6 +250,7 @@ export interface SettingsPatch {
   telegram?: Partial<TelegramConfig>
   watcher?: Partial<Omit<WatcherConfig, 'seen' | 'lastCheckAt'>>
   ai?: Partial<AiConfig>
+  claudeGlobal?: Partial<ClaudePerms>
   replies?: ReplyTemplate[]
   rules?: AutomationRule[]
   /** string = grava, null = apaga, ausente = mantém */
@@ -240,6 +280,27 @@ export interface AppLog {
 
 // ---------- Fase 2: execução ----------
 
+export interface UpdateState {
+  phase: 'idle' | 'disabled' | 'checking' | 'none' | 'downloading' | 'ready' | 'error'
+  current: string
+  version?: string
+  percent?: number
+  message?: string
+  checkedAt?: number
+}
+
+export interface ToolCheck {
+  id: 'claude' | 'git' | 'gh' | 'gemini' | 'codex' | 'uv' | 'google-chat-mcp'
+  installed: boolean
+  /** Versão / observação */
+  detail: string
+  /** undefined = não dá para saber */
+  loggedIn?: boolean
+}
+
+/** Comandos que o app pode abrir num terminal do sistema (lista fechada) */
+export type TerminalPreset = 'remote-control' | 'claude' | 'gemini' | 'codex' | 'gchat-login' | 'gh-login'
+
 /** Cada aba do painel de Terminais */
 export type TabKey = string // 'console' | 'claude' | 'system' | `script:${id}` | `project:${id}`
 
@@ -257,6 +318,10 @@ export interface RunRequest {
   label?: string
   /** Só para kind=claude: retoma uma sessão anterior (conversa contínua no console) */
   resumeSessionId?: string
+  /** Terminal com stdin aberto (dá para digitar para o processo) */
+  interactive?: boolean
+  /** Projeto da execução (para as permissões do Claude); vazio = Global */
+  projectId?: string
 }
 
 export type RunLineKind = 'stdout' | 'stderr' | 'claude' | 'tool' | 'info'
@@ -294,6 +359,29 @@ export interface RemoteSession {
 }
 
 export interface CommandCenterApi {
+  // Aprovação de permissões do Claude
+  onApprovalRequest(cb: (r: ApprovalRequest) => void): () => void
+  onApprovalResolved(cb: (id: string) => void): () => void
+  respondApproval(id: string, decision: ApprovalDecision): Promise<void>
+  pendingApprovals(): Promise<ApprovalRequest[]>
+
+  // Atualização e configuração
+  updateState(): Promise<UpdateState>
+  onUpdateState(cb: (s: UpdateState) => void): () => void
+  checkForUpdates(): Promise<void>
+  installUpdate(): Promise<void>
+  exportConfig(): Promise<OpResult>
+  importConfig(): Promise<OpResult>
+
+  // Assistente de configuração
+  checkTools(): Promise<ToolCheck[]>
+  platform(): Promise<'linux' | 'win32' | 'darwin'>
+
+  // Melhorias
+  runInput(runId: string, text: string): Promise<boolean>
+  /** Abre o terminal do sistema na pasta; preset roda um comando conhecido (ex: configuração do Remote Control) */
+  openSystemTerminal(cwd: string, preset?: TerminalPreset): Promise<OpResult>
+
   // Fase 6
   sendReply(alertId: string, replyId: string): Promise<OpResult>
   geminiCheck(): Promise<OpResult>

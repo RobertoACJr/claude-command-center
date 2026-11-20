@@ -121,7 +121,9 @@ function WatcherPill({ state, enabled, onClick }: { state: WatcherState; enabled
   }[state.phase]
 
   const title =
-    `Monitorar Google Chat: ${enabled ? 'ligado' : 'desligado'} (clique para alternar)\n${state.reason}` +
+    (state.phase === 'blocked'
+      ? `Vigia bloqueado: ${state.reason}\nClique para abrir o guia de configuração.`
+      : `Monitorar Google Chat: ${enabled ? 'ligado' : 'desligado'} (clique para ligar/desligar, mesmo Online)\n${state.reason}\nAvisos: notificação do sistema, faixa de pedidos no app e Telegram (se configurado).`) +
     (state.lastResult ? `\nÚltimo: ${state.lastResult}` : '')
 
   return (

@@ -1,5 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import {
+  ArrowLeftRight,
+  RefreshCw,
+  Rocket,
   AppWindow,
   Bot,
   Gem,
@@ -32,26 +35,38 @@ import type {
   SecretKey,
   SecretsStatus,
   SettingsPatch,
+  UpdateState,
   WatcherState
 } from '@shared/types'
 import { Button, Field, Modal, Toggle, inputCls } from './ui'
 import { cn, uid } from '../lib/utils'
 import { isProdEnv } from '@shared/vars'
+import { ClaudePermsEditor } from './ClaudePermsEditor'
+import { SetupTab } from './SetupTab'
 
-type Tab = 'general' | 'integrations' | 'ai' | 'telegram' | 'watcher' | 'automation'
+export type SettingsTab = 'setup' | 'general' | 'integrations' | 'ai' | 'telegram' | 'watcher' | 'automation'
+type Tab = SettingsTab
 
 export function SettingsModal({
   open,
   config,
   watcher,
+  initialTab,
+  focus,
   onClose
 }: {
   open: boolean
   config: AppConfig
   watcher: WatcherState
+  initialTab?: SettingsTab
+  /** Guia a abrir no assistente (ex: 'gchat') */
+  focus?: string
   onClose: () => void
 }) {
-  const [tab, setTab] = useState<Tab>('general')
+  const [tab, setTab] = useState<Tab>('setup')
+  useEffect(() => {
+    if (open) setTab(initialTab ?? 'setup')
+  }, [open, initialTab])
   const [sec, setSec] = useState<SecretsStatus>({ set: [], encrypted: true })
 
   const refreshSecrets = () => window.api.secretsStatus().then(setSec)
@@ -69,6 +84,7 @@ export function SettingsModal({
       <div className="-mt-1 flex gap-1 rounded-lg border border-line bg-bg p-1">
         {(
           [
+            ['setup', 'Começar', Rocket],
             ['general', 'Geral', AppWindow],
             ['integrations', 'Integrações', Plug],
             ['ai', 'IAs', Gem],
@@ -98,6 +114,7 @@ export function SettingsModal({
         </div>
       )}
 
+      {tab === 'setup' && <SetupTab config={config} sec={sec} goTo={setTab} focus={focus} />}
       {tab === 'general' && <GeneralTab config={config} save={save} />}
       {tab === 'integrations' && <IntegrationsTab config={config} sec={sec} save={save} />}
       {tab === 'telegram' && <TelegramTab config={config} sec={sec} save={save} />}
@@ -728,27 +745,82 @@ function WatcherTab({ config, watcher, save }: { config: AppConfig; watcher: Wat
 
 function GeneralTab({ config, save }: { config: AppConfig; save: SaveFn }) {
   const g = config.general
+  const [up, setUp] = useState<UpdateState | null>(null)
+  const [io, setIo] = useState<OpResult | null>(null)
+  useEffect(() => {
+    window.api.updateState().then(setUp)
+    return window.api.onUpdateState(setUp)
+  }, [])
+  const upText = !up
+    ? '…'
+    : {
+        idle: 'Ainda não verificado.',
+        disabled: up.message ?? 'Desligada.',
+        checking: 'Procurando…',
+        none: `Você está na versão mais nova${up.checkedAt ? ` (verificado às ${new Date(up.checkedAt).toLocaleTimeString()})` : ''}.`,
+        downloading: `Baixando a versão ${up.version ?? ''}… ${up.percent ?? 0}%`,
+        ready: `Versão ${up.version} pronta para instalar.`,
+        error: up.message ?? 'Erro.'
+      }[up.phase]
+
   return (
-    <Section icon={<AppWindow size={15} />} title="Janela e sistema">
-      <Toggle
-        checked={g.closeToTray}
-        onChange={(v) => save({ general: { closeToTray: v } })}
-        label="Fechar a janela mantém o app rodando na bandeja"
-        hint="O Vigia, o Remote Control e os projetos em execução continuam. Para encerrar tudo, use Sair no menu do ícone ao lado do relógio."
-      />
-      <Toggle
-        checked={g.openAtLogin}
-        onChange={(v) => save({ general: { openAtLogin: v } })}
-        label="Abrir junto com o sistema"
-        hint="Abre escondido na bandeja. Só funciona no app instalado (não no npm run dev)."
-      />
-    </Section>
+    <div className="space-y-3">
+      <Section icon={<AppWindow size={15} />} title="Janela e sistema">
+        <Toggle
+          checked={g.closeToTray}
+          onChange={(v) => save({ general: { closeToTray: v } })}
+          label="Fechar a janela mantém o app rodando na bandeja"
+          hint="O Vigia, o Remote Control e os projetos em execução continuam. Para encerrar tudo, use Sair no menu do ícone ao lado do relógio."
+        />
+        <Toggle
+          checked={g.openAtLogin}
+          onChange={(v) => save({ general: { openAtLogin: v } })}
+          label="Abrir junto com o sistema"
+          hint="Abre escondido na bandeja. Só funciona no app instalado (não no npm run dev)."
+        />
+      </Section>
+
+      <Section icon={<RefreshCw size={15} />} title={`Atualizações · versão ${up?.current ?? ''}`}>
+        <p className="text-xs text-zinc-400">{upText}</p>
+        <p className="text-[11px] text-zinc-500">
+          O app procura versões novas nas Releases do GitHub a cada 4 horas e baixa sozinho, mas só instala quando você
+          mandar (ou ao sair pelo menu da bandeja). No Ubuntu (.deb), a instalação pede sua senha.
+        </p>
+        <div className="flex gap-2">
+          <Button size="sm" disabled={!up || ['disabled', 'checking', 'downloading'].includes(up.phase)} onClick={() => window.api.checkForUpdates()}>
+            Verificar agora
+          </Button>
+          {up?.phase === 'ready' && (
+            <Button size="sm" variant="primary" onClick={() => window.api.installUpdate()}>
+              Reiniciar e atualizar
+            </Button>
+          )}
+        </div>
+      </Section>
+
+      <Section icon={<ArrowLeftRight size={15} />} title="Levar a configuração para outro PC">
+        <p className="text-xs text-zinc-500">
+          Exporta projetos, scripts, ações, regras, respostas e preferências para um arquivo .json (sem tokens). No outro PC,
+          importe e depois ajuste as pastas dos projetos e cadastre os tokens de novo.
+        </p>
+        <div className="flex gap-2">
+          <Button size="sm" onClick={async () => setIo(await window.api.exportConfig())}>
+            Exportar…
+          </Button>
+          <Button size="sm" onClick={async () => setIo(await window.api.importConfig())}>
+            Importar…
+          </Button>
+        </div>
+        <Result r={io} />
+      </Section>
+    </div>
   )
 }
 
 // ---------------------------------------------------------------- IAs
 
 function AiTab({ config, save }: { config: AppConfig; save: SaveFn }) {
+  const [codexCmd, setCodexCmd] = useState(config.ai.codexCommand)
   const [cmd, setCmd] = useState(config.ai.geminiCommand)
   const [result, setResult] = useState<OpResult | null>(null)
   const { busy, run } = useBusy()
@@ -761,6 +833,10 @@ function AiTab({ config, save }: { config: AppConfig; save: SaveFn }) {
           Usa o <code>claude</code> do seu PATH (login feito no próprio Claude Code). Ele cuida das ordens de
           desenvolvimento, do Remote Control e do envio das respostas no Google Chat.
         </p>
+        <Field label="Permissões fora de projetos (console em Global, ações sem projeto)">
+          <ClaudePermsEditor value={config.claudeGlobal} onChange={(v) => save({ claudeGlobal: v })} />
+        </Field>
+        <p className="text-[11px] text-zinc-600">Cada projeto tem as próprias permissões no cadastro dele.</p>
       </Section>
       <Section icon={<Gem size={15} />} title="Gemini CLI">
         <p className="text-xs leading-relaxed text-zinc-500">
@@ -801,6 +877,22 @@ function AiTab({ config, save }: { config: AppConfig; save: SaveFn }) {
           </Button>
         </div>
         <Result r={result} />
+      </Section>
+      <Section icon={<Bot size={15} />} title="ChatGPT (Codex CLI)">
+        <p className="text-xs leading-relaxed text-zinc-500">
+          Modo <b>ChatGPT</b> no console e scripts "Ordem para o ChatGPT". Roda com <code>codex exec</code> no sandbox
+          padrão, que é só de leitura. Login com a conta do ChatGPT (<code>codex login</code>, na aba Começar) ou chave
+          de API. Não serve para o Vigia: no modo não interativo o Codex cancela chamadas de ferramentas MCP.
+        </p>
+        <Field label="Comando" hint="Ex: codex, ou o caminho completo do executável.">
+          <input
+            className={inputCls + ' font-mono text-xs'}
+            value={codexCmd}
+            onChange={(e) => setCodexCmd(e.target.value)}
+            onBlur={() => save({ ai: { codexCommand: codexCmd.trim() || 'codex' } })}
+            placeholder="codex"
+          />
+        </Field>
       </Section>
     </div>
   )

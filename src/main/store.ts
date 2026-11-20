@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, copyFileSync } from 'fs'
 import { join } from 'path'
 import type {
+  ClaudePerms,
   AlertStatus,
   AppConfig,
   AutomationRule,
@@ -41,7 +42,8 @@ function defaults(): AppConfig {
       seen: []
     },
     alerts: [],
-    ai: { geminiCommand: 'gemini' },
+    ai: { geminiCommand: 'gemini', codexCommand: 'codex' },
+    claudeGlobal: { claudeMode: 'ask', allowedTools: [] },
     replies: [
       {
         id: 'recebido',
@@ -89,7 +91,7 @@ function normalize(raw: unknown): AppConfig {
     scripts: Array.isArray(r.scripts) ? (r.scripts as Script[]).filter((s) => s && s.id).map(normScript) : [],
     ui: {
       consoleExpanded: Boolean(r.ui?.consoleExpanded),
-      consoleMode: r.ui?.consoleMode === 'claude' || r.ui?.consoleMode === 'gemini' ? r.ui.consoleMode : 'terminal'
+      consoleMode: ['claude', 'gemini', 'codex'].includes(r.ui?.consoleMode as string) ? r.ui!.consoleMode : 'terminal'
     },
     integrations: {
       github: { enabled: bool(gi?.enabled, false), readOnly: bool(gi?.readOnly, true) },
@@ -118,7 +120,11 @@ function normalize(raw: unknown): AppConfig {
       seen: Array.isArray(w?.seen) ? w.seen.filter((x) => typeof x === 'string').slice(-500) : []
     },
     alerts: Array.isArray(r.alerts) ? (r.alerts as DeployAlert[]).filter((a) => a && a.id).map(normAlert).slice(-200) : [],
-    ai: { geminiCommand: str(r.ai?.geminiCommand, 'gemini').trim() || 'gemini' },
+    ai: {
+      geminiCommand: str(r.ai?.geminiCommand, 'gemini').trim() || 'gemini',
+      codexCommand: str(r.ai?.codexCommand, 'codex').trim() || 'codex'
+    },
+    claudeGlobal: normPerms(r.claudeGlobal),
     replies: Array.isArray(r.replies) ? (r.replies as ReplyTemplate[]).filter((x) => x && x.id).map(normReply) : d.replies,
     rules: Array.isArray(r.rules) ? (r.rules as AutomationRule[]).filter((x) => x && x.id).map(normRule) : []
   }
@@ -156,9 +162,21 @@ function normRule(x: AutomationRule): AutomationRule {
   }
 }
 
+const RULE_RE = /^[\w.-]+(\(.{1,300}\))?$/
+
+function normPerms(x: Partial<ClaudePerms> | undefined): ClaudePerms {
+  return {
+    claudeMode: x?.claudeMode === 'edits' || x?.claudeMode === 'readonly' ? x.claudeMode : 'ask',
+    allowedTools: Array.isArray(x?.allowedTools)
+      ? [...new Set(x!.allowedTools.filter((t): t is string => typeof t === 'string' && RULE_RE.test(t.trim())).map((t) => t.trim()))]
+      : []
+  }
+}
+
 function normProject(p: Project): Project {
   const port = Number(p.port)
   return {
+    ...normPerms(p),
     id: p.id,
     name: str(p.name),
     path: str(p.path),
@@ -185,7 +203,7 @@ function normScript(s: Script): Script {
         : t?.kind === 'ask'
           ? { kind: 'ask' }
           : { kind: 'global' }
-  return { ...s, type: s.type === 'claude' || s.type === 'gemini' ? s.type : 'terminal', target }
+  return { ...s, type: ['claude', 'gemini', 'codex'].includes(s.type) ? s.type : 'terminal', target }
 }
 
 type Listener = (cfg: AppConfig) => void
@@ -251,6 +269,46 @@ class ConfigStore {
     })
   }
 
+  /** "Sempre permitir": grava a regra no projeto (ou no Global) */
+  addAllowedTool(projectId: string, rule: string): AppConfig {
+    return this.update((d) => {
+      const target = d.projects.find((p) => p.id === projectId) ?? d.claudeGlobal
+      if (!target.allowedTools.includes(rule)) target.allowedTools.push(rule)
+    })
+  }
+
+  /** Para exportar: tudo menos dados de execução (pedidos, mensagens vistas). Tokens nunca estão aqui. */
+  exportable(): Partial<AppConfig> {
+    const c = this.get()
+    return {
+      version: 1,
+      general: c.general,
+      projects: c.projects,
+      scripts: c.scripts,
+      ui: c.ui,
+      integrations: { ...c.integrations, lastApplied: {} },
+      telegram: c.telegram,
+      watcher: { ...c.watcher, seen: [], lastCheckAt: null },
+      ai: c.ai,
+      claudeGlobal: c.claudeGlobal,
+      replies: c.replies,
+      rules: c.rules
+    }
+  }
+
+  /** Importa de outro PC: troca a configuração, mantém o status atual e os pedidos daqui */
+  importFrom(raw: unknown): { projects: number; scripts: number; rules: number } {
+    if (!raw || typeof raw !== 'object') throw new Error('não é uma configuração')
+    const incoming = normalize(raw)
+    this.update((d) => {
+      const keep = { status: d.status, statusSince: d.statusSince, alerts: d.alerts, watcher: d.watcher }
+      Object.assign(d, incoming, keep, {
+        watcher: { ...incoming.watcher, seen: keep.watcher.seen, lastCheckAt: keep.watcher.lastCheckAt }
+      })
+    })
+    return { projects: incoming.projects.length, scripts: incoming.scripts.length, rules: incoming.rules.length }
+  }
+
   markTrayHintShown(): AppConfig {
     return this.update((d) => {
       d.general.trayHintShown = true
@@ -307,6 +365,7 @@ class ConfigStore {
       if (patch.telegram) d.telegram = { ...d.telegram, ...patch.telegram }
       if (patch.watcher) d.watcher = { ...d.watcher, ...patch.watcher }
       if (patch.ai) d.ai = { ...d.ai, ...patch.ai }
+      if (patch.claudeGlobal) d.claudeGlobal = { ...d.claudeGlobal, ...patch.claudeGlobal }
       if (patch.replies) d.replies = patch.replies
       if (patch.rules) d.rules = patch.rules
     })

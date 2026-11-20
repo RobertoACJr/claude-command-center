@@ -62,6 +62,7 @@ export function VariablesModal({
       onClose={onClose}
       title={script ? `Executar: ${script.name}` : ''}
       icon={<Braces size={16} />}
+      width="max-w-2xl"
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>

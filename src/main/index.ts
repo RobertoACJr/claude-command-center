@@ -11,15 +11,21 @@ import { RunManager } from './runner'
 import { RemoteManager } from './remote'
 import { secrets } from './secrets'
 import { applyIntegration, integrationLogin, integrationStatus } from './mcp'
-import { detectChatId, escapeHtml, formatAlert, registerBot, sendTelegram, sendTelegramMessage, TelegramBot } from './telegram'
+import { detectChatId, editTelegramMessage, escapeHtml, formatAlert, registerBot, sendTelegram, sendTelegramMessage, TelegramBot } from './telegram'
 import { Automation } from './automation'
 import { geminiCheck, geminiSetup } from './gemini'
-import { setGeminiCommand } from './proc'
+import { setCodexCommand, setGeminiCommand } from './proc'
+import { openSystemTerminal } from './systerm'
+import { ApprovalServer } from './approval'
+import { checkTools } from './setup'
+import { Updater } from './updater'
+import { readFileSync, writeFileSync } from 'fs'
 import { Watcher } from './watcher'
 import { ProjectProcesses } from './projects'
 import { AppTray, applyOpenAtLogin } from './tray'
 import type {
   AlertStatus,
+  ApprovalDecision,
   AppConfig,
   AppLog,
   IntegrationId,
@@ -29,6 +35,7 @@ import type {
   Script,
   SecretKey,
   SettingsPatch,
+  TerminalPreset,
   UiState
 } from '../shared/types'
 
@@ -43,6 +50,7 @@ function send(channel: string, payload: unknown): void {
 const runs = new RunManager((e) => {
   projects.handleRunEvent(e)
   automation.handleRunEvent(e)
+  if (e.type === 'exit') approvals.runEnded(e.runId)
   send('run:event', e)
 })
 const projects = new ProjectProcesses(runs, (states) => {
@@ -61,7 +69,65 @@ const notifiedCrash = new Set<string>()
 const remote = new RemoteManager((sessions) => send('remote:update', sessions))
 
 const appLog = (l: AppLog) => send('app:log', l)
+let lastUpdatePhase = ''
+const updater = new Updater((st) => {
+  send('update:state', st)
+  if (st.phase === 'ready' && lastUpdatePhase !== 'ready') {
+    notify(`Versão ${st.version} pronta`, 'Instale quando quiser: botão no topo do app, ou ao sair pelo menu da bandeja.')
+    appLog({ kind: 'success', text: `[Atualização] versão ${st.version} baixada e pronta para instalar` })
+  }
+  lastUpdatePhase = st.phase
+})
 const automation = new Automation(runs, appLog)
+
+// ---------- Aprovação de permissões do Claude ----------
+/** Mensagens do Telegram de cada pedido de permissão (para editar com a resposta) */
+const approvalTelegram = new Map<string, number>()
+const approvals = new ApprovalServer({
+  onRequest: (r) => {
+    send('approval:request', r)
+    const cfg = store.get()
+    const visible = !!mainWindow?.isVisible() && mainWindow.isFocused()
+    if (!visible) notify('🔐 O Claude pede permissão', `${r.scopeName}: ${r.toolName} ${r.summary}`.slice(0, 200))
+    // No modo Ausente, pergunta também pelo Telegram
+    if (cfg.status === 'off' && cfg.telegram.interactive && cfg.telegram.chatId && secrets.get('telegram.token')) {
+      void sendTelegramMessage(
+        cfg.telegram.chatId,
+        `🔐 <b>O Claude pede permissão</b> · ${escapeHtml(r.scopeName)}\n\n<b>${escapeHtml(r.toolName)}</b>\n<code>${escapeHtml(r.summary.slice(0, 600))}</code>`,
+        [
+          [
+            { text: '✅ Permitir', callback_data: `pa:${r.id}` },
+            { text: '⛔ Negar', callback_data: `pd:${r.id}` }
+          ],
+          [{ text: `♾ Sempre permitir ${r.rule}`.slice(0, 60), callback_data: `pw:${r.id}` }]
+        ]
+      ).then((m) => m.messageId && approvalTelegram.set(r.id, m.messageId))
+    }
+  },
+  onResolved: (id) => {
+    send('approval:resolved', id)
+    approvalTelegram.delete(id)
+  }
+})
+runs.setClaudeArgsProvider((runId, req) => approvals.claudeArgs(runId, req, store.get()))
+
+function respondApproval(id: string, decision: ApprovalDecision, via: string): string {
+  const tgMsg = approvalTelegram.get(id)
+  const r = approvals.respond(id, decision)
+  if (!r) return 'Esse pedido já foi respondido.'
+  if (decision === 'always') store.addAllowedTool(r.projectId, r.rule)
+  const label = decision === 'deny' ? 'negado' : decision === 'always' ? `permitido sempre (${r.rule})` : 'permitido'
+  appLog({ kind: decision === 'deny' ? 'info' : 'success', text: `[Permissão] ${r.scopeName}: ${r.toolName} ${label} ${via}` })
+  const chat = store.get().telegram.chatId
+  if (tgMsg && chat) {
+    void editTelegramMessage(
+      chat,
+      tgMsg,
+      `🔐 ${escapeHtml(r.scopeName)} · <b>${escapeHtml(r.toolName)}</b>\n<code>${escapeHtml(r.summary.slice(0, 600))}</code>\n\n${decision === 'deny' ? '⛔' : '✅'} ${escapeHtml(label)} ${escapeHtml(via)}`
+    )
+  }
+  return `${r.toolName}: ${label}.`
+}
 const watcher = new Watcher(
   (s) => {
     send('watcher:state', s)
@@ -108,6 +174,9 @@ const bot = new TelegramBot({
     if (kind === 'ap') return (await automation.approve(id, 'pelo Telegram', false)).message
     if (kind === 'ds') return (await automation.dismiss(id, 'pelo Telegram')).message
     if (kind === 'rr') return (await automation.approve(id, 'pelo Telegram', true)).message
+    if (kind === 'pa' || kind === 'pd' || kind === 'pw') {
+      return respondApproval(id, kind === 'pa' ? 'allow' : kind === 'pd' ? 'deny' : 'always', 'pelo Telegram')
+    }
     if (kind === 'on') {
       setPresence('on', id === 'keep')
       return id === 'keep' ? 'Online, sessões remotas mantidas.' : 'Online, sessões remotas encerradas.'
@@ -205,6 +274,7 @@ let lastPending = -1
 let lastOpenAtLogin: boolean | null = null
 store.onChange((cfg) => {
   setGeminiCommand(cfg.ai.geminiCommand)
+  setCodexCommand(cfg.ai.codexCommand)
   remote.sync(cfg)
   watcher.evaluate(cfg)
   projects.sync(cfg)
@@ -375,6 +445,49 @@ function registerIpc(): void {
   })
   ipcMain.handle('alert:sendReply', (_e, alertId: string, replyId: string) => automation.sendReply(alertId, replyId, 'manual'))
   ipcMain.handle('gemini:check', () => geminiCheck())
+  ipcMain.handle('approval:respond', (_e, id: string, decision: ApprovalDecision) => {
+    respondApproval(id, decision, 'no app')
+  })
+  ipcMain.handle('approval:pending', () => approvals.list())
+  ipcMain.handle('setup:checkTools', () => checkTools())
+  ipcMain.handle('update:state', () => updater.getState())
+  ipcMain.handle('update:check', () => updater.check())
+  ipcMain.handle('update:install', () => {
+    quitting = true
+    updater.installNow()
+  })
+  ipcMain.handle('config:export', async () => {
+    const opts: Electron.SaveDialogOptions = {
+      title: 'Exportar configuração',
+      defaultPath: join(app.getPath('documents'), 'claude-command-center-config.json'),
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    }
+    const r = mainWindow ? await dialog.showSaveDialog(mainWindow, opts) : await dialog.showSaveDialog(opts)
+    if (r.canceled || !r.filePath) return { ok: false, message: 'Cancelado.' }
+    writeFileSync(r.filePath, JSON.stringify(store.exportable(), null, 2), 'utf-8')
+    return { ok: true, message: `Exportado para ${r.filePath} (sem tokens).` }
+  })
+  ipcMain.handle('config:import', async () => {
+    const opts: Electron.OpenDialogOptions = {
+      title: 'Importar configuração',
+      properties: ['openFile'],
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    }
+    const r = mainWindow ? await dialog.showOpenDialog(mainWindow, opts) : await dialog.showOpenDialog(opts)
+    if (r.canceled || !r.filePaths[0]) return { ok: false, message: 'Cancelado.' }
+    try {
+      const n = store.importFrom(JSON.parse(readFileSync(r.filePaths[0], 'utf-8')))
+      return {
+        ok: true,
+        message: `Importado: ${n.projects} projeto(s), ${n.scripts} script(s), ${n.rules} regra(s). Confira as pastas dos projetos e cadastre os tokens de novo.`
+      }
+    } catch (err) {
+      return { ok: false, message: `Arquivo inválido: ${(err as Error).message}` }
+    }
+  })
+  ipcMain.handle('sys:platform', () => process.platform)
+  ipcMain.handle('run:input', (_e, runId: string, text: string) => runs.sendInput(runId, String(text)))
+  ipcMain.handle('sys:openTerminal', (_e, cwd: string, preset?: TerminalPreset) => openSystemTerminal(cwd, preset))
   ipcMain.handle('gemini:setup', () => geminiSetup(store.get()))
   ipcMain.handle('alerts:clearResolved', () => store.clearResolvedAlerts())
 
@@ -395,11 +508,14 @@ if (!gotLock) {
 } else {
   app.on('second-instance', () => showWindow())
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     if (process.platform === 'win32') app.setAppUserModelId('com.jraya.claude-command-center')
     const cfg = store.load()
     setGeminiCommand(cfg.ai.geminiCommand)
+    setCodexCommand(cfg.ai.codexCommand)
     bot.start()
+    updater.start()
+    await approvals.start().catch((err) => console.error('[approval]', err))
     registerIpc()
     createWindow()
     // Se o app abriu já em OFF, sobe as sessões remotas e o Vigia
@@ -418,7 +534,9 @@ if (!gotLock) {
   // Encerra tudo que o app abriu: nada de processo órfão/zumbi
   app.on('before-quit', () => {
     quitting = true
+    updater.stop()
     bot.stop()
+    approvals.stop()
     projects.stopPolling()
     tray.destroy()
     watcher.stop()

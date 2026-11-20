@@ -1,5 +1,7 @@
 import {
   AlertTriangle,
+  AppWindow,
+  Braces,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -177,14 +179,39 @@ function ProjectCard({
   scriptActions: ScriptActions
 }) {
   const [showScripts, setShowScripts] = useState(true)
+  /** Clique em andamento: mostra "Iniciando…/Parando…" até o estado mudar de verdade */
+  const [busy, setBusy] = useState<null | 'start' | 'stop' | 'restart' | 'remote'>(null)
   const state = run?.state ?? 'stopped'
   const alive = state === 'running' || state === 'starting'
   const rcOn = !!session && session.state !== 'stopping'
 
-  const start = async () => {
-    const r = await window.api.projectStart(p.id)
-    if (!r.ok) onError(`${p.name}: ${r.message}`)
-    else onOpenTerminal(p.id)
+  // Libera o botão quando o estado de execução ou do Remote Control muda
+  useEffect(() => {
+    if (busy === 'remote') return
+    setBusy((b) => (b === 'start' && state === 'stopped' ? b : null))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state])
+  useEffect(() => {
+    if (busy === 'remote') setBusy(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.state, !!session])
+
+  const act = async (kind: 'start' | 'stop' | 'restart', fn: () => Promise<{ ok: boolean; message: string } | void>) => {
+    setBusy(kind)
+    try {
+      const r = await fn()
+      if (r && !r.ok) onError(`${p.name}: ${r.message}`)
+      else if (kind !== 'stop') onOpenTerminal(p.id)
+    } finally {
+      // Segurança: nunca deixa o botão preso
+      setTimeout(() => setBusy((b) => (b === kind ? null : b)), 1500)
+    }
+  }
+
+  const toggleRemote = () => {
+    setBusy('remote')
+    window.api.remoteSetManual(p.id, !rcOn)
+    setTimeout(() => setBusy((b) => (b === 'remote' ? null : b)), 8000)
   }
 
   return (
@@ -196,8 +223,11 @@ function ProjectCard({
             {shortPath(p.path, 52)}
           </div>
         </div>
-        <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100">
-          <IconButton title="Editar projeto" tone="accent" onClick={() => onEdit(p)}>
+        <div className="flex shrink-0 items-center">
+          <IconButton title="Abrir o terminal do sistema nesta pasta" tone="accent" onClick={() => window.api.openSystemTerminal(p.path).then((r) => !r.ok && onError(r.message))}>
+            <AppWindow size={13} />
+          </IconButton>
+          <IconButton title="Editar projeto (nome, pasta, como executar, variáveis)" tone="accent" onClick={() => onEdit(p)}>
             <Pencil size={13} />
           </IconButton>
           <IconButton title="Excluir projeto" tone="danger" onClick={() => onDelete(p)}>
@@ -219,21 +249,49 @@ function ProjectCard({
         <RunChip p={p} run={run} />
       </div>
 
+      {/* Variáveis do projeto (clique para editar) */}
+      {p.vars.length > 0 && (
+        <button
+          type="button"
+          onClick={() => onEdit(p)}
+          title="Variáveis do projeto: usadas nas ações globais como {{projeto.chave}}. Clique para editar."
+          className="mt-2 flex w-full cursor-pointer flex-wrap items-center gap-1 text-left"
+        >
+          <Braces size={11} className="text-zinc-600" />
+          {p.vars.map((v) => (
+            <span key={v.key} className="rounded border border-line bg-bg px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
+              <span className="text-zinc-500">{v.key}</span>
+              <span className="text-zinc-600">=</span>
+              {v.value || <i className="text-zinc-600">vazio</i>}
+            </span>
+          ))}
+        </button>
+      )}
+
       {/* Ações do projeto */}
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
         {p.runCommand &&
           (alive ? (
             <>
-              <Button size="sm" variant="danger" onClick={() => window.api.projectStop(p.id)}>
-                <Square size={10} fill="currentColor" /> Parar
+              <Button size="sm" variant="danger" disabled={!!busy && busy !== 'remote'} onClick={() => act('stop', () => window.api.projectStop(p.id))}>
+                {busy === 'stop' ? <Loader2 size={11} className="animate-spin" /> : <Square size={10} fill="currentColor" />}
+                {busy === 'stop' ? 'Parando…' : 'Parar'}
               </Button>
-              <Button size="sm" onClick={() => window.api.projectRestart(p.id).then((r) => !r.ok && onError(r.message))}>
-                <RotateCcw size={12} /> Reiniciar
+              <Button size="sm" disabled={!!busy && busy !== 'remote'} onClick={() => act('restart', () => window.api.projectRestart(p.id))}>
+                {busy === 'restart' ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+                {busy === 'restart' ? 'Reiniciando…' : 'Reiniciar'}
               </Button>
             </>
           ) : (
-            <Button size="sm" variant="primary" onClick={start} title={p.runCommand}>
-              <Play size={12} /> Executar
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={busy === 'start'}
+              onClick={() => act('start', () => window.api.projectStart(p.id))}
+              title={p.runCommand}
+            >
+              {busy === 'start' ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+              {busy === 'start' ? 'Iniciando…' : 'Executar'}
             </Button>
           ))}
         <Button size="sm" onClick={() => onOpenTerminal(p.id)} title="Abrir o terminal deste projeto">
@@ -243,7 +301,8 @@ function ProjectCard({
           type="button"
           role="switch"
           aria-checked={rcOn}
-          onClick={() => window.api.remoteSetManual(p.id, !rcOn)}
+          onClick={toggleRemote}
+          disabled={busy === 'remote'}
           title={
             rcOn
               ? 'Desligar o Remote Control deste projeto'
@@ -255,8 +314,8 @@ function ProjectCard({
             rcOn ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'border-line text-zinc-500 hover:text-zinc-200'
           )}
         >
-          <Radio size={12} className={session?.state === 'active' ? 'animate-pulse' : ''} />
-          Remote
+          {busy === 'remote' ? <Loader2 size={12} className="animate-spin" /> : <Radio size={12} className={session?.state === 'active' ? 'animate-pulse' : ''} />}
+          {busy === 'remote' ? (rcOn ? 'Desligando…' : 'Ligando…') : 'Remote'}
           <span className={cn('relative h-3.5 w-6 rounded-full transition-colors', rcOn ? 'bg-emerald-500' : 'bg-zinc-700')}>
             <span
               className={cn(
@@ -268,7 +327,7 @@ function ProjectCard({
         </button>
       </div>
 
-      {session && <RemotePanel session={session} />}
+      {session && <RemotePanel session={session} projectPath={p.path} />}
 
       {/* Scripts do projeto */}
       <div className="mt-2.5 border-t border-line pt-2">
@@ -304,7 +363,7 @@ function ProjectCard({
   )
 }
 
-function RemotePanel({ session }: { session: RemoteSession | undefined }) {
+function RemotePanel({ session, projectPath }: { session: RemoteSession | undefined; projectPath: string }) {
   const [copied, setCopied] = useState(false)
   if (!session) return null
 
@@ -363,6 +422,20 @@ function RemotePanel({ session }: { session: RemoteSession | undefined }) {
           <RotateCw size={13} />
         </IconButton>
       </div>
+      {setup && (
+        <div className="mt-2 space-y-1.5 border-t border-amber-400/20 pt-2 text-[11px] text-amber-100/80">
+          <div>
+            1. Clique abaixo: abre o terminal do sistema nesta pasta já rodando <code>claude remote-control</code>.
+            <br />
+            2. Responda <b>y</b> às perguntas (confiar na pasta e ativar o Remote Control).
+            <br />
+            3. Quando aparecer o link, feche o terminal (Ctrl+C) e clique em ↻ Tentar de novo aqui.
+          </div>
+          <Button size="sm" onClick={() => window.api.openSystemTerminal(projectPath, 'remote-control')}>
+            <AppWindow size={12} /> Fazer a configuração inicial
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

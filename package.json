@@ -23,6 +23,9 @@
     "build:win": "electron-vite build && electron-builder --win --publish never",
     "build:unpack": "electron-vite build && electron-builder --dir --publish never"
   },
+  "dependencies": {
+    "electron-updater": "^6.6.0"
+  },
   "devDependencies": {
     "@tailwindcss/vite": "^4.1.0",
     "@types/node": "^22.0.0",

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FolderGit2, FolderOpen, Plus, X } from 'lucide-react'
-import type { Project, ProjectVar } from '@shared/types'
+import type { ClaudePerms, Project, ProjectVar } from '@shared/types'
+import { ClaudePermsEditor } from './ClaudePermsEditor'
 import { Button, Field, IconButton, Modal, Toggle, inputCls } from './ui'
 import { uid } from '../lib/utils'
 
@@ -8,7 +9,8 @@ import { uid } from '../lib/utils'
 const VAR_SUGGESTIONS: ProjectVar[] = [
   { key: 'branch_principal', value: 'master' },
   { key: 'remote', value: 'origin' },
-  { key: 'branch_beta', value: 'beta' }
+  { key: 'branch_beta', value: 'beta' },
+  { key: 'apelidos', value: '' }
 ]
 
 export function ProjectModal({
@@ -28,6 +30,7 @@ export function ProjectModal({
   const [runCommand, setRunCommand] = useState('')
   const [port, setPort] = useState('')
   const [vars, setVars] = useState<ProjectVar[]>([])
+  const [perms, setPerms] = useState<ClaudePerms>({ claudeMode: 'ask', allowedTools: [] })
   const [branch, setBranch] = useState<string | null>(null)
 
   useEffect(() => {
@@ -38,6 +41,7 @@ export function ProjectModal({
     setRunCommand(initial?.runCommand ?? '')
     setPort(initial?.port ? String(initial.port) : '')
     setVars(initial?.vars ?? [])
+    setPerms({ claudeMode: initial?.claudeMode ?? 'ask', allowedTools: initial?.allowedTools ?? [] })
   }, [open, initial])
 
   useEffect(() => {
@@ -75,7 +79,9 @@ export function ProjectModal({
       port: port ? portNum : null,
       vars: vars
         .map((v) => ({ key: v.key.trim().replace(/[^\w.-]/g, '_'), value: v.value }))
-        .filter((v) => v.key)
+        .filter((v) => v.key),
+      claudeMode: perms.claudeMode,
+      allowedTools: perms.allowedTools
     })
     onClose()
   }
@@ -87,7 +93,7 @@ export function ProjectModal({
     <Modal
       open={open}
       onClose={onClose}
-      width="max-w-xl"
+      width="max-w-3xl"
       title={initial ? 'Editar projeto' : 'Novo projeto'}
       icon={<FolderGit2 size={16} />}
       footer={
@@ -161,19 +167,20 @@ export function ProjectModal({
 
       <Field
         label="Variáveis do projeto"
-        hint={
-          <>
-            Usadas nas ações globais como <code className="text-purple">{'{{projeto.chave}}'}</code>. Ex: a ação "Subir
-            em beta" usa <code className="text-purple">{'{{projeto.remote}}'}</code>, e cada projeto diz o seu.
-            {dupKeys.length > 0 && <span className="ml-1 text-red-400">Chave repetida: {dupKeys[0]}</span>}
-          </>
-        }
+        hint={dupKeys.length > 0 ? <span className="text-red-400">Chave repetida: {dupKeys[0]}</span> : undefined}
       >
+        <div className="mb-2 rounded-lg border border-line bg-bg p-2.5 text-xs leading-relaxed text-zinc-400">
+          São informações deste projeto que as <b className="text-zinc-200">ações globais</b> usam. Ex: cadastre{' '}
+          <code className="text-purple">remote = origin</code> aqui; numa ação global, o texto{' '}
+          <code className="text-purple">{'{{projeto.remote}}'}</code> vira <code>origin</code> quando você rodar neste
+          projeto (e vira o valor do outro projeto quando rodar lá). Use também <code>apelidos</code> (separados por
+          vírgula) para o Vigia reconhecer o projeto pelo nome que o pessoal usa no chat.
+        </div>
         <div className="space-y-1.5">
           {vars.map((v, i) => (
             <div key={i} className="flex items-center gap-2">
               <input
-                className={inputCls + ' w-[40%] font-mono text-xs'}
+                className={inputCls + ' w-52 shrink-0 font-mono text-xs'}
                 value={v.key}
                 onChange={(e) => setVar(i, { key: e.target.value })}
                 placeholder="chave"
@@ -208,6 +215,10 @@ export function ProjectModal({
             ))}
           </div>
         </div>
+      </Field>
+
+      <Field label="Permissões do Claude neste projeto">
+        <ClaudePermsEditor value={perms} onChange={setPerms} />
       </Field>
 
       <Toggle

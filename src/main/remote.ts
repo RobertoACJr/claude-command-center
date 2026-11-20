@@ -127,7 +127,7 @@ export class RemoteManager {
       } else if (NEEDS_SETUP_RE.test(text)) {
         session.state = 'needs-setup'
         session.message =
-          'Primeira vez nesta pasta: rode `claude remote-control` uma vez num terminal aqui e responda "y" às perguntas de confiança/ativação.'
+          'Primeira vez do Remote Control nesta pasta: o Claude precisa que você confirme duas perguntas num terminal.'
       }
       this.changed()
     }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import {
   Ban,
+  Bot,
   Gem,
   CheckCircle2,
   ChevronDown,
@@ -45,7 +46,7 @@ export interface TabState {
   unread: boolean
 }
 
-export const FIXED_TABS = ['console', 'claude', 'gemini', 'system'] as const
+export const FIXED_TABS = ['console', 'claude', 'gemini', 'codex', 'system'] as const
 
 const kindCls: Record<LineKind, string> = {
   info: 'text-zinc-500',
@@ -118,6 +119,8 @@ export function TerminalsPanel({
   onCloseTab,
   onClearTab,
   onStopTab,
+  stopping,
+  inputTarget,
   mode,
   onModeChange,
   onSubmit,
@@ -139,6 +142,10 @@ export function TerminalsPanel({
   onCloseTab: (key: string) => void
   onClearTab: (key: string) => void
   onStopTab: (key: string) => void
+  /** Parar clicado, esperando o processo terminar */
+  stopping: boolean
+  /** stdin = texto vai para o processo rodando; project = comando roda na pasta da aba do projeto */
+  inputTarget: 'normal' | 'stdin' | 'project'
   mode: ConsoleMode
   onModeChange: (m: ConsoleMode) => void
   onSubmit: (text: string) => void
@@ -261,9 +268,15 @@ export function TerminalsPanel({
                 </IconButton>
               )}
               {tab?.running.length ? (
-                <IconButton title="Parar (Ctrl+C)" tone="danger" onClick={() => onStopTab(active)}>
-                  <Square size={12} fill="currentColor" />
-                </IconButton>
+                stopping ? (
+                  <span className="mr-1 inline-flex items-center gap-1 text-[11px] text-amber-300">
+                    <Loader2 size={11} className="animate-spin" /> Parando…
+                  </span>
+                ) : (
+                  <IconButton title="Parar (Ctrl+C)" tone="danger" onClick={() => onStopTab(active)}>
+                    <Square size={12} fill="currentColor" />
+                  </IconButton>
+                )
               ) : null}
               <IconButton title={copied ? 'Copiado!' : 'Copiar o log desta aba'} onClick={copyAll}>
                 <ClipboardCopy size={13} className={copied ? 'text-emerald-400' : ''} />
@@ -297,9 +310,13 @@ export function TerminalsPanel({
                     ? 'Converse com o Claude pelo campo abaixo (modo Claude).'
                     : active === 'gemini'
                       ? 'Converse com o Gemini pelo campo abaixo (modo Gemini). Sem terminal, ele só lê e analisa.'
+                      : active === 'codex'
+                        ? 'Converse com o ChatGPT (Codex CLI) pelo campo abaixo (modo ChatGPT). Roda no sandbox só de leitura.'
                     : active === 'system'
                       ? 'Logs do app: Vigia, MCPs, Telegram, Remote Control.'
-                      : 'Sem saída ainda.'}
+                      : active.startsWith('project:')
+                        ? 'Clique em Executar no card, ou digite um comando abaixo: ele roda na pasta deste projeto. Com o projeto rodando, o texto vai para o processo.'
+                        : 'Sem saída ainda.'}
               </div>
             ) : (
               tab.lines.map((l) => (
@@ -340,7 +357,8 @@ export function TerminalsPanel({
             [
               ['terminal', 'Terminal', SquareTerminal],
               ['claude', 'Claude', Sparkles],
-              ['gemini', 'Gemini', Gem]
+              ['gemini', 'Gemini', Gem],
+              ['codex', 'ChatGPT', Bot]
             ] as const
           ).map(([m, label, Icon]) => (
             <button
@@ -377,20 +395,33 @@ export function TerminalsPanel({
         </div>
 
         <div className="flex h-8 min-w-0 flex-1 items-center rounded-lg border border-line bg-bg px-2.5 focus-within:border-violet/70">
-          <ChevronRight size={14} className={mode !== 'terminal' ? 'text-purple' : 'text-zinc-500'} />
+          {inputTarget === 'stdin' ? (
+            <span className="shrink-0 rounded bg-amber-400/15 px-1 text-[10px] text-amber-300" title="O texto vai para o processo que está rodando nesta aba">
+              stdin
+            </span>
+          ) : (
+            <ChevronRight size={14} className={mode !== 'terminal' ? 'text-purple' : 'text-zinc-500'} />
+          )}
           <input
+            data-testid="console-input"
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKey}
             spellCheck={false}
             placeholder={
-              mode === 'terminal'
+              inputTarget === 'stdin'
+                ? 'Enviar texto para o processo em execução… (Ctrl+C para parar)'
+                : inputTarget === 'project'
+                  ? `Comando na pasta de ${tab?.title ?? 'projeto'}…`
+                  : mode === 'terminal'
                 ? 'Digite um comando… (Ctrl+C para parar)'
                 : hasChat
                   ? `Continue a conversa com o ${mode === 'gemini' ? 'Gemini' : 'Claude'}…`
                   : mode === 'gemini'
                     ? 'Peça uma análise ao Gemini…'
+                    : mode === 'codex'
+                      ? 'Pergunte ao ChatGPT (só leitura, cada mensagem é uma conversa nova)…'
                     : 'Pergunte ou dê uma ordem ao Claude…'
             }
             className="h-full min-w-0 flex-1 bg-transparent px-2 font-mono text-[12.5px] text-zinc-100 placeholder:text-zinc-600 focus:outline-none"

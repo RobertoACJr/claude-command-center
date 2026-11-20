@@ -2,7 +2,7 @@ import type { ChildProcess } from 'child_process'
 import { existsSync } from 'fs'
 import { randomUUID } from 'crypto'
 import type { RunEvent, RunLineKind, RunRequest } from '../shared/types'
-import { IS_WIN, LineSplitter, killTree, killTreeSync, spawnClaude, spawnGemini, spawnShell } from './proc'
+import { IS_WIN, LineSplitter, killTree, killTreeSync, spawnClaude, spawnCodex, spawnGemini, spawnShell } from './proc'
 
 type Emit = (e: RunEvent) => void
 type DistOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
@@ -53,6 +53,13 @@ export class RunManager {
     if (e.type === 'exit') this.tabs.delete(e.runId)
   }
 
+  private claudeArgsProvider: ((runId: string, req: RunRequest) => string[]) | null = null
+
+  /** Quem decide os argumentos de permissão do Claude (o servidor de aprovação, no index) */
+  setClaudeArgsProvider(fn: (runId: string, req: RunRequest) => string[]): void {
+    this.claudeArgsProvider = fn
+  }
+
   isRunning(runId: string | undefined): boolean {
     return !!runId && this.runs.has(runId)
   }
@@ -78,7 +85,9 @@ export class RunManager {
           ? this.startTerminal(runId, req)
           : req.kind === 'gemini'
             ? this.startGemini(runId, req)
-            : this.startClaude(runId, req)
+            : req.kind === 'codex'
+              ? this.startCodex(runId, req)
+              : this.startClaude(runId, req)
     } catch (err) {
       setTimeout(() => {
         this.emit({ runId, type: 'error', message: String(err) })
@@ -94,8 +103,8 @@ export class RunManager {
         err.code === 'ENOENT'
           ? req.kind === 'claude'
             ? 'CLI `claude` não encontrado no PATH. Instale o Claude Code e confira com `claude --version`.'
-            : req.kind === 'gemini'
-              ? 'CLI do Gemini não encontrado. Confira o comando em Configurações → IAs.'
+            : req.kind === 'gemini' || req.kind === 'codex'
+              ? `CLI do ${req.kind === 'gemini' ? 'Gemini' : 'Codex (ChatGPT)'} não encontrado. Veja Configurações → Começar.`
               : 'Shell não encontrado.'
           : err.message
       this.emit({ runId, type: 'error', message: msg })
@@ -103,7 +112,8 @@ export class RunManager {
     child.on('close', (code, signal) => {
       this.runs.delete(runId)
       if (code === 127 && req.kind !== 'terminal') {
-        this.emit({ runId, type: 'error', message: `CLI \`${req.kind}\` não encontrado no PATH.` })
+        const name = { claude: 'Claude Code', gemini: 'Gemini', codex: 'Codex (ChatGPT)' }[req.kind]
+        this.emit({ runId, type: 'error', message: `${name} não está instalado (ou não está no PATH). Veja Configurações → Começar.` })
       }
       const killed = this.stopped.delete(runId)
       this.emit({ runId, type: 'exit', code, signal: signal ?? null, killed })
@@ -148,17 +158,29 @@ export class RunManager {
     const { command, env } = req.variables
       ? buildTerminalCommand(req.content, req.variables)
       : { command: req.content, env: {} }
-    const child = spawnShell(command, req.cwd, env)
+    const child = spawnShell(command, req.cwd, env, !!req.interactive)
+    child.stdin?.on('error', () => {})
     this.pipeLines(runId, child)
     return child
+  }
+
+  /** Manda uma linha para o stdin de uma execução interativa (projetos e comandos do console) */
+  sendInput(runId: string, text: string): boolean {
+    const child = this.runs.get(runId)
+    if (!child?.stdin || child.stdin.destroyed || !child.stdin.writable) return false
+    child.stdin.write(text + (IS_WIN ? '\r\n' : '\n'))
+    return true
   }
 
   private startClaude(runId: string, req: RunRequest): ChildProcess {
     const prompt = req.variables ? fillPrompt(req.content, req.variables) : req.content
     const args = ['-p', '--output-format', 'stream-json', '--verbose']
     if (req.resumeSessionId && UUID_RE.test(req.resumeSessionId)) args.push('--resume', req.resumeSessionId)
+    // Permissões: ferramenta de aprovação do app + regras/modo do projeto
+    if (this.claudeArgsProvider) args.push(...this.claudeArgsProvider(runId, req))
 
-    const child = spawnClaude(args, req.cwd, { stdin: true })
+    // A aprovação pode esperar você responder: dá tempo de sobra para a ferramenta MCP
+    const child = spawnClaude(args, req.cwd, { stdin: true, env: { MCP_TOOL_TIMEOUT: '660000' } })
     let sentSession = false
 
     const push = this.pipeLines(runId, child, (line) => {
@@ -294,6 +316,55 @@ export class RunManager {
     child.on('close', () => {
       if (text.trim()) push('claude', text)
       text = ''
+    })
+    child.stdin?.on('error', () => {})
+    child.stdin?.end(prompt)
+    return child
+  }
+
+  /**
+   * ChatGPT via Codex CLI: `codex exec --json -` (prompt pelo stdin), no sandbox padrão SÓ DE LEITURA.
+   * Cada mensagem é uma conversa nova.
+   */
+  private startCodex(runId: string, req: RunRequest): ChildProcess {
+    const prompt = req.variables ? fillPrompt(req.content, req.variables) : req.content
+    const child = spawnCodex(['exec', '--json', '--skip-git-repo-check', '-'], req.cwd, { stdin: true })
+    const push = this.pipeLines(runId, child, (line) => {
+      if (!line.trim()) return
+      let msg: Record<string, any>
+      try {
+        msg = JSON.parse(line)
+      } catch {
+        return push('stdout', line)
+      }
+      const item = msg.item ?? {}
+      switch (msg.type) {
+        case 'item.completed':
+          if (item.type === 'agent_message' && typeof item.text === 'string') {
+            item.text.split('\n').forEach((t: string) => push('claude', t))
+          } else if (item.type === 'command_execution') {
+            push('tool', `⚙ ${item.command ?? 'comando'}${item.status && item.status !== 'completed' ? ` (${item.status})` : ''}`)
+          } else if (item.type === 'file_change') {
+            push('tool', '⚙ alteração de arquivo (bloqueada no modo só leitura)')
+          } else if (item.type === 'mcp_tool_call') {
+            push('tool', `⚙ ${item.server ?? 'mcp'}.${item.tool ?? ''}`)
+          } else if (item.type === 'web_search') {
+            push('tool', `⚙ busca: ${item.query ?? ''}`)
+          }
+          break
+        case 'turn.failed':
+          push('stderr', `ChatGPT falhou: ${msg.error?.message ?? 'erro'}`)
+          break
+        case 'error':
+          push('stderr', String(msg.message ?? 'erro'))
+          break
+        case 'turn.completed': {
+          const u = msg.usage ?? {}
+          const tokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0)
+          push('info', `✓ concluído${tokens ? ` · ${tokens} tokens` : ''}`)
+          break
+        }
+      }
     })
     child.stdin?.on('error', () => {})
     child.stdin?.end(prompt)

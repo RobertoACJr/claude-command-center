@@ -46,17 +46,24 @@ const PS_PRELUDE =
  * No POSIX o processo vira líder do próprio grupo (detached) para podermos
  * matar a árvore inteira com kill(-pid).
  */
-export function spawnShell(command: string, cwd: string, env?: Record<string, string>): ChildProcess {
+export function spawnShell(
+  command: string,
+  cwd: string,
+  env?: Record<string, string>,
+  /** Deixa o stdin aberto para mandar texto ao processo (ex: "r" no Vite, respostas a perguntas) */
+  stdinPipe = false
+): ChildProcess {
   const opts: SpawnOptions = { cwd, env: baseEnv(env), windowsHide: true }
+  const stdin = stdinPipe ? 'pipe' : 'ignore'
   if (IS_WIN) {
     const encoded = Buffer.from(PS_PRELUDE + command, 'utf16le').toString('base64')
     return spawn(
       powershellExe(),
       ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
-      { ...opts, stdio: ['ignore', 'pipe', 'pipe'] }
+      { ...opts, stdio: [stdin, 'pipe', 'pipe'] }
     )
   }
-  return spawn('/bin/bash', ['-lc', command], { ...opts, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+  return spawn('/bin/bash', ['-lc', command], { ...opts, detached: true, stdio: [stdin, 'pipe', 'pipe'] })
 }
 
 /**
@@ -91,6 +98,15 @@ export function spawnClaude(
 ): ChildProcess {
   // CCC_CLAUDE_BIN permite apontar para um executável específico do Claude Code
   return spawnCli(process.env.CCC_CLAUDE_BIN || 'claude', args, cwd, opts)
+}
+
+/** Comando do Codex CLI (ChatGPT): configurável no app (padrão `codex`) ou por CCC_CODEX_BIN */
+let codexBin = 'codex'
+export function setCodexCommand(cmd: string): void {
+  codexBin = cmd.trim() || 'codex'
+}
+export function spawnCodex(args: string[], cwd: string, opts?: { stdin?: boolean; env?: Record<string, string> }): ChildProcess {
+  return spawnCli(process.env.CCC_CODEX_BIN || codexBin, args, cwd, opts)
 }
 
 /** Comando do Gemini CLI: configurável no app (padrão `gemini`) ou por CCC_GEMINI_BIN */

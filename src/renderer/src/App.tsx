@@ -5,10 +5,12 @@ import type {
   DeployAlert,
   Project,
   ProjectRunState,
+  ApprovalRequest,
   RemoteSession,
   RunEvent,
   Script,
   ScriptType,
+  UpdateState,
   WatcherState
 } from '@shared/types'
 import { Header } from './components/Header'
@@ -17,7 +19,7 @@ import { ScriptsPanel, type ScriptActions } from './components/ScriptsPanel'
 import { ProjectModal } from './components/ProjectModal'
 import { ScriptModal } from './components/ScriptModal'
 import { VariablesModal } from './components/VariablesModal'
-import { SettingsModal } from './components/SettingsModal'
+import { SettingsModal, type SettingsTab } from './components/SettingsModal'
 import { AlertsBar } from './components/AlertsBar'
 import { AwayBanner, GoOnlineModal } from './components/Presence'
 import {
@@ -28,6 +30,7 @@ import {
   type TabState
 } from './components/TerminalsPanel'
 import { ConfirmModal } from './components/ui'
+import { ApprovalModal } from './components/ApprovalModal'
 import {
   extractUserVariables,
   fillVariables,
@@ -41,7 +44,7 @@ import {
 type Confirm = { kind: 'project'; item: Project } | { kind: 'script'; item: Script } | null
 
 const MAX_LINES = 4000
-const FIXED_TITLES: Record<string, string> = { console: 'Console', claude: 'Claude', gemini: 'Gemini', system: 'Sistema' }
+const FIXED_TITLES: Record<string, string> = { console: 'Console', claude: 'Claude', gemini: 'Gemini', codex: 'ChatGPT', system: 'Sistema' }
 
 function newTab(key: string, title: string): TabState {
   return { key, title, lines: [], status: 'idle', exitCode: null, running: [], unread: false }
@@ -63,8 +66,16 @@ export default function App() {
   const [runPrompt, setRunPrompt] = useState<{ script: Script; initial?: Record<string, string> } | null>(null)
   const [confirm, setConfirm] = useState<Confirm>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsAt, setSettingsAt] = useState<{ tab?: SettingsTab; focus?: string }>({})
+  const openSettings = (tab?: SettingsTab, focus?: string) => {
+    setSettingsAt({ tab, focus })
+    setSettingsOpen(true)
+  }
   const [goOnlineOpen, setGoOnlineOpen] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
+  const [update, setUpdate] = useState<UpdateState | null>(null)
+  /** Pedidos de permissão do Claude esperando resposta */
+  const [approvalQueue, setApprovalQueue] = useState<ApprovalRequest[]>([])
 
   // ---------- terminais em abas ----------
   const [tabs, setTabs] = useState<Record<string, TabState>>(() =>
@@ -75,6 +86,8 @@ export default function App() {
   const [termOpen, setTermOpen] = useState(false)
   const [consoleTarget, setConsoleTarget] = useState('global')
   const [chatSessions, setChatSessions] = useState<Record<string, string>>({})
+  /** Abas em que o usuário clicou Parar e o processo ainda não terminou */
+  const [stoppingTabs, setStoppingTabs] = useState<Set<string>>(new Set())
   const lineId = useRef(0)
   const activeRef = useRef(activeTab)
   activeRef.current = activeTab
@@ -109,6 +122,8 @@ export default function App() {
 
   const activate = useCallback((key: string, open = true) => {
     setActiveTab(key)
+    // Aba de projeto: o campo de baixo passa a agir na pasta daquele projeto
+    if (key.startsWith('project:')) setConsoleTarget(key.slice('project:'.length))
     setTabs((ts) => (ts[key]?.unread ? { ...ts, [key]: { ...ts[key], unread: false } } : ts))
     if (open) setTermOpen(true)
   }, [])
@@ -133,6 +148,8 @@ export default function App() {
       setRemote(Object.fromEntries(sessions.map((s) => [s.projectId, s])))
       setRunStates(Object.fromEntries(ps.map((s) => [s.projectId, s])))
       log('info', `Claude Command Center pronto · config: ${cfgPath}`)
+      // Primeira vez (nenhum projeto): abre o assistente de configuração
+      if (cfg.projects.length === 0) openSettings('setup')
     })
   }, [log])
 
@@ -176,6 +193,13 @@ export default function App() {
               const t = ts[e.tab]
               if (!t) return ts
               const running = t.running.filter((id) => id !== e.runId)
+              if (!running.length)
+                setStoppingTabs((st) => {
+                  if (!st.has(e.tab)) return st
+                  const n = new Set(st)
+                  n.delete(e.tab)
+                  return n
+                })
               return {
                 ...ts,
                 [e.tab]: {
@@ -194,6 +218,19 @@ export default function App() {
   )
 
   useEffect(() => window.api.onConfigChanged(setConfig), [])
+  useEffect(() => {
+    window.api.updateState().then(setUpdate)
+    return window.api.onUpdateState(setUpdate)
+  }, [])
+  useEffect(() => {
+    window.api.pendingApprovals().then(setApprovalQueue)
+    const offReq = window.api.onApprovalRequest((r) => setApprovalQueue((q) => (q.some((x) => x.id === r.id) ? q : [...q, r])))
+    const offRes = window.api.onApprovalResolved((id) => setApprovalQueue((q) => q.filter((x) => x.id !== id)))
+    return () => {
+      offReq()
+      offRes()
+    }
+  }, [])
   useEffect(() => window.api.onWatcherState(setWatcher), [])
   useEffect(() => window.api.onAppLog((l) => log(l.kind, l.text)), [log])
   useEffect(
@@ -258,7 +295,7 @@ export default function App() {
     content: string,
     variables: Record<string, string> | undefined,
     cwd: string,
-    opts: { tab: string; title: string; chat?: boolean }
+    opts: { tab: string; title: string; chat?: boolean; projectId?: string }
   ) {
     ensureTab(opts.tab, opts.title)
     const fixed = (FIXED_TABS as readonly string[]).includes(opts.tab)
@@ -270,7 +307,18 @@ export default function App() {
     const chatKey = `${kind}:${cwd}`
     const resumeSessionId = kind !== 'terminal' && opts.chat ? chatSessions[chatKey] : undefined
     if (kind !== 'terminal' && opts.chat) nextChatCwd.current = chatKey
-    await window.api.run({ kind, content, variables, cwd, tab: opts.tab, title: opts.title, resumeSessionId })
+    await window.api.run({
+      kind,
+      content,
+      variables,
+      cwd,
+      tab: opts.tab,
+      title: opts.title,
+      resumeSessionId,
+      projectId: opts.projectId,
+      // Terminal com stdin aberto: dá para responder perguntas do comando pelo campo de baixo
+      interactive: kind === 'terminal'
+    })
   }
 
   const runScript = (s: Script, initial?: Record<string, string>) => {
@@ -289,11 +337,19 @@ export default function App() {
     if (!config) return
     const cwd = resolveTargetPath(s.target, config.projects, home, askedProjectId)
     const asked = askedProjectId ? config.projects.find((p) => p.id === askedProjectId) : undefined
-    execute(s.type, s.content, values, cwd, { tab: `script:${s.id}`, title: asked ? `${s.name} · ${asked.name}` : s.name })
+    const projectId = s.target.kind === 'project' ? s.target.projectId : askedProjectId
+    execute(s.type, s.content, values, cwd, {
+      tab: `script:${s.id}`,
+      title: asked ? `${s.name} · ${asked.name}` : s.name,
+      projectId
+    })
   }
 
   const stopTab = (key: string) => {
-    for (const id of tabs[key]?.running ?? []) window.api.stop(id)
+    const ids = tabs[key]?.running ?? []
+    if (!ids.length) return
+    setStoppingTabs((st) => new Set(st).add(key))
+    for (const id of ids) window.api.stop(id)
   }
 
   const closeTab = (key: string) => {
@@ -389,18 +445,39 @@ export default function App() {
       : (config.projects.find((p) => p.id === consoleTarget)?.path ?? home)
     : home
 
-  const submitConsole = (text: string) => {
+  /** Na aba ativa há um processo rodando que aceita texto? (comando do terminal ou projeto) */
+  const stdinRunId = termOpen && config?.ui.consoleMode === 'terminal' ? tabs[activeTab]?.running.at(-1) : undefined
+
+  const submitConsole = async (text: string) => {
     if (!config) return
     const mode = config.ui.consoleMode
+    // 1) Processo rodando na aba ativa: o texto vai para ele (stdin)
+    if (stdinRunId) {
+      append(activeTab, [{ kind: 'user', text }])
+      const ok = await window.api.runInput(stdinRunId, text)
+      if (!ok) append(activeTab, [{ kind: 'error', text: '✖ Este processo não aceita texto.' }])
+      return
+    }
+    // 2) Aba de projeto parada: o comando roda na pasta do projeto, na própria aba
+    if (mode === 'terminal' && termOpen && activeTab.startsWith('project:')) {
+      const p = config.projects.find((x) => `project:${x.id}` === activeTab)
+      if (p) return execute('terminal', text, undefined, p.path, { tab: activeTab, title: p.name, projectId: p.id })
+    }
     if (mode === 'terminal' && /^(clear|cls)$/i.test(text)) return clearTab('console')
     // Texto literal: {{x}} não é tratado como variável (variables = undefined)
     const tab = mode === 'terminal' ? 'console' : mode
-    execute(mode, text, undefined, consoleCwd, { tab, title: FIXED_TITLES[tab], chat: mode !== 'terminal' })
+    execute(mode, text, undefined, consoleCwd, {
+      tab,
+      title: FIXED_TITLES[tab],
+      // Codex: cada mensagem é uma conversa nova (sem retomar sessão)
+      chat: mode === 'claude' || mode === 'gemini',
+      projectId: consoleTarget !== 'global' ? consoleTarget : undefined
+    })
   }
 
   const setMode = (m: ConsoleMode) => {
     save(window.api.saveUi({ consoleMode: m }))
-    if (termOpen && ['console', 'claude', 'gemini'].includes(activeTab)) activate(m === 'terminal' ? 'console' : m)
+    if (termOpen && ['console', 'claude', 'gemini', 'codex'].includes(activeTab)) activate(m === 'terminal' ? 'console' : m)
   }
   const toggleExpand = () => config && save(window.api.saveUi({ consoleExpanded: !config.ui.consoleExpanded }))
 
@@ -422,9 +499,30 @@ export default function App() {
         remoteActive={activeRemote.length}
         watcher={watcher}
         watcherEnabled={config.watcher.enabled}
-        onToggleWatcher={async () => setConfig(await window.api.setWatcherEnabled(!config.watcher.enabled))}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onToggleWatcher={async () => {
+          // Bloqueado (ex: Google Chat não configurado): leva direto ao guia que falta
+          if (watcher.phase === 'blocked') return openSettings('setup', 'gchat')
+          setConfig(await window.api.setWatcherEnabled(!config.watcher.enabled))
+        }}
+        onOpenSettings={() => openSettings()}
       />
+      {update?.phase === 'ready' && (
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-emerald-500/30 bg-emerald-500/10 px-5 py-2 text-xs text-emerald-200">
+          <span>
+            ✨ Versão <b>{update.version}</b> baixada e pronta.{' '}
+            {away || Object.values(runStates).some((r) => r.state === 'running' || r.state === 'starting')
+              ? 'Reiniciar vai parar por alguns segundos o Vigia, o Remote Control e os projetos em execução.'
+              : 'Leva poucos segundos.'}
+          </span>
+          <button
+            type="button"
+            onClick={() => window.api.installUpdate()}
+            className="cursor-pointer rounded-lg bg-emerald-500/20 px-3 py-1 font-medium text-emerald-100 hover:bg-emerald-500/30"
+          >
+            Reiniciar e atualizar
+          </button>
+        </div>
+      )}
       {away && (
         <AwayBanner since={config.statusSince} watcher={watcher} remoteActive={activeRemote.length} onBack={togglePresence} />
       )}
@@ -479,6 +577,14 @@ export default function App() {
         onCloseTab={closeTab}
         onClearTab={clearTab}
         onStopTab={stopTab}
+        stopping={stoppingTabs.has(activeTab)}
+        inputTarget={
+          stdinRunId
+            ? 'stdin'
+            : termOpen && config.ui.consoleMode === 'terminal' && activeTab.startsWith('project:')
+              ? 'project'
+              : 'normal'
+        }
         mode={config.ui.consoleMode}
         onModeChange={setMode}
         onSubmit={submitConsole}
@@ -529,7 +635,21 @@ export default function App() {
         onClose={() => setRunPrompt(null)}
         onRun={(values, projectId) => runPrompt && doRun(runPrompt.script, values, projectId)}
       />
-      <SettingsModal open={settingsOpen} config={config} watcher={watcher} onClose={() => setSettingsOpen(false)} />
+      <ApprovalModal
+        queue={approvalQueue}
+        onRespond={(id, d) => {
+          setApprovalQueue((q) => q.filter((x) => x.id !== id))
+          window.api.respondApproval(id, d)
+        }}
+      />
+      <SettingsModal
+        open={settingsOpen}
+        config={config}
+        watcher={watcher}
+        initialTab={settingsAt.tab}
+        focus={settingsAt.focus}
+        onClose={() => setSettingsOpen(false)}
+      />
       <GoOnlineModal
         open={goOnlineOpen}
         sessions={activeRemote}

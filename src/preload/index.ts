@@ -1,11 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  ApprovalRequest,
   AppConfig,
   AppLog,
   CommandCenterApi,
   ProjectRunState,
   RemoteSession,
   RunEvent,
+  UpdateState,
   WatcherState
 } from '../shared/types'
 
@@ -16,6 +18,28 @@ function subscribe<T>(channel: string, cb: (v: T) => void): () => void {
 }
 
 const api: CommandCenterApi = {
+  // Aprovação de permissões do Claude
+  onApprovalRequest: (cb) => subscribe<ApprovalRequest>('approval:request', cb),
+  onApprovalResolved: (cb) => subscribe<string>('approval:resolved', cb),
+  respondApproval: (id, decision) => ipcRenderer.invoke('approval:respond', id, decision),
+  pendingApprovals: () => ipcRenderer.invoke('approval:pending'),
+
+  // Atualização e configuração
+  updateState: () => ipcRenderer.invoke('update:state'),
+  onUpdateState: (cb) => subscribe<UpdateState>('update:state', cb),
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  installUpdate: () => ipcRenderer.invoke('update:install'),
+  exportConfig: () => ipcRenderer.invoke('config:export'),
+  importConfig: () => ipcRenderer.invoke('config:import'),
+
+  // Assistente de configuração
+  checkTools: () => ipcRenderer.invoke('setup:checkTools'),
+  platform: () => ipcRenderer.invoke('sys:platform'),
+
+  // Melhorias
+  runInput: (runId, text) => ipcRenderer.invoke('run:input', runId, text),
+  openSystemTerminal: (cwd, preset) => ipcRenderer.invoke('sys:openTerminal', cwd, preset),
+
   // Fase 6
   sendReply: (alertId, replyId) => ipcRenderer.invoke('alert:sendReply', alertId, replyId),
   geminiCheck: () => ipcRenderer.invoke('gemini:check'),

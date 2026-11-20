@@ -27,10 +27,13 @@ jobs:
             files: |
               release/*/*.deb
               release/*/*.AppImage
+              release/*/latest-linux.yml
           - os: windows-latest
             script: build:win
             files: |
               release/*/*.exe
+              release/*/*.exe.blockmap
+              release/*/latest.yml
     steps:
       - uses: actions/checkout@v4
 

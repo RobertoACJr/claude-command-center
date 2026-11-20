@@ -110,7 +110,7 @@ try {
 
   // 1) Tela principal
   const t1 = await bodyText()
-  for (const expected of ['Claude Command Center', 'Projetos', 'Ações globais', 'Terminais', 'Online', 'Ausente']) {
+  for (const expected of ['Claude Command Center', 'Projetos', 'Ações globais', 'Terminais', 'Online', 'Ausente', 'ChatGPT', 'Gemini']) {
     if (!t1.includes(expected)) fail(`Tela principal sem "${expected}"`)
   }
   const apiKeys = await evaluate('Object.keys(window.api || {}).length')
@@ -121,12 +121,19 @@ try {
   // 2) Configurações: todas as abas
   if (!(await clickByText('Configurações & Integrações'))) fail('Botão de configurações não encontrado')
   await sleep(600)
+  // Primeira abertura (sem projetos): o assistente "Começar" já abre sozinho
+  if (!(await bodyText()).includes('Programas no seu PC')) fail('Assistente "Começar" não abriu na primeira vez')
+  await sleep(2500) // diagnóstico dos programas
   for (const tab of ['Integrações', 'IAs', 'Telegram', 'Modo Vigia', 'Automação', 'Geral']) {
     if (!(await clickByText(tab))) fail(`Aba "${tab}" não encontrada`)
     await sleep(400)
   }
   const t2 = await bodyText()
   if (!t2.includes('Janela e sistema')) fail('Aba Geral não renderizou')
+  if (!t2.includes('Levar a configuração para outro PC')) fail('Exportar/importar não apareceu')
+  await clickByText('IAs')
+  await sleep(300)
+  if (!(await bodyText()).includes('ChatGPT (Codex CLI)')) fail('Aba IAs sem o ChatGPT')
   await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
   await sleep(400)
   console.log('✓ Configurações: todas as abas abriram')
@@ -134,12 +141,18 @@ try {
   // 3) Novo projeto e nova ação (só abre e fecha os modais)
   if (!(await clickByText('Projeto'))) fail('Botão + Projeto não encontrado')
   await sleep(400)
-  if (!(await bodyText()).includes('Como executar')) fail('Modal de projeto sem "Como executar"')
+  const tp = await bodyText()
+  for (const exp of ['Como executar', 'Variáveis do projeto', 'Permissões do Claude neste projeto']) {
+    if (!tp.includes(exp)) fail(`Modal de projeto sem "${exp}"`)
+  }
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
   await sleep(300)
   if (!(await clickByText('Ação'))) fail('Botão + Ação não encontrado')
   await sleep(400)
-  if (!(await bodyText()).includes('Ação global')) fail('Modal de ação global não abriu')
+  const ta = await bodyText()
+  if (!ta.includes('Ação global')) fail('Modal de ação global não abriu')
+  if (!ta.includes('Inserir variável')) fail('Modal de ação sem "Inserir variável"')
+  if (!ta.includes('Ordem para o ChatGPT')) fail('Modal de ação sem o tipo ChatGPT')
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
   await sleep(300)
   console.log('✓ Modais de projeto e ação abriram')
@@ -147,16 +160,40 @@ try {
   // 4) Terminais + um comando de verdade
   if (!(await clickByText('Terminais'))) fail('Botão Terminais não encontrado')
   await sleep(400)
-  await evaluate(`(() => {
-    const input = document.querySelector('input[placeholder^="Digite um comando"]')
-    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
-    set.call(input, 'echo smoke-ok-123'); input.dispatchEvent(new Event('input', { bubbles: true }))
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
-  })()`)
+  const typeAndEnter = (text) =>
+    evaluate(`(() => {
+      const input = document.querySelector('[data-testid="console-input"]')
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+      set.call(input, ${JSON.stringify(text)}); input.dispatchEvent(new Event('input', { bubbles: true }))
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    })()`)
+  await typeAndEnter('echo smoke-ok-123')
   await sleep(4000)
   const t4 = await bodyText()
   if (!t4.includes('smoke-ok-123')) fail('Comando no console não mostrou a saída')
   else console.log('✓ Console executou um comando de verdade')
+
+  // 4b) Projeto de verdade: Executar → mandar texto para o processo (stdin) → Parar
+  await evaluate(`window.api.saveProject({
+    id: 'smoke', name: 'Projeto Smoke', path: ${JSON.stringify(process.cwd())}, remoteEnabled: false, createdAt: Date.now(),
+    runCommand: ${JSON.stringify(`node -e "process.stdin.on('data', d => console.log('eco:' + String(d).trim())); console.log('pronto')"`)},
+    port: null, vars: [{ key: 'remote', value: 'origin' }], claudeMode: 'ask', allowedTools: []
+  })`)
+  await sleep(1200)
+  if (!(await bodyText()).includes('remote=origin')) fail('Variáveis do projeto não aparecem no card')
+  if (!(await clickByText('Executar'))) fail('Botão Executar do projeto não encontrado')
+  await sleep(4000)
+  const t5 = await bodyText()
+  if (!t5.includes('Rodando')) fail('Projeto não ficou "Rodando"')
+  if (!t5.includes('pronto')) fail('Saída do projeto não apareceu na aba dele')
+  await typeAndEnter('ping-stdin')
+  await sleep(2500)
+  if (!(await bodyText()).includes('eco:ping-stdin')) fail('Texto não chegou ao processo do projeto (stdin)')
+  else console.log('✓ Projeto rodou e recebeu texto pela aba dele (stdin)')
+  if (!(await clickByText('Parar'))) fail('Botão Parar não encontrado')
+  await sleep(5000)
+  if (!(await bodyText()).includes('Parado')) fail('Projeto não voltou para "Parado"')
+  else console.log('✓ Projeto parou')
 
   // 5) Modo Ausente (tema azul-petróleo) e volta
   await clickByText('Ausente')

@@ -96,7 +96,8 @@ export class ProjectProcesses {
       tab: `project:${id}`,
       title: p.name,
       content: p.runCommand,
-      cwd: p.path
+      cwd: p.path,
+      interactive: true
     })
     Object.assign(s, { state: 'starting', runId, startedAt: Date.now(), exitCode: undefined })
     this.changed()
