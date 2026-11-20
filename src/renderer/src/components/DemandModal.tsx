@@ -171,6 +171,12 @@ export function DemandModal({
     if (!timer.current) setDraft(demand)
   }, [demand, isNew])
 
+  // Quando a tarefa termina, some o aviso "Analisando…" (o resultado já aparece na própria aba)
+  const busyWhat = busy?.what
+  useEffect(() => {
+    if (!busyWhat) setResult((r) => (r?.ok ? null : r))
+  }, [busyWhat])
+
   useEffect(() => setBase(currentBranch && currentBranch !== demand?.key ? currentBranch : ''), [currentBranch, demand?.key])
 
   if (!open || !draft) return null
