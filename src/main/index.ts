@@ -2,6 +2,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Notification, shell } f
 import { existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
+import { randomUUID } from 'crypto'
 // Ícone da janela (Linux usa no dock/alt-tab; no Windows o .exe já carrega o build/icon.ico)
 import appIcon from '../../build/icons/512x512.png?asset'
 import trayIcon from '../../build/icons/64x64.png?asset'
@@ -25,6 +26,9 @@ import { ProjectProcesses } from './projects'
 import { AppTray, applyOpenAtLogin } from './tray'
 import type {
   AlertStatus,
+  AppNotification,
+  NotificationKind,
+  NotificationTarget,
   ApprovalDecision,
   AppConfig,
   AppLog,
@@ -47,7 +51,18 @@ function send(channel: string, payload: unknown): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload)
 }
 
+/** runId → título (para avisar quando um script termina) */
+const runTitles = new Map<string, string>()
 const runs = new RunManager((e) => {
+  if (e.type === 'start' && e.tab.startsWith('script:')) runTitles.set(e.runId, e.title)
+  if (e.type === 'exit' && runTitles.has(e.runId)) {
+    const title = runTitles.get(e.runId)!
+    runTitles.delete(e.runId)
+    if (store.get().general.notifyScriptDone && !e.killed) {
+      const ok = e.code === 0
+      notify(`${ok ? '✔' : '✖'} ${title}`, ok ? 'Terminou com sucesso.' : `Falhou (código ${e.code ?? '?'}).`, `tab:${e.tab}`, 'script')
+    }
+  }
   projects.handleRunEvent(e)
   automation.handleRunEvent(e)
   if (e.type === 'exit') approvals.runEnded(e.runId)
@@ -60,20 +75,39 @@ const projects = new ProjectProcesses(runs, (states) => {
     if (s.state === 'crashed' && !notifiedCrash.has(s.projectId)) {
       notifiedCrash.add(s.projectId)
       const p = store.get().projects.find((x) => x.id === s.projectId)
-      notify(`${p?.name ?? 'Projeto'} caiu`, `Saiu com código ${s.exitCode ?? '?'}. Veja o terminal do projeto.`, 'terminals')
+      notify(`${p?.name ?? 'Projeto'} caiu`, `Saiu com código ${s.exitCode ?? '?'}. Veja o terminal do projeto.`, `tab:project:${s.projectId}`, 'projeto', 'always')
     }
     if (s.state !== 'crashed') notifiedCrash.delete(s.projectId)
   }
 })
 const notifiedCrash = new Set<string>()
-const remote = new RemoteManager((sessions) => send('remote:update', sessions))
+/** Sessões que já avisaram "ativa" (para notificar só na primeira vez que o link aparece) */
+const remoteNotified = new Set<string>()
+const remote = new RemoteManager((sessions) => {
+  send('remote:update', sessions)
+  for (const s of sessions) {
+    const key = `${s.projectId}:${s.startedAt}`
+    if (s.state === 'active' && s.url && !remoteNotified.has(key)) {
+      remoteNotified.add(key)
+      notify(`📡 Remote Control ativo: ${s.projectName}`, 'Abra pelo app do Claude no celular ou pelo link no card do projeto.', undefined, 'remote', 'never')
+    }
+  }
+})
 
-const appLog = (l: AppLog) => send('app:log', l)
+let lastWatcherError = ''
+const appLog = (l: AppLog) => {
+  send('app:log', l)
+  // Falha do Vigia vira notificação (sem repetir a mesma em sequência)
+  if (l.text.startsWith('[Vigia] falha')) {
+    if (l.text !== lastWatcherError) notify('Vigia com problema', l.text.replace('[Vigia] falha: ', ''), 'tab:system', 'vigia')
+    lastWatcherError = l.text
+  } else if (l.text.startsWith('[Vigia] verificado')) lastWatcherError = ''
+}
 let lastUpdatePhase = ''
 const updater = new Updater((st) => {
   send('update:state', st)
   if (st.phase === 'ready' && lastUpdatePhase !== 'ready') {
-    notify(`Versão ${st.version} pronta`, 'Instale quando quiser: botão no topo do app, ou ao sair pelo menu da bandeja.')
+    notify(`Versão ${st.version} pronta`, 'Instale quando quiser: botão no topo do app, ou ao sair pelo menu da bandeja.', 'settings', 'atualizacao')
     appLog({ kind: 'success', text: `[Atualização] versão ${st.version} baixada e pronta para instalar` })
   }
   lastUpdatePhase = st.phase
@@ -87,8 +121,7 @@ const approvals = new ApprovalServer({
   onRequest: (r) => {
     send('approval:request', r)
     const cfg = store.get()
-    const visible = !!mainWindow?.isVisible() && mainWindow.isFocused()
-    if (!visible) notify('🔐 O Claude pede permissão', `${r.scopeName}: ${r.toolName} ${r.summary}`.slice(0, 200))
+    notify('🔐 O Claude pede permissão', `${r.scopeName}: ${r.toolName} ${r.summary}`.slice(0, 200), undefined, 'permissao')
     // No modo Ausente, pergunta também pelo Telegram
     if (cfg.status === 'off' && cfg.telegram.interactive && cfg.telegram.chatId && secrets.get('telegram.token')) {
       void sendTelegramMessage(
@@ -232,7 +265,7 @@ const bot = new TelegramBot({
 })
 registerBot(bot)
 
-function showWindow(what?: 'alerts' | 'terminals' | 'go-online') {
+function showWindow(what?: NotificationTarget | 'go-online') {
   if (!mainWindow) createWindow()
   if (mainWindow?.isMinimized()) mainWindow.restore()
   mainWindow?.show()
@@ -240,11 +273,30 @@ function showWindow(what?: 'alerts' | 'terminals' | 'go-online') {
   if (what) send('window:show', what)
 }
 
-function notify(title: string, body: string, open?: 'alerts' | 'terminals') {
-  if (!Notification.isSupported()) return
-  const n = new Notification({ title, body, icon: appIcon })
-  n.on('click', () => showWindow(open))
-  n.show()
+// ---------- Central de notificações (sino do app + notificação do sistema) ----------
+const notifications: AppNotification[] = []
+
+/**
+ * Registra no sino do app e, se ligado nas preferências, mostra a notificação do sistema.
+ * desktop: 'always' (mesmo com a janela em foco), 'unfocused' (padrão: só se você não estiver olhando), 'never'.
+ */
+function notify(
+  title: string,
+  body: string,
+  target?: NotificationTarget,
+  kind: NotificationKind = 'sistema',
+  desktop: 'always' | 'unfocused' | 'never' = 'unfocused'
+) {
+  const n: AppNotification = { id: randomUUID(), at: Date.now(), kind, title, body, target, read: false }
+  notifications.unshift(n)
+  notifications.splice(100)
+  send('notify:new', n)
+  const focused = !!mainWindow?.isVisible() && mainWindow.isFocused()
+  const want = desktop === 'always' || (desktop === 'unfocused' && !focused)
+  if (!want || !store.get().general.desktopNotifications || !Notification.isSupported()) return
+  const dn = new Notification({ title, body, icon: appIcon })
+  dn.on('click', () => showWindow(target))
+  dn.show()
 }
 
 /** Mudança de presença. Indo para Ausente, o que já roda continua; voltando, o renderer pergunta. */
@@ -287,7 +339,9 @@ store.onChange((cfg) => {
     notify(
       '🚨 Pedido de deploy',
       a ? `${a.requester || 'Alguém'} pediu ${a.card || a.branch || 'deploy'} → ${a.environment || '?'}` : 'Novo pedido',
-      'alerts'
+      'alerts',
+      'pedido',
+      'always'
     )
   }
   lastPending = pending
@@ -350,7 +404,7 @@ function createWindow(): void {
     e.preventDefault()
     mainWindow?.hide()
     if (!cfg.general.trayHintShown) {
-      notify('Continuo rodando aqui', 'O app está na bandeja, ao lado do relógio. Use "Sair" no menu dele para encerrar tudo.')
+      notify('Continuo rodando aqui', 'O app está na bandeja, ao lado do relógio. Use "Sair" no menu dele para encerrar tudo.', undefined, 'sistema', 'always')
       store.markTrayHintShown()
     }
   })
@@ -450,6 +504,13 @@ function registerIpc(): void {
   })
   ipcMain.handle('approval:pending', () => approvals.list())
   ipcMain.handle('setup:checkTools', () => checkTools())
+  ipcMain.handle('notify:list', () => notifications)
+  ipcMain.handle('notify:markRead', () => {
+    for (const n of notifications) n.read = true
+  })
+  ipcMain.handle('notify:clear', () => {
+    notifications.splice(0)
+  })
   ipcMain.handle('update:state', () => updater.getState())
   ipcMain.handle('update:check', () => updater.check())
   ipcMain.handle('update:install', () => {

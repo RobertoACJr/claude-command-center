@@ -59,7 +59,7 @@ export function ProjectsPanel({
   scriptActions: ScriptActions
 }) {
   return (
-    <section className="flex min-h-0 flex-col rounded-2xl border border-line bg-card">
+    <section className="flex min-h-0 min-w-0 flex-col rounded-2xl border border-line bg-card">
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div className="flex items-center gap-2">
           <FolderGit2 size={16} className="text-purple" />
@@ -76,7 +76,7 @@ export function ProjectsPanel({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+      <div data-testid="panel-list" className="min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-hidden p-3">
         {projects.length === 0 && (
           <EmptyState
             icon={<FolderGit2 size={20} />}
@@ -215,7 +215,7 @@ function ProjectCard({
   }
 
   return (
-    <div className="group rounded-xl border border-line bg-card-2 p-3 transition-colors hover:border-violet/40">
+    <div className="group min-w-0 rounded-xl border border-line bg-card-2 p-3 transition-colors hover:border-violet/40">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-sm font-medium text-zinc-100">{p.name}</div>
@@ -415,7 +415,7 @@ function RemotePanel({ session, projectPath }: { session: RemoteSession | undefi
     >
       <div className="flex items-start gap-2">
         <AlertTriangle size={13} className="mt-0.5 shrink-0" />
-        <span className="selectable min-w-0 flex-1 break-words">
+        <span className="selectable min-w-0 flex-1 [overflow-wrap:anywhere]">
           {session.message ?? (session.state === 'active' ? 'Sessão ativa, aguardando URL…' : 'Falha na sessão remota.')}
         </span>
         <IconButton title="Tentar de novo" onClick={retry}>

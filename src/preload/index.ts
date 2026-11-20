@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  AppNotification,
+  NotificationTarget,
   ApprovalRequest,
   AppConfig,
   AppLog,
@@ -53,7 +55,11 @@ const api: CommandCenterApi = {
   onProjectStates: (cb) => subscribe<ProjectRunState[]>('project:states', cb),
   remoteSetManual: (id, on) => ipcRenderer.invoke('remote:setManual', id, on),
   setPresence: (status, opts) => ipcRenderer.invoke('presence:set', status, opts),
-  onShowWindowRequest: (cb) => subscribe<'alerts' | 'terminals' | 'go-online'>('window:show', cb),
+  onShowWindowRequest: (cb) => subscribe<NotificationTarget | 'go-online'>('window:show', cb),
+  notifications: () => ipcRenderer.invoke('notify:list'),
+  onNotification: (cb) => subscribe<AppNotification>('notify:new', cb),
+  markNotificationsRead: () => ipcRenderer.invoke('notify:markRead'),
+  clearNotifications: () => ipcRenderer.invoke('notify:clear'),
 
   getConfig: () => ipcRenderer.invoke('config:get'),
   setStatus: (status) => ipcRenderer.invoke('config:setStatus', status),

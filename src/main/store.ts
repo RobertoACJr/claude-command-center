@@ -20,7 +20,7 @@ function defaults(): AppConfig {
     version: 1,
     status: 'on',
     statusSince: Date.now(),
-    general: { closeToTray: true, openAtLogin: false, trayHintShown: false },
+    general: { closeToTray: true, openAtLogin: false, trayHintShown: false, desktopNotifications: true, notifyScriptDone: true },
     projects: [],
     scripts: [],
     ui: { consoleExpanded: false, consoleMode: 'terminal' },
@@ -85,7 +85,9 @@ function normalize(raw: unknown): AppConfig {
     general: {
       closeToTray: bool(r.general?.closeToTray, true),
       openAtLogin: bool(r.general?.openAtLogin, false),
-      trayHintShown: bool(r.general?.trayHintShown, false)
+      trayHintShown: bool(r.general?.trayHintShown, false),
+      desktopNotifications: bool(r.general?.desktopNotifications, true),
+      notifyScriptDone: bool(r.general?.notifyScriptDone, true)
     },
     projects: Array.isArray(r.projects) ? (r.projects as Project[]).filter((p) => p && p.id).map(normProject) : [],
     scripts: Array.isArray(r.scripts) ? (r.scripts as Script[]).filter((s) => s && s.id).map(normScript) : [],

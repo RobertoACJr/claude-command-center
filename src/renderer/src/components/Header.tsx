@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Eye, EyeOff, Loader2, Settings, TerminalSquare } from 'lucide-react'
-import type { PresenceStatus, WatcherState } from '@shared/types'
+import type { NotificationTarget, PresenceStatus, WatcherState } from '@shared/types'
+import { NotificationBell } from './NotificationBell'
 import { cn } from '../lib/utils'
 
 export function Header({
@@ -11,7 +12,8 @@ export function Header({
   watcher,
   watcherEnabled,
   onToggleWatcher,
-  onOpenSettings
+  onOpenSettings,
+  onGo
 }: {
   status: PresenceStatus
   onToggle: () => void
@@ -21,6 +23,7 @@ export function Header({
   watcherEnabled: boolean
   onToggleWatcher: () => void
   onOpenSettings: () => void
+  onGo: (t: NotificationTarget) => void
 }) {
   const on = status === 'on'
   return (
@@ -37,6 +40,7 @@ export function Header({
 
       <div className="flex items-center gap-4">
         <WatcherPill state={watcher} enabled={watcherEnabled} onClick={onToggleWatcher} />
+        <NotificationBell onGo={onGo} />
         <button
           type="button"
           onClick={onOpenSettings}
@@ -123,7 +127,7 @@ function WatcherPill({ state, enabled, onClick }: { state: WatcherState; enabled
   const title =
     (state.phase === 'blocked'
       ? `Vigia bloqueado: ${state.reason}\nClique para abrir o guia de configuração.`
-      : `Monitorar Google Chat: ${enabled ? 'ligado' : 'desligado'} (clique para ligar/desligar, mesmo Online)\n${state.reason}\nAvisos: notificação do sistema, faixa de pedidos no app e Telegram (se configurado).`) +
+      : `Monitorar Google Chat: ${enabled ? 'ligado' : 'desligado'} (clique para ligar/desligar, mesmo Online)\n${state.reason}\nAvisos: sino do app, notificação do sistema, faixa de pedidos e Telegram (se configurado).`) +
     (state.lastResult ? `\nÚltimo: ${state.lastResult}` : '')
 
   return (

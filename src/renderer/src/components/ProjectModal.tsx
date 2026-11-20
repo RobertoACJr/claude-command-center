@@ -177,10 +177,19 @@ export function ProjectModal({
           vírgula) para o Vigia reconhecer o projeto pelo nome que o pessoal usa no chat.
         </div>
         <div className="space-y-1.5">
+          {vars.length > 0 && (
+            <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] gap-2 px-1 text-[10px] uppercase tracking-wider text-zinc-600">
+              <span>Chave (usada como {'{{projeto.chave}}'})</span>
+              <span className="invisible">=</span>
+              <span>Valor neste projeto</span>
+              <span className="invisible w-7" />
+            </div>
+          )}
           {vars.map((v, i) => (
-            <div key={i} className="flex items-center gap-2">
+            // Grade: chave e valor meio a meio, "=" e o X no tamanho deles
+            <div key={i} data-testid="var-row" className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2">
               <input
-                className={inputCls + ' w-52 shrink-0 font-mono text-xs'}
+                className={inputCls + ' min-w-0 font-mono text-xs'}
                 value={v.key}
                 onChange={(e) => setVar(i, { key: e.target.value })}
                 placeholder="chave"
@@ -188,7 +197,7 @@ export function ProjectModal({
               />
               <span className="text-zinc-600">=</span>
               <input
-                className={inputCls + ' flex-1 font-mono text-xs'}
+                className={inputCls + ' min-w-0 font-mono text-xs'}
                 value={v.value}
                 onChange={(e) => setVar(i, { value: e.target.value })}
                 placeholder="valor"

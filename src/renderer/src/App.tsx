@@ -11,7 +11,8 @@ import type {
   Script,
   ScriptType,
   UpdateState,
-  WatcherState
+  WatcherState,
+  NotificationTarget
 } from '@shared/types'
 import { Header } from './components/Header'
 import { ProjectsPanel } from './components/ProjectsPanel'
@@ -127,6 +128,17 @@ export default function App() {
     setTabs((ts) => (ts[key]?.unread ? { ...ts, [key]: { ...ts[key], unread: false } } : ts))
     if (open) setTermOpen(true)
   }, [])
+
+  /** Navega até o destino de uma notificação (sino ou notificação do sistema) */
+  const goTo = useCallback(
+    (t: NotificationTarget) => {
+      if (t === 'terminals') return activate('system')
+      if (t.startsWith('tab:')) return activate(t.slice(4))
+      if (t === 'settings') return openSettings('general')
+      if (t === 'alerts') document.querySelector('[data-testid="alerts-bar"]')?.scrollIntoView({ behavior: 'smooth' })
+    },
+    [activate]
+  )
 
   // ---------- bootstrap ----------
   const booted = useRef(false)
@@ -246,9 +258,9 @@ export default function App() {
     () =>
       window.api.onShowWindowRequest((what) => {
         if (what === 'go-online') setGoOnlineOpen(true)
-        if (what === 'terminals') activate('system')
+        else goTo(what)
       }),
-    [activate]
+    [goTo]
   )
 
   // Tema: azul-petróleo no modo Ausente
@@ -505,6 +517,7 @@ export default function App() {
           setConfig(await window.api.setWatcherEnabled(!config.watcher.enabled))
         }}
         onOpenSettings={() => openSettings()}
+        onGo={goTo}
       />
       {update?.phase === 'ready' && (
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-emerald-500/30 bg-emerald-500/10 px-5 py-2 text-xs text-emerald-200">
@@ -527,7 +540,7 @@ export default function App() {
         <AwayBanner since={config.statusSince} watcher={watcher} remoteActive={activeRemote.length} onBack={togglePresence} />
       )}
 
-      <main className="grid min-h-0 flex-1 grid-cols-1 gap-4 p-4 lg:grid-cols-[minmax(360px,1fr)_minmax(320px,1fr)]">
+      <main className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-4 overflow-x-hidden p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <ProjectsPanel
           projects={config.projects}
           scripts={config.scripts}

@@ -116,7 +116,7 @@ export function ScriptsPanel({
   actions: ScriptActions
 }) {
   return (
-    <section className="flex min-h-0 flex-col rounded-2xl border border-line bg-card">
+    <section className="flex min-h-0 min-w-0 flex-col rounded-2xl border border-line bg-card">
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div className="flex items-center gap-2">
           <Globe2 size={16} className="text-purple" />
@@ -128,7 +128,7 @@ export function ScriptsPanel({
         </Button>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+      <div data-testid="panel-list" className="min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-hidden p-3">
         {scripts.length === 0 && (
           <EmptyState
             icon={<FileCode2 size={20} />}

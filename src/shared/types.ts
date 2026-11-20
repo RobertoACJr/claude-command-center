@@ -91,6 +91,25 @@ export interface GeneralPrefs {
   openAtLogin: boolean
   /** Já mostrou o aviso "continuo rodando na bandeja" */
   trayHintShown: boolean
+  /** Notificação do sistema (canto da tela) além do sino do app */
+  desktopNotifications: boolean
+  /** Avisar quando um script terminar */
+  notifyScriptDone: boolean
+}
+
+export type NotificationKind = 'pedido' | 'permissao' | 'projeto' | 'script' | 'atualizacao' | 'vigia' | 'remote' | 'sistema'
+
+/** Para onde o clique na notificação leva */
+export type NotificationTarget = 'alerts' | 'terminals' | 'settings' | `tab:${string}`
+
+export interface AppNotification {
+  id: string
+  at: number
+  kind: NotificationKind
+  title: string
+  body: string
+  target?: NotificationTarget
+  read: boolean
 }
 
 // ---------- Fase 3: integrações, Telegram, Vigia ----------
@@ -396,7 +415,13 @@ export interface CommandCenterApi {
   remoteSetManual(projectId: string, on: boolean): Promise<void>
   /** keepRemote: ao voltar para Online, manter as sessões remotas abertas */
   setPresence(status: PresenceStatus, opts?: { keepRemote?: boolean }): Promise<AppConfig>
-  onShowWindowRequest(cb: (what: 'alerts' | 'terminals' | 'go-online') => void): () => void
+  onShowWindowRequest(cb: (what: NotificationTarget | 'go-online') => void): () => void
+
+  // Central de notificações
+  notifications(): Promise<AppNotification[]>
+  onNotification(cb: (n: AppNotification) => void): () => void
+  markNotificationsRead(): Promise<void>
+  clearNotifications(): Promise<void>
 
   // Fase 2
   run(req: RunRequest): Promise<string>

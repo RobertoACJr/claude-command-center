@@ -78,7 +78,21 @@ O usuário não conseguiu configurar Git, Jira, Google Chat nem Telegram sozinho
 - [x] Assistente "Começar" abre sozinho na primeira vez (sem projetos).
 - [x] Exportar/importar configuração (Configurações → Geral), sem tokens.
 
+## 10. Rodada 3
+
+- [x] Variáveis do projeto: chave e valor meio a meio (o `w-full` do campo brigava com a largura).
+- [x] Remote ligado não cria mais rolagem horizontal (link longo quebra dentro do card; colunas com `minmax(0,1fr)`).
+- [x] Seletor de modo virou um botão só (`[ícone Terminal ▾]`); as outras opções aparecem no hover. Enter abre a aba certa.
+- [x] **Central de notificações** (sino no topo): pedidos do Google Chat, permissões do Claude, scripts que terminam,
+  projetos que caem, falhas do Vigia, Remote ativo e atualizações. Configurações → Geral → Notificações escolhe o que
+  também aparece no canto da tela.
+- [x] Release automática: subiu a versão no `package.json` e deu push na main → o CI cria a Release com os instaladores.
+- [x] Teste de fumaça cobre Remote (Claude falso com link longo), rolagem horizontal, largura das variáveis, seletor de modo e sino.
+
 ## Próximas ideias
+
+- [ ] Telegram com scripts rápidos: `/rodar <script>` e `/projetos` (lista com botões ▶/■ e Remote).
+- [ ] Painel web pelo celular (PWA via Tailscale): notificações, Remotes e scripts rápidos sem app nativo.
 
 - [ ] Paleta de comandos (Ctrl+K): rodar script/ação, abrir projeto, trocar modo, sem mouse.
 - [ ] Status do git no card: arquivos alterados e commits à frente/atrás do remoto.

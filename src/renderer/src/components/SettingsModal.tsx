@@ -1,29 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import {
-  ArrowLeftRight,
-  RefreshCw,
-  Rocket,
-  AppWindow,
-  Bot,
-  Gem,
-  MessageSquareReply,
-  Plus,
-  Trash2,
-  Workflow,
-  Bell,
-  Eye,
-  Github,
-  KeyRound,
-  Loader2,
-  MessageSquare,
-  Plug,
-  Search,
-  Send,
-  Settings,
-  ShieldCheck,
-  SquareKanban,
-  Zap
-} from 'lucide-react'
+import { AppWindow, ArrowLeftRight, Bell, Bot, Eye, Gem, Github, KeyRound, Loader2, MessageSquare, MessageSquareReply, Plug, Plus, RefreshCw, Rocket, Search, Send, Settings, ShieldCheck, SquareKanban, Trash2, Workflow, Zap } from 'lucide-react'
 import type {
   AiProvider,
   AppConfig,
@@ -777,6 +753,25 @@ function GeneralTab({ config, save }: { config: AppConfig; save: SaveFn }) {
           onChange={(v) => save({ general: { openAtLogin: v } })}
           label="Abrir junto com o sistema"
           hint="Abre escondido na bandeja. Só funciona no app instalado (não no npm run dev)."
+        />
+      </Section>
+
+      <Section icon={<Bell size={15} />} title="Notificações">
+        <p className="text-[11px] text-zinc-500">
+          Tudo fica no sino 🔔 no topo do app (pedidos do Google Chat, permissões do Claude, scripts, projetos que caem,
+          Remote Control e atualizações). Aqui você escolhe o que também aparece no canto da tela.
+        </p>
+        <Toggle
+          checked={g.desktopNotifications}
+          onChange={(v) => save({ general: { desktopNotifications: v } })}
+          label="Mostrar também como notificação do sistema"
+          hint="Pedidos de deploy e projetos que caem aparecem sempre; o resto só quando você não está olhando o app."
+        />
+        <Toggle
+          checked={g.notifyScriptDone}
+          onChange={(v) => save({ general: { notifyScriptDone: v } })}
+          label="Avisar quando um script terminar"
+          hint="Com sucesso ou falha. Clicar leva para a aba do script."
         />
       </Section>
 

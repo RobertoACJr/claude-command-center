@@ -2,7 +2,7 @@
 // e se as telas principais abrem. Roda no GitHub Actions depois do build.
 // Uso: node scripts/smoke-test.mjs   (no Linux: xvfb-run -a node scripts/smoke-test.mjs)
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -25,6 +25,18 @@ const exe = findExecutable()
 // rodando localmente, o teste alterna o modo Online/Ausente do seu config.json (no CI a máquina é descartável).
 const home = mkdtempSync(join(tmpdir(), 'ccc-smoke-'))
 const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, '.config'), APPDATA: join(home, 'AppData') }
+// Claude falso para o Remote Control: imprime um link de sessão bem comprido (testa a quebra no card) e fica esperando
+const LONG_URL = 'https://claude.ai/code/session_' + 'abc123XYZ'.repeat(14)
+if (process.platform === 'win32') {
+  const f = join(home, 'fake-claude.cmd')
+  writeFileSync(f, `@echo off\r\nif "%1"=="remote-control" (\r\n  echo Remote Control ativo: ${LONG_URL}\r\n  ping -n 300 127.0.0.1 >nul\r\n)\r\n`)
+  env.CCC_CLAUDE_BIN = f
+} else {
+  const f = join(home, 'fake-claude')
+  writeFileSync(f, `#!/bin/sh\nif [ "$1" = "remote-control" ]; then echo "Remote Control ativo: ${LONG_URL}"; exec sleep 300; fi\n`)
+  chmodSync(f, 0o755)
+  env.CCC_CLAUDE_BIN = f
+}
 const args = [`--remote-debugging-port=${PORT}`]
 if (process.platform === 'linux') args.push('--no-sandbox')
 
@@ -194,6 +206,52 @@ try {
   await sleep(5000)
   if (!(await bodyText()).includes('Parado')) fail('Projeto não voltou para "Parado"')
   else console.log('✓ Projeto parou')
+
+  // 4c) Remote Control com link enorme: não pode criar rolagem horizontal; vira notificação no sino
+  const clickRemote = () =>
+    evaluate(`(() => {
+      const el = document.querySelector('[role="switch"][title*="Remote Control deste projeto"]')
+      if (!el) return false
+      el.click(); return true
+    })()`)
+  if (!(await clickRemote())) fail('Botão Remote do projeto não encontrado')
+  await sleep(5000)
+  if (!(await bodyText()).includes('session_abc123XYZ')) fail('Link do Remote Control (claude falso) não apareceu no card')
+  const overflow = await evaluate(`JSON.stringify([...document.querySelectorAll('main, [data-testid="panel-list"], body')]
+    .filter(e => e.scrollWidth > e.clientWidth + 1).map(e => (e.dataset.testid || e.tagName) + ':' + e.scrollWidth + '>' + e.clientWidth))`)
+  if (overflow !== '[]') fail('Rolagem horizontal com o Remote ligado: ' + overflow)
+  else console.log('✓ Remote ligado sem rolagem horizontal')
+  const badge = await evaluate(`document.querySelector('[data-testid="notif-badge"]')?.textContent ?? ''`)
+  if (!badge) fail('Sino de notificações sem contador depois do Remote ativo')
+  await evaluate(`document.querySelector('[data-testid="notif-bell"]').click()`)
+  await sleep(400)
+  const panel = await evaluate(`document.querySelector('[data-testid="notif-panel"]')?.textContent ?? ''`)
+  if (!panel.includes('Remote Control ativo')) fail('Central de notificações não mostrou o Remote ativo')
+  else console.log('✓ Central de notificações mostrou o aviso')
+  await evaluate(`document.querySelector('[data-testid="notif-bell"]').click()`)
+  await sleep(300)
+  await clickRemote()
+  await sleep(2500)
+
+  // 4d) Variáveis do projeto: chave e valor com a mesma largura
+  await clickByText('Editar projeto (nome, pasta, como executar, variáveis)')
+  await sleep(500)
+  const widths = await evaluate(`JSON.stringify([...document.querySelectorAll('[data-testid="var-row"]')[0]?.querySelectorAll('input') ?? []].map(i => Math.round(i.getBoundingClientRect().width)))`)
+  const [wk, wv] = JSON.parse(widths)
+  if (!wk || !wv || Math.abs(wk - wv) > 4 || wv < 150) fail('Campos de variável sem largura meio a meio: ' + widths)
+  else console.log(`✓ Variável chave/valor meio a meio (${wk}px / ${wv}px)`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
+  await sleep(300)
+
+  // 4e) Seletor de modo: um botão só, opções no hover
+  const picker = await evaluate(`(() => {
+    const b = document.querySelector('[data-testid="mode-picker"]')
+    if (!b) return 'sem botão'
+    const menu = b.parentElement.textContent
+    return ['Claude', 'Gemini', 'ChatGPT', 'Terminal'].every(t => menu.includes(t)) ? 'ok' : 'faltam opções: ' + menu
+  })()`)
+  if (picker !== 'ok') fail('Seletor de modo: ' + picker)
+  else console.log('✓ Seletor de modo único com as opções')
 
   // 5) Modo Ausente (tema azul-petróleo) e volta
   await clickByText('Ausente')

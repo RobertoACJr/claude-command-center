@@ -99,17 +99,19 @@ npm run typecheck    # checagem de tipos
 
 Os instaladores são gerados pelo GitHub Actions (`.github/workflows/release.yml`) numa máquina Windows e numa Ubuntu,
 passam por um **teste de fumaça** (abre o app empacotado, confere as telas principais, roda um comando no console e
-troca para o modo Ausente) e são publicados na página de Releases:
+liga o Remote Control com um Claude falso, troca para o modo Ausente) e são publicados na página de Releases:
+
+**É só subir a versão no `package.json` e dar push na `main`:** quando o workflow vê que ainda não existe
+Release para aquela versão, ele cria a `v<versão>` sozinho com os instaladores (e o app de quem já instalou
+se atualiza a partir dela). Push sem mudar a versão só gera e testa, sem publicar.
 
 ```bash
-npm version 0.7.0 --no-git-tag-version   # atualiza o package.json
-git commit -am "v0.7.0"
-git tag v0.7.0
-git push origin main v0.7.0
+npm version 0.9.0 --no-git-tag-version   # atualiza o package.json
+git commit -am "v0.9.0"
+git push origin main
 ```
 
-Ou, sem terminal: no GitHub, **Releases → Draft a new release**, crie a tag nova (ex: `v0.7.0`) e publique;
-o workflow roda e anexa os instaladores na própria release em alguns minutos.
+Também funciona enviar uma tag (`git tag v0.9.0 && git push origin v0.9.0`) ou criar a Release pela página do GitHub.
 
 Pela aba **Actions → Instaladores → Run workflow** dá para gerar sem publicar (os arquivos ficam como artefatos do run).
 Para gerar localmente: `npm run build:linux` (no Ubuntu) ou `npm run build:win` (no Windows); saem em `release/<versão>/`.

@@ -102,6 +102,70 @@ function StatusPill({ t }: { t: TabState | undefined }) {
   )
 }
 
+const MODES: Array<{ id: ConsoleMode; label: string; desc: string; Icon: typeof SquareTerminal }> = [
+  { id: 'terminal', label: 'Terminal', desc: 'Comandos do sistema (bash/PowerShell)', Icon: SquareTerminal },
+  { id: 'claude', label: 'Claude', desc: 'Claude Code: conversa e ordens de desenvolvimento', Icon: Sparkles },
+  { id: 'gemini', label: 'Gemini', desc: 'Gemini CLI: análises, sem executar nada', Icon: Gem },
+  { id: 'codex', label: 'ChatGPT', desc: 'Codex CLI: só leitura, cada mensagem é nova', Icon: Bot }
+]
+
+/**
+ * Um botão só com o modo atual; passando o mouse (ou clicando) abre as outras opções.
+ * Ao enviar, a saída aparece na aba do modo, que abre sozinha em cima.
+ */
+function ModePicker({ mode, onChange }: { mode: ConsoleMode; onChange: (m: ConsoleMode) => void }) {
+  const [open, setOpen] = useState(false)
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const current = MODES.find((m) => m.id === mode) ?? MODES[0]
+  const keepOpen = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current)
+    setOpen(true)
+  }
+  const closeSoon = () => {
+    closeTimer.current = setTimeout(() => setOpen(false), 180)
+  }
+  return (
+    <div className="relative shrink-0" onMouseEnter={keepOpen} onMouseLeave={closeSoon}>
+      <button
+        type="button"
+        data-testid="mode-picker"
+        onClick={() => setOpen((o) => !o)}
+        title="Onde o texto do campo vai: passe o mouse para trocar"
+        className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-violet/50 bg-violet/15 px-2.5 text-xs font-medium text-purple transition-colors hover:bg-violet/25"
+      >
+        <current.Icon size={13} />
+        {current.label}
+        <ChevronDown size={12} className={cn('transition-transform', open ? 'rotate-180' : '')} />
+      </button>
+      {/* Fica no DOM mesmo fechado (só escondido) */}
+      <div className={cn('absolute bottom-full left-0 z-50 pb-1.5', open ? '' : 'hidden')}>
+        <div className="w-72 rounded-xl border border-line bg-card p-1 shadow-2xl">
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => {
+                onChange(m.id)
+                setOpen(false)
+              }}
+              className={cn(
+                'flex w-full cursor-pointer items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors',
+                m.id === mode ? 'bg-violet/15 text-zinc-100' : 'text-zinc-300 hover:bg-white/5'
+              )}
+            >
+              <m.Icon size={14} className={cn('mt-0.5 shrink-0', m.id === mode ? 'text-purple' : 'text-zinc-500')} />
+              <span>
+                <span className="block text-xs font-medium">{m.label}</span>
+                <span className="block text-[11px] text-zinc-500">{m.desc}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export interface TargetOption {
   value: string
   label: string
@@ -352,32 +416,13 @@ export function TerminalsPanel({
           )}
         </button>
 
-        <div className="flex h-8 shrink-0 rounded-lg border border-line bg-bg p-0.5">
-          {(
-            [
-              ['terminal', 'Terminal', SquareTerminal],
-              ['claude', 'Claude', Sparkles],
-              ['gemini', 'Gemini', Gem],
-              ['codex', 'ChatGPT', Bot]
-            ] as const
-          ).map(([m, label, Icon]) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => {
-                onModeChange(m)
-                inputRef.current?.focus()
-              }}
-              className={cn(
-                'inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors',
-                mode === m ? 'bg-violet text-white' : 'text-zinc-500 hover:text-zinc-200'
-              )}
-            >
-              <Icon size={13} />
-              {label}
-            </button>
-          ))}
-        </div>
+        <ModePicker
+          mode={mode}
+          onChange={(m) => {
+            onModeChange(m)
+            inputRef.current?.focus()
+          }}
+        />
 
         <div className="flex h-8 shrink-0 items-center gap-1 rounded-lg border border-line bg-bg px-2 text-xs text-zinc-500" title={cwdLabel}>
           <FolderTree size={12} />

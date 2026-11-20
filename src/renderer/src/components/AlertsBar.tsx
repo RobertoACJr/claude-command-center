@@ -31,7 +31,7 @@ export function AlertsBar({
   if (alerts.length === 0) return null
 
   return (
-    <div className="mx-4 mb-3 shrink-0 rounded-xl border border-amber-400/30 bg-amber-400/[0.04]">
+    <div data-testid="alerts-bar" className="mx-4 mb-3 shrink-0 rounded-xl border border-amber-400/30 bg-amber-400/[0.04]">
       <button
         type="button"
         onClick={() => setOpen(!open)}
