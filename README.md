@@ -33,7 +33,10 @@ Para desinstalar: Configurações → Aplicativos → Claude Command Center.
 
 ### Atualizar
 
-Baixe a versão nova e instale por cima (no Ubuntu, o mesmo `sudo apt install ./…deb`). Projetos, scripts, regras e
+O app procura versões novas nas Releases a cada 4 horas, baixa sozinho e mostra **"Reiniciar e atualizar"** (ele nunca
+reinicia sozinho; também instala ao sair pelo menu da bandeja). No Ubuntu (.deb) a instalação pede sua senha.
+Requisitos: repositório público e a release publicada com os arquivos `latest*.yml` (o workflow já anexa).
+Também dá para baixar a versão nova e instalar por cima (no Ubuntu, o mesmo `sudo apt install ./…deb`). Projetos, scripts, regras e
 tokens ficam fora do app e não são apagados.
 
 ## O que precisa estar instalado no PC
@@ -49,6 +52,10 @@ tokens ficam fora do app e não são apagados.
 
 ## Primeiros passos
 
+O assistente **Configurações → Começar** abre sozinho na primeira vez: ele confere o que está instalado (Claude Code
+e login, git, gh, Gemini, Codex, uv), mostra o comando para instalar cada um e tem guias passo a passo de Remote
+Control, Telegram, GitHub, Jira e Google Chat.
+
 1. **+ Projeto**: nome, pasta, "Como executar" (ex: `npm run dev`), porta e variáveis (ex: `remote`, `branch_principal`).
 2. **+ Ação** (ações globais) ou **+** dentro do card (scripts do projeto). Use `{{variavel}}` e `{{projeto.chave}}`.
 3. **Remote Control**: antes do primeiro uso, rode `claude remote-control` uma vez num terminal em cada pasta de projeto
@@ -57,7 +64,8 @@ tokens ficam fora do app e não são apagados.
 
 ## Levar a configuração de um PC para outro (Windows ⇄ Ubuntu)
 
-Copie o `config.json` da pasta de dados do app de um PC para o outro (com o app fechado):
+Em **Configurações → Geral → Levar a configuração para outro PC**: *Exportar…* num PC e *Importar…* no outro.
+Ou copie o `config.json` da pasta de dados do app (com o app fechado):
 
 - Windows: `%APPDATA%\Claude Command Center\config.json`
 - Ubuntu: `~/.config/Claude Command Center/config.json`
