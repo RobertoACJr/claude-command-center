@@ -11,6 +11,7 @@ const KIND_LABEL: Record<NotificationKind, string> = {
   atualizacao: 'Atualização',
   vigia: 'Vigia',
   remote: 'Remote',
+  demanda: 'Demanda',
   sistema: 'App'
 }
 
