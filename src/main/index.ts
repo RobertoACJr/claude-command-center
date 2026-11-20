@@ -26,9 +26,12 @@ import { ProjectProcesses } from './projects'
 import { AppTray, applyOpenAtLogin } from './tray'
 import { History } from './history'
 import { TelegramControl } from './tgcontrol'
+import { DemandManager } from './demands'
 import type {
   AlertStatus,
   AppNotification,
+  Demand,
+  RunEvent,
   NotificationKind,
   NotificationTarget,
   ApprovalDecision,
@@ -69,12 +72,25 @@ const runs = new RunManager((e) => {
     }
   }
   history.handle(e)
+  demandsDoneNotice(e)
+  demands.handleRunEvent(e)
   tg.handleRunEvent(e)
   projects.handleRunEvent(e)
   automation.handleRunEvent(e)
   if (e.type === 'exit') approvals.runEnded(e.runId)
   send('run:event', e)
 })
+const demands = new DemandManager(app.getPath('userData'), runs, (list, busy) => send('demands:update', { list, busy }))
+/** Avisa no sino quando a análise/desenho/resposta do Claude de uma demanda fica pronta */
+function demandsDoneNotice(e: RunEvent): void {
+  if (e.type !== 'exit' || !e.tab.startsWith('demand:') || e.killed) return
+  const d = demands.get(e.tab.slice('demand:'.length))
+  const busy = demands.busyList().find((b) => b.runId === e.runId)
+  if (!d || !busy) return
+  const what = { analysis: 'análise pronta', design: 'desenho pronto para revisar', dev: 'o Claude respondeu' }[busy.what as 'analysis']
+  if (!what) return
+  notify(`📋 ${d.key}: ${e.code === 0 ? what : 'falhou'}`, d.title || d.jira?.summary || '', `demand:${d.id}`, 'demanda', 'unfocused', false)
+}
 const projects = new ProjectProcesses(runs, (states) => {
   send('project:states', states)
   // Aviso nativo se um projeto cair sozinho
@@ -204,6 +220,7 @@ async function telegramStatus(): Promise<string> {
 
 const tg = new TelegramControl({
   runs,
+  demands,
   projects,
   remote,
   history,
@@ -559,6 +576,19 @@ function registerIpc(): void {
     notifications.splice(0)
     saveNotificationsSoon()
   })
+  ipcMain.handle('demands:list', () => demands.all())
+  ipcMain.handle('demands:busy', () => demands.busyList())
+  ipcMain.handle('demands:save', (_e, d: Demand) => demands.save(d))
+  ipcMain.handle('demands:delete', (_e, id: string) => demands.delete(String(id)))
+  ipcMain.handle('demands:jira', (_e, id: string) => demands.fetchJira(String(id)))
+  ipcMain.handle('demands:analyze', (_e, id: string, what: 'analysis' | 'design') =>
+    demands.analyze(String(id), what === 'design' ? 'design' : 'analysis')
+  )
+  ipcMain.handle('demands:implement', (_e, id: string, message: string, fresh?: boolean) =>
+    demands.implement(String(id), String(message ?? ''), Boolean(fresh))
+  )
+  ipcMain.handle('demands:branch', (_e, id: string, base: string) => demands.branch(String(id), String(base ?? '')))
+  ipcMain.handle('demands:stop', (_e, id: string) => demands.stop(String(id)))
   ipcMain.handle('history:list', () => history.list())
   ipcMain.handle('history:log', (_e, id: string) => history.log(String(id)))
   ipcMain.handle('history:clear', () => history.clear())

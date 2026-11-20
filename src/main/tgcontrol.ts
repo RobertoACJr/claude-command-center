@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto'
 import { homedir } from 'os'
 import type { HistoryEntry, Project, RunEvent, Script } from '../shared/types'
 import { extractUserVariables, missingProjectKeys, projectValues } from '../shared/vars'
+import type { DemandManager } from './demands'
 import type { History } from './history'
 import type { ProjectProcesses } from './projects'
 import type { RemoteManager } from './remote'
@@ -15,7 +16,7 @@ type Action = () => Promise<string | void>
 /** Quanto do texto cabe numa mensagem do Telegram (limite real: 4096) */
 const MAX_MSG = 3800
 
-const ORIGIN: Record<string, string> = { app: 'app', telegram: 'Telegram', pedido: 'pedido', projeto: 'projeto' }
+const ORIGIN: Record<string, string> = { app: 'app', telegram: 'Telegram', pedido: 'pedido', projeto: 'projeto', demanda: 'demanda' }
 const STATUS_ICON: Record<HistoryEntry['status'], string> = { running: '⏳', ok: '✅', error: '❌', stopped: '⏹' }
 
 const fmt = (t: number) =>
@@ -50,6 +51,8 @@ export class TelegramControl {
   private waiting: { label: string; resolve: (text: string) => void } | null = null
   /** Projeto onde o texto livre vira ordem para o Claude ('' = pasta pessoal) */
   private claudeAt: string | null = null
+  /** Demanda escolhida: o texto livre vai para a conversa do Claude dela */
+  private demandAt: string | null = null
   /** Conversa contínua com o Claude por projeto */
   private sessions = new Map<string, string>()
   /** Execuções disparadas pelo Telegram (para responder quando terminarem) */
@@ -60,6 +63,7 @@ export class TelegramControl {
   constructor(
     private d: {
       runs: RunManager
+      demands: DemandManager
       projects: ProjectProcesses
       remote: RemoteManager
       history: History
@@ -138,6 +142,7 @@ export class TelegramControl {
     '/projetos · executar, parar, Remote Control e log de cada projeto',
     '/rodar · scripts e ações globais (pergunta as variáveis aqui)',
     '/claude · escolhe o projeto; depois é só mandar texto que vira ordem para o Claude',
+    '/demandas · escolhe uma demanda; o texto vai para a conversa do Claude dela (ou /demanda WEB-482 texto)',
     '/novo · começa uma conversa nova com o Claude',
     '/parar · interrompe o que o Telegram mandou rodar',
     '/log [nome] · últimas linhas de um projeto ou script',
@@ -163,6 +168,11 @@ export class TelegramControl {
       case 'claude':
       case 'c':
         await this.chooseClaude(args)
+        return true
+      case 'demandas':
+      case 'demanda':
+      case 'd':
+        await this.chooseDemand(args)
         return true
       case 'novo':
         this.sessions.clear()
@@ -198,6 +208,10 @@ export class TelegramControl {
       const w = this.waiting
       this.waiting = null
       w.resolve(t)
+      return
+    }
+    if (this.demandAt) {
+      await this.sendToDemand(this.demandAt, t)
       return
     }
     if (this.claudeAt === null) {
@@ -252,6 +266,7 @@ export class TelegramControl {
         }),
         this.btn('🤖', async () => {
           this.claudeAt = p.id
+          this.demandAt = null
           await this.say(`🤖 Agora o texto que você mandar vira ordem para o Claude em <b>${escapeHtml(p.name)}</b>.`)
           return 'Claude neste projeto.'
         })
@@ -365,6 +380,7 @@ export class TelegramControl {
     const cfg = store.get()
     const named = text.trim() ? this.findProject(text.split(/\s+/)[0]) : undefined
     // "/claude NomeDoProjeto" só seleciona; "/claude NomeDoProjeto faça X" seleciona e manda
+    this.demandAt = null
     if (named) {
       this.claudeAt = named.id
       const rest = text.trim().split(/\s+/).slice(1).join(' ')
@@ -392,6 +408,55 @@ export class TelegramControl {
       ]
     ]
     await this.say(pending ? '🤖 Em qual projeto o Claude deve fazer isso?' : '🤖 Em qual projeto?', buttons)
+  }
+
+  // ------------------------------------------------------------ demandas
+
+  private async chooseDemand(args: string): Promise<void> {
+    const [first, ...rest] = args.trim().split(/\s+/)
+    const byKey = first ? this.d.demands.findByKey(first) : undefined
+    if (byKey) {
+      this.demandAt = byKey.id
+      this.claudeAt = null
+      if (rest.length) return this.sendToDemand(byKey.id, rest.join(' '))
+      await this.say(this.demandSummary(byKey.id) + '\n\n💬 Mande o que o Claude deve fazer nesta demanda.')
+      return
+    }
+    const open = this.d.demands.all().filter((d) => d.status !== 'feita').slice(0, 20)
+    if (!open.length) return void (await this.say('Nenhuma demanda aberta. Crie pelo card do projeto no app.'))
+    const buttons = open.map((d) => [
+      this.btn(`${d.key} · ${d.title || d.jira?.summary || ''}`.slice(0, 50), async () => {
+        this.demandAt = d.id
+        this.claudeAt = null
+        await this.say(this.demandSummary(d.id) + '\n\n💬 Mande o que o Claude deve fazer nesta demanda.')
+        return d.key
+      })
+    ])
+    await this.say('<b>Demandas abertas</b>', buttons)
+  }
+
+  private demandSummary(id: string): string {
+    const d = this.d.demands.get(id)
+    if (!d) return 'Demanda não encontrada.'
+    const p = this.projectsList().find((x) => x.id === d.projectId)
+    return (
+      `📋 <b>${escapeHtml(d.key)}</b> · ${escapeHtml(d.title || d.jira?.summary || '')}\n` +
+      `${escapeHtml(p?.name ?? '?')} · etapa: <b>${d.status}</b>${d.hours ? ` · ${d.hours}h` : ''}` +
+      (d.sessionId ? '\n(continua a conversa do Claude desta demanda)' : '\n(a primeira mensagem leva o card, o contexto e o desenho)')
+    )
+  }
+
+  private async sendToDemand(id: string, text: string): Promise<void> {
+    const d = this.d.demands.get(id)
+    if (!d) {
+      this.demandAt = null
+      return void (await this.say('Essa demanda não existe mais. Use /demandas.'))
+    }
+    const r = this.d.demands.implement(id, text, false, 'telegram')
+    if (!r.ok || !r.runId) return void (await this.say('⚠️ ' + escapeHtml(r.message)))
+    this.runs.set(r.runId, { kind: 'claude', title: `${d.key}`, projectKey: `demand:${id}`, lines: [] })
+    await call('sendChatAction', { chat_id: this.chat(), action: 'typing' })
+    await this.say(`🤖 ${escapeHtml(r.message)} (${escapeHtml(d.key)})`)
   }
 
   private async runClaude(projectId: string, prompt: string): Promise<void> {
@@ -472,7 +537,7 @@ export class TelegramControl {
   handleRunEvent(e: RunEvent): void {
     const r = this.runs.get(e.runId)
     if (!r) return
-    if (e.type === 'session' && r.kind === 'claude') this.sessions.set(r.projectKey, e.sessionId)
+    if (e.type === 'session' && r.kind === 'claude' && !r.projectKey.startsWith('demand:')) this.sessions.set(r.projectKey, e.sessionId)
     if (e.type === 'lines') {
       for (const l of e.lines) {
         if (r.kind === 'claude' ? l.kind === 'claude' : l.kind !== 'info') r.lines.push(l.text)

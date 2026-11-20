@@ -205,6 +205,11 @@ Engrenagem no header → **Configurações & Integrações**.
     começa outra). Pedidos de permissão chegam com botões. `/parar` interrompe.
   - `/log [nome]`, `/historico`, `/status`, `/pendentes`, `/ausente`, `/online`, `/vigia`.
   - No modo Ausente, os avisos do sino (projeto caiu, script terminou, Vigia, atualização) também vão para lá.
+- **Demandas** (no card do projeto): número do card do Jira → o app puxa título, descrição e comentários; você cola o
+  contexto do chat e a transcrição da apresentação. A IA (Claude, ChatGPT ou Gemini) analisa **só lendo** o código:
+  entendimento, o que muda, dúvidas para o refinamento, riscos e estimativa em horas. Depois desenha a solução
+  (editável, você aprova) e o Claude implementa numa conversa própria da demanda, na branch com o nome do card.
+  Dá para continuar pelo Telegram: `/demanda WEB-482 o botão ficou desalinhado`.
 - **Histórico** (ícone de relógio no topo): as últimas 300 execuções com quem disparou (app, Telegram, pedido),
   resultado, duração e a saída completa. Fica só no PC (`history.json` + `history/` na pasta de dados do app).
 - **Paleta de comandos** (`Ctrl+K`): rodar qualquer script, executar/parar projeto, ligar Remote, falar com o Claude
@@ -226,6 +231,7 @@ src/
   main/telegram.ts       sendMessage / getUpdates
   main/tgcontrol.ts      comandos do Telegram (/projetos, /rodar, /claude, /log, /historico)
   main/history.ts        histórico de execuções (local)
+  main/demands.ts        demandas: Jira, análise/desenho com IA, conversa do Claude, branch
   main/watcher.ts        ciclo do Modo Vigia (só leitura) + alertas
   main/projects.ts       execução dos projetos (▶/■), monitor de porta
   main/tray.ts           ícone na bandeja + abrir com o sistema

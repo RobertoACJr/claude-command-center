@@ -21,7 +21,8 @@ import {
   Trash2
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import type { Project, ProjectRunState, RemoteSession, Script } from '@shared/types'
+import type { Demand, DemandBusy, Project, ProjectRunState, RemoteSession, Script } from '@shared/types'
+import { statusInfo } from './DemandModal'
 import { Button, EmptyState, IconButton } from './ui'
 import { ScriptRow, type ScriptActions } from './ScriptsPanel'
 import { cn, fmtDuration, shortPath } from '../lib/utils'
@@ -40,8 +41,16 @@ export function ProjectsPanel({
   onAddScript,
   onOpenTerminal,
   onError,
-  scriptActions
+  scriptActions,
+  demands,
+  demandsBusy,
+  onOpenDemand,
+  onNewDemand
 }: {
+  demands: Demand[]
+  demandsBusy: DemandBusy[]
+  onOpenDemand: (d: Demand) => void
+  onNewDemand: (projectId: string) => void
   projects: Project[]
   /** Todos os scripts; o card mostra os que pertencem ao projeto */
   scripts: Script[]
@@ -101,6 +110,10 @@ export function ProjectsPanel({
             onOpenTerminal={onOpenTerminal}
             onError={onError}
             scriptActions={scriptActions}
+            demands={demands.filter((d) => d.projectId === p.id)}
+            demandsBusy={demandsBusy}
+            onOpenDemand={onOpenDemand}
+            onNewDemand={onNewDemand}
           />
         ))}
       </div>
@@ -162,8 +175,16 @@ function ProjectCard({
   onAddScript,
   onOpenTerminal,
   onError,
-  scriptActions
+  scriptActions,
+  demands,
+  demandsBusy,
+  onOpenDemand,
+  onNewDemand
 }: {
+  demands: Demand[]
+  demandsBusy: DemandBusy[]
+  onOpenDemand: (d: Demand) => void
+  onNewDemand: (projectId: string) => void
   p: Project
   branch: string | null | undefined
   session: RemoteSession | undefined
@@ -179,6 +200,10 @@ function ProjectCard({
   scriptActions: ScriptActions
 }) {
   const [showScripts, setShowScripts] = useState(true)
+  const [showDemands, setShowDemands] = useState(true)
+  const [showDone, setShowDone] = useState(false)
+  const openDemands = demands.filter((d) => d.status !== 'feita')
+  const doneCount = demands.length - openDemands.length
   /** Clique em andamento: mostra "Iniciando…/Parando…" até o estado mudar de verdade */
   const [busy, setBusy] = useState<null | 'start' | 'stop' | 'restart' | 'remote'>(null)
   const state = run?.state ?? 'stopped'
@@ -328,6 +353,55 @@ function ProjectCard({
       </div>
 
       {session && <RemotePanel session={session} projectPath={p.path} />}
+
+      {/* Demandas do projeto */}
+      <div className="mt-2.5 border-t border-line pt-2">
+        <div className="flex items-center justify-between">
+          <button
+            type="button"
+            onClick={() => setShowDemands(!showDemands)}
+            className="inline-flex cursor-pointer items-center gap-1 text-[11px] font-medium uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
+          >
+            {showDemands ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            Demandas ({openDemands.length})
+          </button>
+          <IconButton title="Nova demanda (card do Jira)" tone="accent" onClick={() => onNewDemand(p.id)} data-testid="new-demand">
+            <Plus size={13} />
+          </IconButton>
+        </div>
+        {showDemands && (
+          <div className="mt-1.5 space-y-1">
+            {(showDone ? demands : openDemands).map((d) => {
+              const st = statusInfo(d.status)
+              const b = demandsBusy.find((x) => x.demandId === d.id)
+              return (
+                <button
+                  key={d.id}
+                  type="button"
+                  data-testid="demand-row"
+                  onClick={() => onOpenDemand(d)}
+                  className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-lg border border-line bg-bg/60 px-2.5 py-1.5 text-left hover:border-violet/50"
+                >
+                  <span className="shrink-0 font-mono text-[11px] text-purple">{d.key}</span>
+                  <span className="min-w-0 flex-1 truncate text-xs text-zinc-300">{d.title || d.jira?.summary || ''}</span>
+                  {b && <Loader2 size={12} className="shrink-0 animate-spin text-purple" />}
+                  {d.hours ? <span className="shrink-0 text-[10px] text-zinc-500">{d.hours}h</span> : null}
+                  <span className={cn('shrink-0 rounded border px-1.5 text-[10px]', st.cls)}>{st.label}</span>
+                </button>
+              )
+            })}
+            {doneCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowDone(!showDone)}
+                className="cursor-pointer text-[11px] text-zinc-500 hover:text-zinc-300"
+              >
+                {showDone ? 'esconder feitas' : `mostrar ${doneCount} feita(s)`}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Scripts do projeto */}
       <div className="mt-2.5 border-t border-line pt-2">

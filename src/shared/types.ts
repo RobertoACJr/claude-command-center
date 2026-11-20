@@ -97,10 +97,10 @@ export interface GeneralPrefs {
   notifyScriptDone: boolean
 }
 
-export type NotificationKind = 'pedido' | 'permissao' | 'projeto' | 'script' | 'atualizacao' | 'vigia' | 'remote' | 'sistema'
+export type NotificationKind = 'pedido' | 'permissao' | 'projeto' | 'script' | 'atualizacao' | 'vigia' | 'remote' | 'demanda' | 'sistema'
 
 /** Para onde o clique na notificação leva */
-export type NotificationTarget = 'alerts' | 'terminals' | 'settings' | `tab:${string}`
+export type NotificationTarget = 'alerts' | 'terminals' | 'settings' | `tab:${string}` | `demand:${string}`
 
 export interface AppNotification {
   id: string
@@ -345,10 +345,72 @@ export interface RunRequest {
   projectId?: string
   /** Quem disparou (vai para o histórico). Padrão: app */
   origin?: RunOrigin
+  /** Claude sem ferramentas de escrita (análise) */
+  readOnly?: boolean
+  /** Pastas extras que o Claude pode ler (ex: projeto da API) */
+  addDirs?: string[]
+}
+
+// ---------------------------------------------------------------- Demandas
+
+/** Etapas de uma demanda (card do Jira) */
+export type DemandStatus = 'nova' | 'estimada' | 'desenhada' | 'dev' | 'teste' | 'beta' | 'feita'
+
+/** IA que estima e desenha (a implementação é sempre com o Claude) */
+export type DemandAi = 'claude' | 'codex' | 'gemini'
+
+export interface DemandJira {
+  summary: string
+  status: string
+  type: string
+  priority: string
+  description: string
+  comments: Array<{ author: string; at: string; body: string }>
+  attachments: string[]
+  url: string
+  fetchedAt: number
+}
+
+export interface Demand {
+  id: string
+  projectId: string
+  /** Número do card (ex: WEB-482); também é o nome da branch */
+  key: string
+  title: string
+  status: DemandStatus
+  jira: DemandJira | null
+  /** Texto do chat, anotações, o que mais ajudar */
+  context: string
+  /** Transcrição da call de apresentação (colada) */
+  transcript: string
+  /** Outros projetos que a IA pode LER para conferir (ex: a API) */
+  refProjectIds: string[]
+  ai: DemandAi
+  /** Análise da IA: entendimento, o que muda, dúvidas, riscos, estimativa */
+  analysis: string
+  /** Sugestão da IA em horas */
+  aiHours: number | null
+  /** Sua estimativa em horas */
+  hours: number | null
+  /** Desenho do que vai ser implementado (editável) */
+  design: string
+  designApproved: boolean
+  /** Conversa do Claude desta demanda */
+  sessionId: string | null
+  timeline: Array<{ at: number; text: string }>
+  createdAt: number
+  updatedAt: number
+}
+
+/** O que a IA está fazendo agora numa demanda */
+export interface DemandBusy {
+  demandId: string
+  what: 'jira' | 'analysis' | 'design' | 'dev' | 'branch'
+  runId?: string
 }
 
 /** Quem disparou uma execução */
-export type RunOrigin = 'app' | 'telegram' | 'pedido' | 'projeto'
+export type RunOrigin = 'app' | 'telegram' | 'pedido' | 'projeto' | 'demanda'
 
 /** Uma execução registrada no histórico (fica só no seu PC, na pasta do app) */
 export interface HistoryEntry {
@@ -449,6 +511,18 @@ export interface CommandCenterApi {
   /** keepRemote: ao voltar para Online, manter as sessões remotas abertas */
   setPresence(status: PresenceStatus, opts?: { keepRemote?: boolean }): Promise<AppConfig>
   onShowWindowRequest(cb: (what: NotificationTarget | 'go-online') => void): () => void
+
+  // Demandas
+  demands(): Promise<Demand[]>
+  onDemands(cb: (list: Demand[], busy: DemandBusy[]) => void): () => void
+  demandsBusy(): Promise<DemandBusy[]>
+  saveDemand(d: Demand): Promise<Demand[]>
+  deleteDemand(id: string): Promise<Demand[]>
+  demandFetchJira(id: string): Promise<OpResult>
+  demandAnalyze(id: string, what: 'analysis' | 'design'): Promise<OpResult>
+  demandImplement(id: string, message: string, fresh?: boolean): Promise<OpResult>
+  demandBranch(id: string, base: string): Promise<OpResult>
+  demandStop(id: string): Promise<void>
 
   // Histórico de execuções
   history(): Promise<HistoryEntry[]>

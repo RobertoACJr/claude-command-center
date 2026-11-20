@@ -187,6 +187,9 @@ export class RunManager {
     if (req.resumeSessionId && UUID_RE.test(req.resumeSessionId)) args.push('--resume', req.resumeSessionId)
     // Permissões: ferramenta de aprovação do app + regras/modo do projeto
     if (this.claudeArgsProvider) args.push(...this.claudeArgsProvider(runId, req))
+    for (const d of req.addDirs ?? []) args.push('--add-dir', d)
+    // Análise: só leitura, nada de editar arquivo ou rodar comando
+    if (req.readOnly) args.push('--disallowedTools', 'Edit,Write,MultiEdit,NotebookEdit,Bash')
 
     // A aprovação pode esperar você responder: dá tempo de sobra para a ferramenta MCP
     const child = spawnClaude(args, req.cwd, { stdin: true, env: { MCP_TOOL_TIMEOUT: '660000' } })

@@ -100,10 +100,16 @@ O usuário não conseguiu configurar Git, Jira, Google Chat nem Telegram sozinho
 
 ## Roteiro (próximas fases)
 
-### Fase 9: Demandas (em definição)
-Um card por demanda (ex: card do Jira) que junta o contexto (descrição, comentários, transcrições, prints),
-gera o roteiro de desenvolvimento com IA, acompanha o andamento e liga com branch, PR, scripts e execuções.
-Ver a conversa de definição antes de implementar.
+### Fase 9: Demandas ✅ (v0.10.0)
+- [x] Demanda dentro do projeto, pelo número do card (que também é o nome da branch).
+- [x] Puxa do Jira (título, descrição, comentários, anexos); contexto do chat e transcrição colados.
+- [x] Análise só leitura (Claude, ChatGPT ou Gemini): entendimento, o que muda, dúvidas para o refinamento, riscos e
+  estimativa em horas/dias; você registra a sua.
+- [x] Desenho da solução (editável, com aprovação) consultando projetos relacionados só para leitura (ex: a API).
+- [x] Implementação com o Claude numa conversa própria por demanda (app, terminal da demanda ou Telegram `/demanda`).
+- [x] Branch com o nome do card (cria ou troca), etapas, linha do tempo, paleta e avisos no sino.
+- [ ] Próximo: ligar pedidos de deploy do Vigia à demanda pelo número do card (etapa Beta automática).
+- [ ] Próximo: importar a transcrição direto do e-mail (Gmail).
 
 ### Fase 10: Git no card do projeto
 - [ ] Arquivos alterados, commits à frente/atrás, último commit.

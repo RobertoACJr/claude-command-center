@@ -12,7 +12,9 @@ import type {
   ScriptType,
   UpdateState,
   WatcherState,
-  NotificationTarget
+  NotificationTarget,
+  Demand,
+  DemandBusy
 } from '@shared/types'
 import { Header } from './components/Header'
 import { ProjectsPanel } from './components/ProjectsPanel'
@@ -34,9 +36,11 @@ import { ConfirmModal } from './components/ui'
 import { ApprovalModal } from './components/ApprovalModal'
 import { HistoryModal } from './components/HistoryModal'
 import { CommandPalette, type PaletteItem } from './components/CommandPalette'
+import { DemandModal, newDemand } from './components/DemandModal'
 import {
   Bell,
   Bot,
+  ClipboardList,
   Eye,
   FolderPlus,
   Gem,
@@ -95,6 +99,18 @@ export default function App() {
   }
   const [goOnlineOpen, setGoOnlineOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [demands, setDemands] = useState<Demand[]>([])
+  const [demandsBusy, setDemandsBusy] = useState<DemandBusy[]>([])
+  /** Demanda aberta: id de uma existente, ou o rascunho de uma nova */
+  const [demandOpen, setDemandOpen] = useState<{ id: string } | { draft: Demand } | null>(null)
+  useEffect(() => {
+    window.api.demands().then(setDemands)
+    window.api.demandsBusy().then(setDemandsBusy)
+    return window.api.onDemands((list, busy) => {
+      setDemands(list)
+      setDemandsBusy(busy)
+    })
+  }, [])
   const [paletteOpen, setPaletteOpen] = useState(false)
   // Ctrl+K (ou Cmd+K) abre a paleta de comandos de qualquer lugar
   useEffect(() => {
@@ -169,6 +185,7 @@ export default function App() {
       if (t === 'terminals') return activate('system')
       if (t.startsWith('tab:')) return activate(t.slice(4))
       if (t === 'settings') return openSettings('general')
+      if (t.startsWith('demand:')) return setDemandOpen({ id: t.slice('demand:'.length) })
       if (t === 'alerts') document.querySelector('[data-testid="alerts-bar"]')?.scrollIntoView({ behavior: 'smooth' })
     },
     [activate]
@@ -547,6 +564,24 @@ export default function App() {
       keywords: s.content.slice(0, 200),
       run: () => runScript(s)
     })),
+    ...demands
+      .filter((d) => d.status !== 'feita')
+      .map((d) => ({
+        id: `demand:${d.id}`,
+        group: 'Demandas',
+        label: `Demanda ${d.key}: ${d.title || d.jira?.summary || ''}`,
+        hint: projectName(d.projectId),
+        icon: <ClipboardList size={14} />,
+        run: () => setDemandOpen({ id: d.id })
+      })),
+    ...config.projects.map((p) => ({
+      id: `new-demand:${p.id}`,
+      group: 'Demandas',
+      label: `Nova demanda em: ${p.name}`,
+      icon: <ClipboardList size={14} />,
+      keywords: 'card jira',
+      run: () => setDemandOpen({ draft: newDemand(p.id) })
+    })),
     ...config.projects.flatMap((p): PaletteItem[] => {
       const st = runStates[p.id]?.state
       const running = st === 'running' || st === 'starting'
@@ -737,6 +772,10 @@ export default function App() {
           onOpenTerminal={openProjectTerminal}
           onError={showToast}
           scriptActions={scriptActions}
+          demands={demands}
+          demandsBusy={demandsBusy}
+          onOpenDemand={(d) => setDemandOpen({ id: d.id })}
+          onNewDemand={(projectId) => setDemandOpen({ draft: newDemand(projectId) })}
         />
         <ScriptsPanel
           scripts={globalScripts}
@@ -807,6 +846,30 @@ export default function App() {
         </div>
       )}
 
+      {(() => {
+        const current = demandOpen && ('id' in demandOpen ? demands.find((x) => x.id === demandOpen.id) : demandOpen.draft)
+        return (
+          <DemandModal
+            open={!!current}
+            demand={current ?? null}
+            isNew={!!demandOpen && 'draft' in demandOpen}
+            busy={current ? demandsBusy.find((b) => b.demandId === current.id) : undefined}
+            projects={config.projects}
+            currentBranch={current ? branches[current.projectId] : undefined}
+            onClose={() => {
+              setDemandOpen(null)
+              refreshBranches(config.projects)
+            }}
+            onCreated={(d) => setDemandOpen({ id: d.id })}
+            onDeleted={() => setDemandOpen(null)}
+            onOpenTerminal={(d) => {
+              setDemandOpen(null)
+              ensureTab(`demand:${d.id}`, `${d.key}`)
+              activate(`demand:${d.id}`)
+            }}
+          />
+        )
+      })()}
       <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} projects={config.projects} />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={paletteItems} />
 

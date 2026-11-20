@@ -27,13 +27,35 @@ const home = mkdtempSync(join(tmpdir(), 'ccc-smoke-'))
 const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, '.config'), APPDATA: join(home, 'AppData') }
 // Claude falso para o Remote Control: imprime um link de sessão bem comprido (testa a quebra no card) e fica esperando
 const LONG_URL = 'https://claude.ai/code/session_' + 'abc123XYZ'.repeat(14)
+// O Claude falso é um script Node (funciona igual no Linux e no Windows):
+// remote-control → imprime o link e espera; -p → responde em stream-json como o Claude de verdade
+const fakeJs = join(home, 'fake-claude.js')
+writeFileSync(
+  fakeJs,
+  `const a = process.argv.slice(2)
+if (a[0] === 'remote-control') {
+  console.log('Remote Control ativo: ${LONG_URL}')
+  setInterval(() => {}, 1e9)
+} else {
+  process.stdin.on('data', () => {})
+  const mode = a.includes('--disallowedTools') ? 'leitura' : 'escrita'
+  setTimeout(() => {
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: '11111111-2222-3333-4444-555555555555' }))
+    const text = '<<<RESULTADO\\n## Entendimento\\nTeste smoke modo ' + mode + '.\\nESTIMATIVA_HORAS: 6\\nRESULTADO>>>'
+    console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text }] } }))
+    console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'ok', total_cost_usd: 0 }))
+    process.exit(0)
+  }, 400)
+}
+`
+)
 if (process.platform === 'win32') {
   const f = join(home, 'fake-claude.cmd')
-  writeFileSync(f, `@echo off\r\nif "%1"=="remote-control" (\r\n  echo Remote Control ativo: ${LONG_URL}\r\n  ping -n 300 127.0.0.1 >nul\r\n)\r\n`)
+  writeFileSync(f, `@node "%~dp0fake-claude.js" %*\r\n`)
   env.CCC_CLAUDE_BIN = f
 } else {
   const f = join(home, 'fake-claude')
-  writeFileSync(f, `#!/bin/sh\nif [ "$1" = "remote-control" ]; then echo "Remote Control ativo: ${LONG_URL}"; exec sleep 300; fi\n`)
+  writeFileSync(f, `#!/bin/sh\nexec node "${fakeJs}" "$@"\n`)
   chmodSync(f, 0o755)
   env.CCC_CLAUDE_BIN = f
 }
@@ -252,6 +274,40 @@ try {
   })()`)
   if (picker !== 'ok') fail('Seletor de modo: ' + picker)
   else console.log('✓ Seletor de modo único com as opções')
+
+  // 4g) Demanda: criar pelo card do projeto, colar contexto e analisar com o Claude (falso) em modo só leitura
+  const setVal = (sel, text) =>
+    evaluate(`(() => {
+      const el = document.querySelector(${JSON.stringify(sel)})
+      if (!el) return false
+      const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+      Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, ${JSON.stringify(text)})
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+      return true
+    })()`)
+  const clickSel = (sel) => evaluate(`(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return false; el.click(); return true })()`)
+  if (!(await clickSel('[data-testid="new-demand"]'))) fail('Botão de nova demanda não encontrado no card do projeto')
+  await sleep(400)
+  await setVal('[data-testid="demand-key"]', 'web-482')
+  await sleep(200)
+  await clickSel('[data-testid="demand-create"]')
+  await sleep(1500)
+  if (!(await setVal('[data-testid="demand-context"]', 'Filtro de pedidos por data, pedido pelo chat.'))) fail('Demanda não abriu depois de criar')
+  await sleep(900)
+  await clickSel('[data-testid="demand-tab-analise"]')
+  await sleep(300)
+  await clickSel('[data-testid="demand-analyze"]')
+  await sleep(5000)
+  const analysis = await evaluate(`document.querySelector('[data-testid="demand-analysis"]')?.textContent ?? ''`)
+  const hoursPh = await evaluate(`document.querySelector('[data-testid="demand-hours"]')?.placeholder ?? ''`)
+  if (!analysis.includes('Teste smoke modo leitura')) fail('Análise da demanda não chegou (ou não foi só leitura): ' + analysis.slice(0, 200))
+  else if (hoursPh !== '6') fail('Sugestão de horas da IA não apareceu: ' + hoursPh)
+  else console.log('✓ Demanda criada, analisada em modo só leitura, com sugestão de 6h')
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
+  await sleep(500)
+  const row = await evaluate(`[...document.querySelectorAll('[data-testid="demand-row"]')].map(r => r.textContent).join(' | ')`)
+  if (!row.includes('WEB-482') || !row.includes('Estimada')) fail('Demanda não aparece no card do projeto como Estimada: ' + row)
+  else console.log('✓ Demanda aparece no card do projeto (WEB-482 · Estimada)')
 
   // 4f) Paleta de comandos (Ctrl+K) → Histórico com as execuções de antes
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }))`)
