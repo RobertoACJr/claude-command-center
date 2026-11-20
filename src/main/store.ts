@@ -30,7 +30,7 @@ function defaults(): AppConfig {
       gchat: { enabled: false, mode: 'official', clientId: '', callbackPort: 8765, readTools: '', sendTool: '' },
       lastApplied: {}
     },
-    telegram: { chatId: '', interactive: true },
+    telegram: { chatId: '', interactive: true, forwardNotifications: true },
     watcher: {
       enabled: false,
       autoWhenOff: true,
@@ -110,7 +110,11 @@ function normalize(raw: unknown): AppConfig {
         ? r.integrations.lastApplied
         : {}
     },
-    telegram: { chatId: str(r.telegram?.chatId).trim(), interactive: bool(r.telegram?.interactive, true) },
+    telegram: {
+      chatId: str(r.telegram?.chatId).trim(),
+      interactive: bool(r.telegram?.interactive, true),
+      forwardNotifications: bool(r.telegram?.forwardNotifications, true)
+    },
     watcher: {
       enabled: bool(w?.enabled, d.watcher.enabled),
       autoWhenOff: bool(w?.autoWhenOff, d.watcher.autoWhenOff),

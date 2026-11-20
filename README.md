@@ -195,8 +195,20 @@ Engrenagem no header → **Configurações & Integrações**.
   ou rodar sozinho. **Trava fixa:** ambientes que parecem produção (prod, produção, prd, live, main, master)
   nunca rodam sozinhos nem pelo Telegram. E o script só roda se todas as variáveis estiverem preenchidas.
 - **Telegram com botões e comandos**: ✅ Aprovar / 🗑 Descartar / ▶ Aprovar e rodar; o app edita a mensagem com o
-  desfecho e avisa quando o script termina. Comandos: `/status`, `/pendentes`, `/ausente`, `/online`, `/vigia`.
-  Só o Chat ID configurado é obedecido. O bot usa long polling (se outro programa já lê o bot, ele pausa e avisa).
+  desfecho e avisa quando o script termina. Só o Chat ID configurado é obedecido. O bot usa long polling
+  (se outro programa já lê o bot, ele pausa e avisa).
+- **O celular é o Telegram** (mande `/ajuda` no bot):
+  - `/projetos`: estado de cada projeto com botões ▶/■, 📡 Remote (o link chega no chat), 📜 log e 🤖 Claude ali.
+  - `/rodar`: scripts e ações globais; escolhe o projeto, pergunta as variáveis no chat e confirma antes de rodar.
+    O resultado (com as últimas linhas) chega quando termina.
+  - `/claude`: escolhe o projeto; depois, qualquer texto vira ordem para o Claude, com conversa contínua (`/novo`
+    começa outra). Pedidos de permissão chegam com botões. `/parar` interrompe.
+  - `/log [nome]`, `/historico`, `/status`, `/pendentes`, `/ausente`, `/online`, `/vigia`.
+  - No modo Ausente, os avisos do sino (projeto caiu, script terminou, Vigia, atualização) também vão para lá.
+- **Histórico** (ícone de relógio no topo): as últimas 300 execuções com quem disparou (app, Telegram, pedido),
+  resultado, duração e a saída completa. Fica só no PC (`history.json` + `history/` na pasta de dados do app).
+- **Paleta de comandos** (`Ctrl+K`): rodar qualquer script, executar/parar projeto, ligar Remote, falar com o Claude
+  num projeto, trocar o modo do console, abrir configurações, histórico e notificações, tudo pelo teclado.
 
 ## Estrutura
 
@@ -212,6 +224,8 @@ src/
   main/secrets.ts        cofre de tokens (safeStorage)
   main/mcp.ts            claude mcp add/get/login para GitHub, Jira, Google Chat
   main/telegram.ts       sendMessage / getUpdates
+  main/tgcontrol.ts      comandos do Telegram (/projetos, /rodar, /claude, /log, /historico)
+  main/history.ts        histórico de execuções (local)
   main/watcher.ts        ciclo do Modo Vigia (só leitura) + alertas
   main/projects.ts       execução dos projetos (▶/■), monitor de porta
   main/tray.ts           ícone na bandeja + abrir com o sistema
@@ -234,4 +248,5 @@ src/
 - [x] Fase 5: projetos executáveis, terminais em abas, scripts de projeto + ações globais, Remote Control por projeto, modo Ausente, bandeja
 - [x] Fase 6: Vigia 2.0 (resumo melhor, respostas cadastradas, regras automáticas, Telegram com botões) + Gemini
 - [x] Fase 7 (parte 1): instaladores no GitHub Actions + Releases
-- [ ] Fase 7 (parte 2): atualização automática
+- [x] Fase 7 (parte 2): atualização automática + Release automática ao subir a versão
+- [x] Fase 8: central de notificações, Telegram completo, histórico, paleta de comandos

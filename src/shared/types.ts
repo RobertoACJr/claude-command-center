@@ -146,6 +146,8 @@ export interface TelegramConfig {
   chatId: string
   /** Botões (Aprovar/Descartar/Rodar) e comandos (/status, /ausente…) no Telegram */
   interactive: boolean
+  /** No modo Ausente, manda também os avisos do sino (projeto caiu, script terminou, Vigia, atualização) */
+  forwardNotifications: boolean
 }
 
 export interface WatcherConfig {
@@ -341,12 +343,43 @@ export interface RunRequest {
   interactive?: boolean
   /** Projeto da execução (para as permissões do Claude); vazio = Global */
   projectId?: string
+  /** Quem disparou (vai para o histórico). Padrão: app */
+  origin?: RunOrigin
+}
+
+/** Quem disparou uma execução */
+export type RunOrigin = 'app' | 'telegram' | 'pedido' | 'projeto'
+
+/** Uma execução registrada no histórico (fica só no seu PC, na pasta do app) */
+export interface HistoryEntry {
+  id: string
+  tab: TabKey
+  title: string
+  kind: ScriptType
+  cwd: string
+  projectId?: string
+  origin: RunOrigin
+  startedAt: number
+  endedAt?: number
+  status: 'running' | 'ok' | 'error' | 'stopped'
+  code: number | null
+  lineCount: number
 }
 
 export type RunLineKind = 'stdout' | 'stderr' | 'claude' | 'tool' | 'info'
 
 export type RunEvent =
-  | { runId: string; tab: TabKey; type: 'start'; title: string; kind: ScriptType; startedAt: number }
+  | {
+      runId: string
+      tab: TabKey
+      type: 'start'
+      title: string
+      kind: ScriptType
+      startedAt: number
+      cwd?: string
+      projectId?: string
+      origin?: RunOrigin
+    }
   | { runId: string; tab: TabKey; type: 'lines'; lines: Array<{ kind: RunLineKind; text: string }> }
   | { runId: string; tab: TabKey; type: 'session'; sessionId: string }
   | { runId: string; tab: TabKey; type: 'exit'; code: number | null; signal: string | null; killed: boolean }
@@ -416,6 +449,12 @@ export interface CommandCenterApi {
   /** keepRemote: ao voltar para Online, manter as sessões remotas abertas */
   setPresence(status: PresenceStatus, opts?: { keepRemote?: boolean }): Promise<AppConfig>
   onShowWindowRequest(cb: (what: NotificationTarget | 'go-online') => void): () => void
+
+  // Histórico de execuções
+  history(): Promise<HistoryEntry[]>
+  historyLog(id: string): Promise<string[]>
+  clearHistory(): Promise<void>
+  onHistory(cb: (entries: HistoryEntry[]) => void): () => void
 
   // Central de notificações
   notifications(): Promise<AppNotification[]>

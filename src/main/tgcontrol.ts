@@ -1,0 +1,495 @@
+import { randomBytes } from 'crypto'
+import { homedir } from 'os'
+import type { HistoryEntry, Project, RunEvent, Script } from '../shared/types'
+import { extractUserVariables, missingProjectKeys, projectValues } from '../shared/vars'
+import type { History } from './history'
+import type { ProjectProcesses } from './projects'
+import type { RemoteManager } from './remote'
+import type { RunManager } from './runner'
+import { store } from './store'
+import { call, escapeHtml, sendTelegramMessage, type InlineButton } from './telegram'
+
+type Buttons = InlineButton[][]
+type Action = () => Promise<string | void>
+
+/** Quanto do texto cabe numa mensagem do Telegram (limite real: 4096) */
+const MAX_MSG = 3800
+
+const ORIGIN: Record<string, string> = { app: 'app', telegram: 'Telegram', pedido: 'pedido', projeto: 'projeto' }
+const STATUS_ICON: Record<HistoryEntry['status'], string> = { running: '⏳', ok: '✅', error: '❌', stopped: '⏹' }
+
+const fmt = (t: number) =>
+  new Date(t).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+
+const dur = (e: HistoryEntry) => {
+  if (!e.endedAt) return ''
+  const s = Math.round((e.endedAt - e.startedAt) / 1000)
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}min${String(s % 60).padStart(2, '0')}`
+}
+
+/** Corta do começo (mantém o final, que é o que interessa num log) */
+const tailText = (lines: string[], max = MAX_MSG) => {
+  let out = lines.join('\n')
+  if (out.length > max) out = '…' + out.slice(out.length - max)
+  return out
+}
+
+const norm = (s: string) =>
+  s
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+
+/**
+ * Controle completo pelo Telegram: projetos, scripts, Claude, logs e histórico.
+ * Os botões usam chaves curtas (o Telegram só aceita 64 bytes em callback_data) que apontam para ações guardadas aqui.
+ */
+export class TelegramControl {
+  private actions = new Map<string, Action>()
+  /** Esperando o usuário digitar algo (valor de variável de script) */
+  private waiting: { label: string; resolve: (text: string) => void } | null = null
+  /** Projeto onde o texto livre vira ordem para o Claude ('' = pasta pessoal) */
+  private claudeAt: string | null = null
+  /** Conversa contínua com o Claude por projeto */
+  private sessions = new Map<string, string>()
+  /** Execuções disparadas pelo Telegram (para responder quando terminarem) */
+  private runs = new Map<string, { kind: 'claude' | 'script'; title: string; projectKey: string; lines: string[] }>()
+  /** Projetos cujo link do Remote Control foi pedido pelo Telegram */
+  private remoteAsked = new Set<string>()
+
+  constructor(
+    private d: {
+      runs: RunManager
+      projects: ProjectProcesses
+      remote: RemoteManager
+      history: History
+      status: () => Promise<string>
+      log: (text: string, kind?: 'info' | 'error') => void
+    }
+  ) {}
+
+  // ------------------------------------------------------------ infraestrutura
+
+  private chat(): string {
+    return store.get().telegram.chatId
+  }
+
+  private say(html: string, buttons?: Buttons) {
+    return sendTelegramMessage(this.chat(), html, buttons)
+  }
+
+  private async edit(messageId: number, html: string, buttons?: Buttons) {
+    await call('editMessageText', {
+      chat_id: this.chat(),
+      message_id: messageId,
+      text: html,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+      reply_markup: { inline_keyboard: buttons ?? [] }
+    })
+  }
+
+  /** Cria um botão que dispara a ação (guardada aqui por uma chave curta) */
+  private btn(text: string, fn: Action): InlineButton {
+    const key = randomBytes(6).toString('base64url')
+    this.actions.set(key, fn)
+    // Não deixa o mapa crescer para sempre
+    if (this.actions.size > 600) this.actions.delete(this.actions.keys().next().value!)
+    return { text, callback_data: `k:${key}` }
+  }
+
+  /** Clique num botão criado por btn(). Devolve o texto do aviso rápido */
+  async callback(key: string): Promise<string> {
+    const fn = this.actions.get(key)
+    if (!fn) return 'Esse botão expirou. Mande o comando de novo.'
+    return (await fn()) || 'Ok.'
+  }
+
+  isTelegramRun(runId: string): boolean {
+    return this.runs.has(runId)
+  }
+
+  /** O Remote deste projeto foi ligado pelo Telegram (então o link vai para lá) */
+  takeRemoteRequest(projectId: string): boolean {
+    return this.remoteAsked.delete(projectId)
+  }
+
+  private projectsList(): Project[] {
+    return store.get().projects
+  }
+
+  private findProject(q: string): Project | undefined {
+    const n = norm(q.trim())
+    if (!n) return undefined
+    const ps = this.projectsList()
+    return ps.find((p) => norm(p.name) === n) ?? ps.find((p) => norm(p.name).includes(n))
+  }
+
+  private ask(label: string): Promise<string> {
+    return new Promise((resolve) => {
+      this.waiting = { label, resolve }
+    })
+  }
+
+  // ------------------------------------------------------------ comandos
+
+  readonly help = [
+    '<b>Comandos</b>',
+    '/projetos · executar, parar, Remote Control e log de cada projeto',
+    '/rodar · scripts e ações globais (pergunta as variáveis aqui)',
+    '/claude · escolhe o projeto; depois é só mandar texto que vira ordem para o Claude',
+    '/novo · começa uma conversa nova com o Claude',
+    '/parar · interrompe o que o Telegram mandou rodar',
+    '/log [nome] · últimas linhas de um projeto ou script',
+    '/historico · últimas execuções',
+    '/status · como está o PC',
+    '/pendentes · pedidos aguardando você',
+    '/ausente · /online · /vigia'
+  ].join('\n')
+
+  /** Devolve true se o comando é deste módulo */
+  async command(cmd: string, args: string): Promise<boolean> {
+    // Outro comando no meio de uma pergunta: abandona a pergunta
+    if (cmd !== 'cancelar') this.waiting = null
+    switch (cmd) {
+      case 'projetos':
+      case 'p':
+        await this.sendProjects()
+        return true
+      case 'rodar':
+      case 'r':
+        await this.sendScripts(args)
+        return true
+      case 'claude':
+      case 'c':
+        await this.chooseClaude(args)
+        return true
+      case 'novo':
+        this.sessions.clear()
+        await this.say('🆕 Próxima mensagem começa uma conversa nova com o Claude.')
+        return true
+      case 'parar':
+        await this.stopMine()
+        return true
+      case 'log':
+        await this.sendLog(args)
+        return true
+      case 'historico':
+      case 'histórico':
+      case 'h':
+        await this.sendHistory()
+        return true
+      case 'cancelar':
+        this.waiting = null
+        await this.say('Cancelado.')
+        return true
+      case 'ajuda':
+      case 'help':
+      case 'start':
+        await this.say(this.help)
+        return true
+    }
+    return false
+  }
+
+  /** Texto livre: responde a uma pergunta pendente ou vira ordem para o Claude */
+  async text(t: string): Promise<void> {
+    if (this.waiting) {
+      const w = this.waiting
+      this.waiting = null
+      w.resolve(t)
+      return
+    }
+    if (this.claudeAt === null) {
+      await this.chooseClaude(t)
+      return
+    }
+    await this.runClaude(this.claudeAt, t)
+  }
+
+  // ------------------------------------------------------------ /projetos
+
+  private projectsView(): { html: string; buttons: Buttons } {
+    const ps = this.projectsList()
+    if (!ps.length) return { html: 'Nenhum projeto cadastrado no app.', buttons: [] }
+    const states = new Map(this.d.projects.list().map((s) => [s.projectId, s]))
+    const remotes = new Map(this.d.remote.list().map((s) => [s.projectId, s]))
+    const lines: string[] = ['<b>Projetos</b>']
+    const buttons: Buttons = []
+    for (const p of ps.slice(0, 15)) {
+      const st = states.get(p.id)?.state ?? 'stopped'
+      const rc = remotes.get(p.id)
+      const running = st === 'running' || st === 'starting'
+      const label = { running: '🟢 rodando', starting: '🟡 iniciando', crashed: '🔴 caiu', external: '🟠 rodando fora do app', stopped: '⚪ parado' }[st]
+      lines.push(
+        `\n<b>${escapeHtml(p.name)}</b> · ${label}` +
+          (rc ? ` · 📡 ${rc.state === 'active' ? 'Remote ativo' : rc.state === 'needs-setup' ? 'Remote precisa de configuração no PC' : 'Remote ' + rc.state}` : '')
+      )
+      if (rc?.url) lines.push(escapeHtml(rc.url))
+      const row: InlineButton[] = []
+      if (p.runCommand) {
+        row.push(
+          running
+            ? this.btn(`■ ${p.name}`.slice(0, 30), async () => {
+                await this.d.projects.stop(p.id)
+                return `Parando ${p.name}…`
+              })
+            : this.btn(`▶ ${p.name}`.slice(0, 30), async () => {
+                const r = await this.d.projects.start(p.id)
+                return r.message
+              })
+        )
+      }
+      row.push(
+        this.btn(rc ? '📡 Desligar' : '📡 Remote', async () => {
+          if (!rc) this.remoteAsked.add(p.id)
+          this.d.remote.setManual(p.id, !rc)
+          return rc ? 'Remote desligado.' : 'Ligando o Remote… o link chega aqui quando ficar pronto.'
+        }),
+        this.btn('📜 Log', async () => {
+          await this.sendLogFor((e) => e.tab === `project:${p.id}`, p.name)
+          return ''
+        }),
+        this.btn('🤖', async () => {
+          this.claudeAt = p.id
+          await this.say(`🤖 Agora o texto que você mandar vira ordem para o Claude em <b>${escapeHtml(p.name)}</b>.`)
+          return 'Claude neste projeto.'
+        })
+      )
+      buttons.push(row)
+    }
+    return { html: lines.join('\n'), buttons }
+  }
+
+  private async sendProjects(): Promise<void> {
+    const v = this.projectsView()
+    const r = await this.say(v.html, v.buttons)
+    // Depois de um clique, atualiza a própria mensagem com o estado novo
+    if (r.messageId) {
+      const id = r.messageId
+      const refresh = this.btn('🔄 Atualizar', async () => {
+        const nv = this.projectsView()
+        await this.edit(id, nv.html, [...nv.buttons, [refresh]])
+        return 'Atualizado.'
+      })
+      await this.edit(id, v.html, [...v.buttons, [refresh]])
+    }
+  }
+
+  // ------------------------------------------------------------ /rodar
+
+  private async sendScripts(filter: string): Promise<void> {
+    const cfg = store.get()
+    let scripts = cfg.scripts
+    if (filter.trim()) scripts = scripts.filter((s) => norm(s.name).includes(norm(filter)))
+    if (!scripts.length) {
+      await this.say(filter ? 'Nenhum script com esse nome.' : 'Nenhum script cadastrado no app.')
+      return
+    }
+    if (scripts.length === 1 && filter.trim()) return void (await this.prepareScript(scripts[0]))
+    const buttons: Buttons = []
+    const list = scripts.slice(0, 40)
+    for (let i = 0; i < list.length; i += 2) {
+      buttons.push(
+        list.slice(i, i + 2).map((s) => {
+          const where = s.target.kind === 'project' ? cfg.projects.find((p) => p.id === (s.target as { projectId: string }).projectId)?.name : ''
+          return this.btn(`${where ? where + ' · ' : ''}${s.name}`.slice(0, 40), async () => {
+            void this.prepareScript(s)
+            return s.name
+          })
+        })
+      )
+    }
+    await this.say('<b>Qual script?</b>', buttons)
+  }
+
+  /** Escolhe projeto (se precisar), pergunta as variáveis e confirma antes de rodar */
+  private async prepareScript(s: Script, projectId?: string): Promise<void> {
+    const cfg = store.get()
+    if (s.target.kind === 'ask' && !projectId) {
+      if (!cfg.projects.length) return void (await this.say('Esse script pergunta o projeto, mas não há projetos cadastrados.'))
+      const buttons = cfg.projects.slice(0, 30).map((p) => [
+        this.btn(p.name, async () => {
+          void this.prepareScript(s, p.id)
+          return p.name
+        })
+      ])
+      await this.say(`<b>${escapeHtml(s.name)}</b>: em qual projeto?`, buttons)
+      return
+    }
+    const pid = s.target.kind === 'project' ? s.target.projectId : projectId
+    const project = cfg.projects.find((p) => p.id === pid)
+    if (project) {
+      const mk = missingProjectKeys(s.content, project)
+      if (mk.length) {
+        await this.say(`⚠️ O projeto ${escapeHtml(project.name)} não define ${mk.map((k) => 'projeto.' + k).join(', ')}. Ajuste no app.`)
+        return
+      }
+    }
+    const values: Record<string, string> = project ? projectValues(project) : {}
+    for (const v of extractUserVariables(s.content)) {
+      await this.say(`✏️ Valor de <b>${escapeHtml(v)}</b>? (ou /cancelar)`)
+      const answer = await this.ask(v)
+      values[v] = answer.trim()
+    }
+    const cwd = project?.path ?? (s.target.kind === 'custom' ? s.target.path : homedir())
+    const title = project && s.target.kind === 'ask' ? `${s.name} · ${project.name}` : s.name
+    const summary = Object.entries(values)
+      .filter(([k]) => !k.startsWith('projeto.'))
+      .map(([k, v]) => `${escapeHtml(k)} = <code>${escapeHtml(v)}</code>`)
+      .join('\n')
+    await this.say(`▶ Rodar <b>${escapeHtml(title)}</b>?${summary ? '\n\n' + summary : ''}`, [
+      [
+        this.btn('✅ Rodar', async () => {
+          const runId = this.d.runs.start({
+            kind: s.type,
+            tab: `script:${s.id}`,
+            title,
+            content: s.content,
+            variables: values,
+            cwd,
+            projectId: pid,
+            origin: 'telegram'
+          })
+          this.runs.set(runId, { kind: 'script', title, projectKey: pid ?? '', lines: [] })
+          return `Rodando ${s.name}…`
+        }),
+        this.btn('Cancelar', async () => 'Cancelado.')
+      ]
+    ])
+  }
+
+  // ------------------------------------------------------------ Claude
+
+  private async chooseClaude(text: string): Promise<void> {
+    const cfg = store.get()
+    const named = text.trim() ? this.findProject(text.split(/\s+/)[0]) : undefined
+    // "/claude NomeDoProjeto" só seleciona; "/claude NomeDoProjeto faça X" seleciona e manda
+    if (named) {
+      this.claudeAt = named.id
+      const rest = text.trim().split(/\s+/).slice(1).join(' ')
+      if (rest) return this.runClaude(named.id, rest)
+      await this.say(`🤖 Claude em <b>${escapeHtml(named.name)}</b>. Mande o que ele deve fazer.`)
+      return
+    }
+    const pending = text.trim()
+    const buttons = [
+      ...cfg.projects.slice(0, 30).map((p) => [
+        this.btn(p.name, async () => {
+          this.claudeAt = p.id
+          if (pending) void this.runClaude(p.id, pending)
+          else await this.say(`🤖 Claude em <b>${escapeHtml(p.name)}</b>. Mande o que ele deve fazer.`)
+          return p.name
+        })
+      ]),
+      [
+        this.btn('🏠 Sem projeto (pasta pessoal)', async () => {
+          this.claudeAt = ''
+          if (pending) void this.runClaude('', pending)
+          else await this.say('🤖 Claude na pasta pessoal. Mande o que ele deve fazer.')
+          return 'Pasta pessoal'
+        })
+      ]
+    ]
+    await this.say(pending ? '🤖 Em qual projeto o Claude deve fazer isso?' : '🤖 Em qual projeto?', buttons)
+  }
+
+  private async runClaude(projectId: string, prompt: string): Promise<void> {
+    const p = this.projectsList().find((x) => x.id === projectId)
+    if (projectId && !p) {
+      this.claudeAt = null
+      return this.chooseClaude(prompt)
+    }
+    const busy = [...this.runs.entries()].find(([id, r]) => r.kind === 'claude' && this.d.runs.isRunning(id))
+    if (busy) return void (await this.say('⏳ O Claude ainda está trabalhando no pedido anterior. Use /parar para interromper.'))
+    const name = p?.name ?? 'pasta pessoal'
+    const runId = this.d.runs.start({
+      kind: 'claude',
+      tab: 'claude',
+      title: `Telegram · ${name}`,
+      content: prompt,
+      cwd: p?.path ?? homedir(),
+      projectId: p?.id,
+      resumeSessionId: this.sessions.get(projectId),
+      origin: 'telegram'
+    })
+    this.runs.set(runId, { kind: 'claude', title: name, projectKey: projectId, lines: [] })
+    await call('sendChatAction', { chat_id: this.chat(), action: 'typing' })
+    await this.say(
+      `🤖 Mandei para o Claude em <b>${escapeHtml(name)}</b>.` +
+        (this.sessions.has(projectId) ? ' (continuando a conversa; /novo começa outra)' : '') +
+        '\nSe ele pedir permissão, os botões chegam aqui.'
+    )
+  }
+
+  private async stopMine(): Promise<void> {
+    const mine = [...this.runs.keys()].filter((id) => this.d.runs.isRunning(id))
+    if (!mine.length) return void (await this.say('Nada rodando pelo Telegram.'))
+    for (const id of mine) await this.d.runs.stop(id)
+    await this.say(`⏹ Interrompi ${mine.length} execução(ões).`)
+  }
+
+  // ------------------------------------------------------------ log / histórico
+
+  private async sendLogFor(match: (e: HistoryEntry) => boolean, name: string): Promise<void> {
+    const e = this.d.history.latest(match)
+    if (!e) return void (await this.say(`Nenhuma execução de ${escapeHtml(name)} no histórico.`))
+    const lines = this.d.history.log(e.id).slice(-40)
+    await this.say(
+      `📜 <b>${escapeHtml(e.title)}</b> · ${STATUS_ICON[e.status]} ${fmt(e.startedAt)}\n<pre>${escapeHtml(tailText(lines, 3400)) || '(sem saída)'}</pre>`
+    )
+  }
+
+  private async sendLog(q: string): Promise<void> {
+    if (q.trim()) {
+      const p = this.findProject(q)
+      if (p) return this.sendLogFor((e) => e.tab === `project:${p.id}`, p.name)
+      const n = norm(q)
+      return this.sendLogFor((e) => norm(e.title).includes(n), q)
+    }
+    return this.sendHistory()
+  }
+
+  private async sendHistory(): Promise<void> {
+    const list = this.d.history.list().slice(0, 10)
+    if (!list.length) return void (await this.say('Histórico vazio.'))
+    const lines = list.map(
+      (e) =>
+        `${STATUS_ICON[e.status]} <b>${escapeHtml(e.title)}</b> · ${fmt(e.startedAt)}${dur(e) ? ' · ' + dur(e) : ''}${e.origin !== 'app' ? ' · via ' + ORIGIN[e.origin] : ''}`
+    )
+    const buttons = list.map((e, i) => [
+      this.btn(`📜 ${i + 1}. ${e.title}`.slice(0, 40), async () => {
+        await this.sendLogFor((x) => x.id === e.id, e.title)
+        return ''
+      })
+    ])
+    await this.say('<b>Últimas execuções</b>\n\n' + lines.map((l, i) => `${i + 1}. ${l}`).join('\n'), buttons)
+  }
+
+  // ------------------------------------------------------------ eventos
+
+  /** Junta a resposta do Claude / saída do script e manda quando terminar */
+  handleRunEvent(e: RunEvent): void {
+    const r = this.runs.get(e.runId)
+    if (!r) return
+    if (e.type === 'session' && r.kind === 'claude') this.sessions.set(r.projectKey, e.sessionId)
+    if (e.type === 'lines') {
+      for (const l of e.lines) {
+        if (r.kind === 'claude' ? l.kind === 'claude' : l.kind !== 'info') r.lines.push(l.text)
+      }
+      if (r.lines.length > 400) r.lines.splice(0, r.lines.length - 400)
+    }
+    if (e.type === 'error') r.lines.push('⚠️ ' + e.message)
+    if (e.type !== 'exit') return
+    this.runs.delete(e.runId)
+    if (r.kind === 'claude') {
+      const body = tailText(r.lines) || (e.killed ? '(interrompido)' : '(sem resposta em texto)')
+      void this.say(`🤖 <b>${escapeHtml(r.title)}</b>${e.code === 0 || e.killed ? '' : ' · ❌ falhou'}\n\n${escapeHtml(body)}`)
+      return
+    }
+    const ok = !e.killed && e.code === 0
+    const head = `${e.killed ? '⏹' : ok ? '✅' : '❌'} <b>${escapeHtml(r.title)}</b> ${e.killed ? 'interrompido' : ok ? 'terminou' : `falhou (código ${e.code ?? '?'})`}`
+    const tail = r.lines.slice(-15)
+    void this.say(head + (tail.length ? `\n<pre>${escapeHtml(tailText(tail, 3000))}</pre>` : ''))
+  }
+}

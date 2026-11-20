@@ -584,7 +584,13 @@ function TelegramTab({ config, sec, save }: { config: AppConfig; sec: SecretsSta
         checked={config.telegram.interactive}
         onChange={(v) => save({ telegram: { interactive: v } })}
         label="Botões e comandos no Telegram"
-        hint="Pedidos chegam com Aprovar / Descartar (e Aprovar e rodar, se uma regra permitir). Comandos: /status, /pendentes, /ausente, /online, /vigia. Só o seu Chat ID é obedecido."
+        hint="Pedidos chegam com Aprovar / Descartar. Comandos: /projetos, /rodar, /claude, /log, /historico, /status, /pendentes, /ausente, /online, /vigia (mande /ajuda no bot). Só o seu Chat ID é obedecido."
+      />
+      <Toggle
+        checked={config.telegram.forwardNotifications}
+        onChange={(v) => save({ telegram: { forwardNotifications: v } })}
+        label="No modo Ausente, mandar também os avisos do sino"
+        hint="Projeto que caiu, script que terminou, Vigia com problema e versão nova. Pedidos e permissões já chegam sempre."
       />
       <Result r={result} />
     </Section>

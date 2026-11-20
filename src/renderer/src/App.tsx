@@ -32,6 +32,27 @@ import {
 } from './components/TerminalsPanel'
 import { ConfirmModal } from './components/ui'
 import { ApprovalModal } from './components/ApprovalModal'
+import { HistoryModal } from './components/HistoryModal'
+import { CommandPalette, type PaletteItem } from './components/CommandPalette'
+import {
+  Bell,
+  Bot,
+  Eye,
+  FolderPlus,
+  Gem,
+  History as HistoryIcon,
+  Moon,
+  Pencil,
+  Play,
+  Plus,
+  Radio,
+  RefreshCw,
+  Settings,
+  Sparkles,
+  Square,
+  SquareTerminal,
+  Sun
+} from 'lucide-react'
 import {
   extractUserVariables,
   fillVariables,
@@ -73,6 +94,19 @@ export default function App() {
     setSettingsOpen(true)
   }
   const [goOnlineOpen, setGoOnlineOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  // Ctrl+K (ou Cmd+K) abre a paleta de comandos de qualquer lugar
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setPaletteOpen((o) => !o)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   const [toast, setToast] = useState<string | null>(null)
   const [update, setUpdate] = useState<UpdateState | null>(null)
   /** Pedidos de permissão do Claude esperando resposta */
@@ -498,6 +532,151 @@ export default function App() {
   }
 
   const away = config.status === 'off'
+
+  // ---------- paleta de comandos ----------
+  const focusConsole = () =>
+    setTimeout(() => (document.querySelector('[data-testid="console-input"]') as HTMLInputElement | null)?.focus(), 60)
+  const projectName = (id?: string) => config.projects.find((p) => p.id === id)?.name
+  const paletteItems: PaletteItem[] = [
+    ...config.scripts.map((s) => ({
+      id: `run:${s.id}`,
+      group: 'Scripts e ações',
+      label: `Rodar: ${s.name}`,
+      hint: s.target.kind === 'project' ? projectName(s.target.projectId) : s.target.kind === 'ask' ? 'escolhe o projeto' : 'global',
+      icon: <Play size={14} />,
+      keywords: s.content.slice(0, 200),
+      run: () => runScript(s)
+    })),
+    ...config.projects.flatMap((p): PaletteItem[] => {
+      const st = runStates[p.id]?.state
+      const running = st === 'running' || st === 'starting'
+      const rc = remote[p.id]
+      return [
+        ...(p.runCommand
+          ? [
+              {
+                id: `exec:${p.id}`,
+                group: 'Projetos',
+                label: `${running ? 'Parar' : 'Executar'}: ${p.name}`,
+                hint: p.runCommand,
+                icon: running ? <Square size={14} /> : <Play size={14} />,
+                run: () => (running ? window.api.projectStop(p.id) : window.api.projectStart(p.id))
+              }
+            ]
+          : []),
+        {
+          id: `rc:${p.id}`,
+          group: 'Projetos',
+          label: `${rc ? 'Desligar' : 'Ligar'} Remote Control: ${p.name}`,
+          icon: <Radio size={14} />,
+          keywords: 'celular remote',
+          run: () => window.api.remoteSetManual(p.id, !rc)
+        },
+        {
+          id: `claude:${p.id}`,
+          group: 'Projetos',
+          label: `Falar com o Claude em: ${p.name}`,
+          icon: <Sparkles size={14} />,
+          run: () => {
+            setConsoleTarget(p.id)
+            setMode('claude')
+            activate('claude')
+            focusConsole()
+          }
+        },
+        {
+          id: `term:${p.id}`,
+          group: 'Projetos',
+          label: `Terminal do projeto: ${p.name}`,
+          icon: <SquareTerminal size={14} />,
+          run: () => openProjectTerminal(p.id)
+        },
+        {
+          id: `edit:${p.id}`,
+          group: 'Projetos',
+          label: `Editar projeto: ${p.name}`,
+          hint: 'nome, pasta, variáveis',
+          icon: <Pencil size={14} />,
+          run: () => setProjectModal({ open: true, item: p })
+        }
+      ]
+    }),
+    ...(
+      [
+        ['terminal', 'Terminal', <SquareTerminal key="t" size={14} />],
+        ['claude', 'Claude', <Sparkles key="c" size={14} />],
+        ['gemini', 'Gemini', <Gem key="g" size={14} />],
+        ['codex', 'ChatGPT', <Bot key="o" size={14} />]
+      ] as const
+    ).map(([m, label, icon]) => ({
+      id: `mode:${m}`,
+      group: 'Console',
+      label: `Digitar para: ${label}`,
+      hint: config.ui.consoleMode === m ? 'atual' : undefined,
+      icon,
+      keywords: 'modo console',
+      run: () => {
+        setMode(m)
+        activate(m === 'terminal' ? 'console' : m)
+        focusConsole()
+      }
+    })),
+    {
+      id: 'presence',
+      group: 'App',
+      label: away ? 'Voltar ao PC (Online)' : 'Ir para o modo Ausente',
+      icon: away ? <Sun size={14} /> : <Moon size={14} />,
+      run: togglePresence
+    },
+    {
+      id: 'watcher',
+      group: 'App',
+      label: config.watcher.enabled ? 'Desligar o Vigia' : 'Ligar o Vigia (Google Chat)',
+      icon: <Eye size={14} />,
+      run: async () => setConfig(await window.api.setWatcherEnabled(!config.watcher.enabled))
+    },
+    {
+      id: 'watcher-now',
+      group: 'App',
+      label: 'Verificar o Google Chat agora',
+      icon: <Eye size={14} />,
+      run: () => window.api.watcherRunNow()
+    },
+    { id: 'history', group: 'App', label: 'Histórico de execuções', icon: <HistoryIcon size={14} />, keywords: 'log', run: () => setHistoryOpen(true) },
+    {
+      id: 'notifs',
+      group: 'App',
+      label: 'Notificações',
+      icon: <Bell size={14} />,
+      run: () => (document.querySelector('[data-testid="notif-bell"]') as HTMLButtonElement | null)?.click()
+    },
+    { id: 'new-project', group: 'App', label: 'Novo projeto', icon: <FolderPlus size={14} />, run: () => setProjectModal({ open: true, item: null }) },
+    {
+      id: 'new-action',
+      group: 'App',
+      label: 'Nova ação global',
+      icon: <Plus size={14} />,
+      run: () => setScriptModal({ open: true, item: null, preset: 'ask' })
+    },
+    { id: 'update', group: 'App', label: 'Procurar atualização', icon: <RefreshCw size={14} />, run: () => window.api.checkForUpdates() },
+    ...(
+      [
+        ['setup', 'Começar (programas e guias)'],
+        ['general', 'Geral (janela, notificações, atualizações)'],
+        ['integrations', 'Integrações (GitHub, Jira, Google Chat)'],
+        ['ai', 'IAs (permissões do Claude, Gemini, ChatGPT)'],
+        ['telegram', 'Telegram'],
+        ['watcher', 'Vigia'],
+        ['automation', 'Automação (respostas e regras)']
+      ] as const
+    ).map(([tab, label]) => ({
+      id: `settings:${tab}`,
+      group: 'Configurações',
+      label: `Configurações: ${label}`,
+      icon: <Settings size={14} />,
+      run: () => openSettings(tab)
+    }))
+  ]
   const remoteAuto = config.projects.filter((p) => p.remoteEnabled).length
   const runningTabs = new Set(order.filter((k) => tabs[k]?.running.length))
   const globalScripts = config.scripts.filter((s) => s.target.kind !== 'project')
@@ -518,6 +697,8 @@ export default function App() {
         }}
         onOpenSettings={() => openSettings()}
         onGo={goTo}
+        onOpenHistory={() => setHistoryOpen(true)}
+        onOpenPalette={() => setPaletteOpen(true)}
       />
       {update?.phase === 'ready' && (
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-emerald-500/30 bg-emerald-500/10 px-5 py-2 text-xs text-emerald-200">
@@ -625,6 +806,9 @@ export default function App() {
           {toast}
         </div>
       )}
+
+      <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} projects={config.projects} />
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={paletteItems} />
 
       <ProjectModal
         open={projectModal.open}

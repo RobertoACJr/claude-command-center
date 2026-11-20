@@ -89,13 +89,42 @@ O usuário não conseguiu configurar Git, Jira, Google Chat nem Telegram sozinho
 - [x] Release automática: subiu a versão no `package.json` e deu push na main → o CI cria a Release com os instaladores.
 - [x] Teste de fumaça cobre Remote (Claude falso com link longo), rolagem horizontal, largura das variáveis, seletor de modo e sino.
 
-## Próximas ideias
+## 11. Rodada 4
 
-- [ ] Telegram com scripts rápidos: `/rodar <script>` e `/projetos` (lista com botões ▶/■ e Remote).
-- [ ] Painel web pelo celular (PWA via Tailscale): notificações, Remotes e scripts rápidos sem app nativo.
+- [x] **Telegram completo**: `/projetos` (▶/■, Remote com link no chat, log, Claude), `/rodar` (escolhe projeto,
+  pergunta variáveis, confirma), `/claude` + texto livre (conversa contínua, `/novo`, `/parar`, permissões com botões),
+  `/log`, `/historico`; avisos do sino vão pro Telegram no modo Ausente.
+- [x] **Histórico de execuções** (local): 300 últimas, origem, resultado, duração, saída completa, busca e filtro.
+- [x] **Paleta de comandos** (`Ctrl+K`).
+- [x] Notificações do sino sobrevivem ao fechar o app.
 
-- [ ] Paleta de comandos (Ctrl+K): rodar script/ação, abrir projeto, trocar modo, sem mouse.
-- [ ] Status do git no card: arquivos alterados e commits à frente/atrás do remoto.
-- [ ] Histórico de execuções (data, pasta, quem disparou, código de saída, log completo).
-- [ ] Aprovação de permissões do Claude também para o Gemini.
-- [ ] Testes automáticos dos módulos do main (os mocks usados no desenvolvimento viram testes do CI).
+## Roteiro (próximas fases)
+
+### Fase 9: Demandas (em definição)
+Um card por demanda (ex: card do Jira) que junta o contexto (descrição, comentários, transcrições, prints),
+gera o roteiro de desenvolvimento com IA, acompanha o andamento e liga com branch, PR, scripts e execuções.
+Ver a conversa de definição antes de implementar.
+
+### Fase 10: Git no card do projeto
+- [ ] Arquivos alterados, commits à frente/atrás, último commit.
+- [ ] Botões: puxar, ver diferenças, trocar de branch; aviso de "tem coisa sem push" ao ir para Ausente.
+
+### Fase 11: Fila de tarefas para o Claude
+- [ ] Enfileirar ordens por projeto (pelo app ou Telegram); roda uma por vez, de preferência no Ausente.
+- [ ] Resumo da manhã: o que foi feito, custo, o que ficou pendente (no app e no Telegram).
+- [ ] Cada tarefa numa branch/worktree própria para não misturar mudanças.
+
+### Fase 12: Revisão de PR com IA
+- [ ] Pegar PR do GitHub (manual ou pelo Vigia); Gemini faz a primeira passada barata, Claude aprofunda se precisar.
+- [ ] Comentários ficam como rascunho até você aprovar a publicação.
+
+### Fase 13: Custos e limites
+- [ ] Painel de gasto por projeto, IA e dia (os dados já vêm nas respostas do Claude/Gemini).
+- [ ] Limite diário que pausa automações e avisa.
+
+### Fase 14: Modelos de projeto
+- [ ] "Projeto Node", "Laravel", etc. com comando de execução, variáveis e scripts comuns já prontos.
+
+### Ideias soltas
+- [ ] Aprovação de permissões também para o Gemini.
+- [ ] Testes automáticos dos módulos do main (os mocks de desenvolvimento viram testes do CI).

@@ -253,6 +253,33 @@ try {
   if (picker !== 'ok') fail('Seletor de modo: ' + picker)
   else console.log('✓ Seletor de modo único com as opções')
 
+  // 4f) Paleta de comandos (Ctrl+K) → Histórico com as execuções de antes
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }))`)
+  await sleep(400)
+  const paletteOk = await evaluate(`!!document.querySelector('[data-testid="palette"]')`)
+  if (!paletteOk) fail('Ctrl+K não abriu a paleta de comandos')
+  await evaluate(`(() => {
+    const input = document.querySelector('[data-testid="palette-input"]')
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+    set.call(input, 'historico execucoes'); input.dispatchEvent(new Event('input', { bubbles: true }))
+  })()`)
+  await sleep(300)
+  await evaluate(`document.querySelector('[data-testid="palette-input"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`)
+  await sleep(1200)
+  const hist = await evaluate(`document.querySelector('[data-testid="history-list"]')?.textContent ?? ''`)
+  if (!hist) fail('Paleta não abriu o Histórico')
+  else if (!hist.includes('Projeto Smoke')) fail('Histórico sem a execução do projeto: ' + hist.slice(0, 300))
+  else {
+    // Abre a execução do projeto e confere a saída gravada
+    await evaluate(`[...document.querySelectorAll('[data-testid="history-list"] button')].find(b => b.textContent.includes('Projeto Smoke')).click()`)
+    await sleep(800)
+    const out = await evaluate(`document.querySelector('[data-testid="history-log"]')?.textContent ?? ''`)
+    if (!out.includes('eco:ping-stdin')) fail('Histórico não mostrou a saída do projeto: ' + out.slice(0, 200))
+    else console.log('✓ Paleta (Ctrl+K) abriu o Histórico com a saída gravada')
+  }
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
+  await sleep(300)
+
   // 5) Modo Ausente (tema azul-petróleo) e volta
   await clickByText('Ausente')
   await sleep(800)

@@ -68,7 +68,16 @@ export class RunManager {
     const runId = randomUUID()
     const cwd = req.cwd
     this.tabs.set(runId, req.tab || 'console')
-    this.emit({ runId, type: 'start', title: req.title || req.label || 'Execução', kind: req.kind, startedAt: Date.now() })
+    this.emit({
+      runId,
+      type: 'start',
+      title: req.title || req.label || 'Execução',
+      kind: req.kind,
+      startedAt: Date.now(),
+      cwd,
+      projectId: req.projectId,
+      origin: req.origin ?? 'app'
+    })
 
     if (!cwd || !existsSync(cwd)) {
       setTimeout(() => {

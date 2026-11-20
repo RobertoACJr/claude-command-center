@@ -120,6 +120,8 @@ export interface BotHandlers {
   settings: () => { chatId: string; interactive: boolean }
   onCallback: (data: string, reply: (text: string) => Promise<void>, messageId: number | null) => Promise<string>
   onCommand: (cmd: string, args: string) => Promise<void>
+  /** Mensagem sem barra (resposta a uma pergunta ou ordem para o Claude) */
+  onText: (text: string) => Promise<void>
   log: (text: string, kind?: 'info' | 'error') => void
 }
 
@@ -208,7 +210,8 @@ export class TelegramBot {
     }
 
     const text: string = u.message?.text ?? ''
-    if (!authorized || !text.startsWith('/')) return
+    if (!authorized || !text.trim()) return
+    if (!text.startsWith('/')) return this.h.onText(text.trim())
     const [rawCmd, ...rest] = text.trim().split(/\s+/)
     const cmd = rawCmd.slice(1).split('@')[0].toLowerCase()
     await this.h.onCommand(cmd, rest.join(' '))

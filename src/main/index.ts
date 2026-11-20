@@ -24,6 +24,8 @@ import { readFileSync, writeFileSync } from 'fs'
 import { Watcher } from './watcher'
 import { ProjectProcesses } from './projects'
 import { AppTray, applyOpenAtLogin } from './tray'
+import { History } from './history'
+import { TelegramControl } from './tgcontrol'
 import type {
   AlertStatus,
   AppNotification,
@@ -53,6 +55,7 @@ function send(channel: string, payload: unknown): void {
 
 /** runId → título (para avisar quando um script termina) */
 const runTitles = new Map<string, string>()
+const history = new History(app.getPath('userData'), (entries) => send('history:update', entries))
 const runs = new RunManager((e) => {
   if (e.type === 'start' && e.tab.startsWith('script:')) runTitles.set(e.runId, e.title)
   if (e.type === 'exit' && runTitles.has(e.runId)) {
@@ -60,9 +63,13 @@ const runs = new RunManager((e) => {
     runTitles.delete(e.runId)
     if (store.get().general.notifyScriptDone && !e.killed) {
       const ok = e.code === 0
-      notify(`${ok ? '✔' : '✖'} ${title}`, ok ? 'Terminou com sucesso.' : `Falhou (código ${e.code ?? '?'}).`, `tab:${e.tab}`, 'script')
+      // Scripts do Telegram e das regras já avisam no Telegram por conta própria
+      const toTelegram = !tg.isTelegramRun(e.runId) && !automation.isAlertRun(e.runId)
+      notify(`${ok ? '✔' : '✖'} ${title}`, ok ? 'Terminou com sucesso.' : `Falhou (código ${e.code ?? '?'}).`, `tab:${e.tab}`, 'script', 'unfocused', toTelegram)
     }
   }
+  history.handle(e)
+  tg.handleRunEvent(e)
   projects.handleRunEvent(e)
   automation.handleRunEvent(e)
   if (e.type === 'exit') approvals.runEnded(e.runId)
@@ -90,6 +97,11 @@ const remote = new RemoteManager((sessions) => {
     if (s.state === 'active' && s.url && !remoteNotified.has(key)) {
       remoteNotified.add(key)
       notify(`📡 Remote Control ativo: ${s.projectName}`, 'Abra pelo app do Claude no celular ou pelo link no card do projeto.', undefined, 'remote', 'never')
+      // Ligado pelo Telegram (ou no modo Ausente): o link vai para lá
+      const cfg = store.get()
+      if ((tg.takeRemoteRequest(s.projectId) || cfg.status === 'off') && telegramReady()) {
+        void sendTelegramMessage(cfg.telegram.chatId, `📡 <b>Remote Control ativo</b> · ${escapeHtml(s.projectName)}\n${escapeHtml(s.url)}`)
+      }
     }
   }
 })
@@ -122,8 +134,8 @@ const approvals = new ApprovalServer({
     send('approval:request', r)
     const cfg = store.get()
     notify('🔐 O Claude pede permissão', `${r.scopeName}: ${r.toolName} ${r.summary}`.slice(0, 200), undefined, 'permissao')
-    // No modo Ausente, pergunta também pelo Telegram
-    if (cfg.status === 'off' && cfg.telegram.interactive && cfg.telegram.chatId && secrets.get('telegram.token')) {
+    // No modo Ausente (ou se a ordem veio do Telegram), pergunta também pelo Telegram
+    if ((cfg.status === 'off' || tg.isTelegramRun(r.runId)) && cfg.telegram.interactive && telegramReady()) {
       void sendTelegramMessage(
         cfg.telegram.chatId,
         `🔐 <b>O Claude pede permissão</b> · ${escapeHtml(r.scopeName)}\n\n<b>${escapeHtml(r.toolName)}</b>\n<code>${escapeHtml(r.summary.slice(0, 600))}</code>`,
@@ -190,20 +202,25 @@ async function telegramStatus(): Promise<string> {
   ].join('\n')
 }
 
-const HELP = [
-  '<b>Comandos</b>',
-  '/status · como está o PC',
-  '/pendentes · pedidos aguardando você (com botões)',
-  '/ausente · liga o modo Ausente',
-  '/online · volta ao modo Online',
-  '/vigia · verifica o Google Chat agora'
-].join('\n')
+const tg = new TelegramControl({
+  runs,
+  projects,
+  remote,
+  history,
+  status: () => telegramStatus(),
+  log: (text, kind = 'info') => appLog({ kind, text })
+})
+
+function telegramReady(): boolean {
+  return !!store.get().telegram.chatId && !!secrets.get('telegram.token')
+}
 
 const bot = new TelegramBot({
   settings: () => ({ chatId: store.get().telegram.chatId, interactive: store.get().telegram.interactive }),
   log: (text, kind = 'info') => appLog({ kind, text }),
   onCallback: async (data) => {
     const [kind, id] = data.split(':')
+    if (kind === 'k') return tg.callback(id)
     if (kind === 'ap') return (await automation.approve(id, 'pelo Telegram', false)).message
     if (kind === 'ds') return (await automation.dismiss(id, 'pelo Telegram')).message
     if (kind === 'rr') return (await automation.approve(id, 'pelo Telegram', true)).message
@@ -216,7 +233,9 @@ const bot = new TelegramBot({
     }
     return 'Ação desconhecida.'
   },
-  onCommand: async (cmd) => {
+  onText: (text) => tg.text(text),
+  onCommand: async (cmd, args) => {
+    if (await tg.command(cmd, args)) return
     const cfg = store.get()
     const chat = cfg.telegram.chatId
     const say = (html: string) => sendTelegramMessage(chat, html)
@@ -259,7 +278,7 @@ const bot = new TelegramBot({
         await say('👁 Verificando o Google Chat agora…')
         break
       default:
-        await say(HELP)
+        await say(tg.help)
     }
   }
 })
@@ -274,7 +293,27 @@ function showWindow(what?: NotificationTarget | 'go-online') {
 }
 
 // ---------- Central de notificações (sino do app + notificação do sistema) ----------
-const notifications: AppNotification[] = []
+const notificationsFile = join(app.getPath('userData'), 'notifications.json')
+const notifications: AppNotification[] = (() => {
+  try {
+    const l = JSON.parse(readFileSync(notificationsFile, 'utf8'))
+    return Array.isArray(l) ? l.slice(0, 100) : []
+  } catch {
+    return []
+  }
+})()
+let notifSaveTimer: NodeJS.Timeout | null = null
+function saveNotificationsSoon(): void {
+  if (notifSaveTimer) return
+  notifSaveTimer = setTimeout(() => {
+    notifSaveTimer = null
+    try {
+      writeFileSync(notificationsFile, JSON.stringify(notifications))
+    } catch {
+      /* ignora */
+    }
+  }, 1000)
+}
 
 /**
  * Registra no sino do app e, se ligado nas preferências, mostra a notificação do sistema.
@@ -285,12 +324,19 @@ function notify(
   body: string,
   target?: NotificationTarget,
   kind: NotificationKind = 'sistema',
-  desktop: 'always' | 'unfocused' | 'never' = 'unfocused'
+  desktop: 'always' | 'unfocused' | 'never' = 'unfocused',
+  /** Mandar também pro Telegram no modo Ausente (pedidos e permissões já têm mensagem própria) */
+  toTelegram = kind === 'projeto' || kind === 'script' || kind === 'vigia' || kind === 'atualizacao'
 ) {
   const n: AppNotification = { id: randomUUID(), at: Date.now(), kind, title, body, target, read: false }
   notifications.unshift(n)
   notifications.splice(100)
+  saveNotificationsSoon()
   send('notify:new', n)
+  const cfg = store.get()
+  if (toTelegram && cfg.status === 'off' && cfg.telegram.forwardNotifications && telegramReady()) {
+    void sendTelegramMessage(cfg.telegram.chatId, `🔔 <b>${escapeHtml(title)}</b>\n${escapeHtml(body)}`)
+  }
   const focused = !!mainWindow?.isVisible() && mainWindow.isFocused()
   const want = desktop === 'always' || (desktop === 'unfocused' && !focused)
   if (!want || !store.get().general.desktopNotifications || !Notification.isSupported()) return
@@ -507,10 +553,15 @@ function registerIpc(): void {
   ipcMain.handle('notify:list', () => notifications)
   ipcMain.handle('notify:markRead', () => {
     for (const n of notifications) n.read = true
+    saveNotificationsSoon()
   })
   ipcMain.handle('notify:clear', () => {
     notifications.splice(0)
+    saveNotificationsSoon()
   })
+  ipcMain.handle('history:list', () => history.list())
+  ipcMain.handle('history:log', (_e, id: string) => history.log(String(id)))
+  ipcMain.handle('history:clear', () => history.clear())
   ipcMain.handle('update:state', () => updater.getState())
   ipcMain.handle('update:check', () => updater.check())
   ipcMain.handle('update:install', () => {
@@ -595,6 +646,7 @@ if (!gotLock) {
   // Encerra tudo que o app abriu: nada de processo órfão/zumbi
   app.on('before-quit', () => {
     quitting = true
+    history.flush()
     updater.stop()
     bot.stop()
     approvals.stop()

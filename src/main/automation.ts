@@ -184,12 +184,18 @@ export class Automation {
       title: project ? `${script.name} · ${project.name}` : script.name,
       content: script.content,
       variables: values,
-      cwd
+      cwd,
+      projectId: project?.id,
+      origin: 'pedido'
     })
     this.runAlerts.set(runId, { alertId: a.id, scriptName: script.name })
     store.patchAlert(a.id, {}, `rodando "${script.name}"`)
     this.log({ kind: 'info', text: `[Regras] rodando "${script.name}" para ${a.card || a.branch} → ${a.environment}` })
     return { ok: true, message: `Rodando "${script.name}".` }
+  }
+
+  isAlertRun(runId: string): boolean {
+    return this.runAlerts.has(runId)
   }
 
   /** Recebe os eventos de execução: avisa o fim dos scripts disparados por pedidos */

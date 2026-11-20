@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Eye, EyeOff, Loader2, Settings, TerminalSquare } from 'lucide-react'
+import { Command, Eye, EyeOff, History, Loader2, Settings, TerminalSquare } from 'lucide-react'
 import type { NotificationTarget, PresenceStatus, WatcherState } from '@shared/types'
 import { NotificationBell } from './NotificationBell'
 import { cn } from '../lib/utils'
@@ -13,7 +13,9 @@ export function Header({
   watcherEnabled,
   onToggleWatcher,
   onOpenSettings,
-  onGo
+  onGo,
+  onOpenHistory,
+  onOpenPalette
 }: {
   status: PresenceStatus
   onToggle: () => void
@@ -24,6 +26,8 @@ export function Header({
   onToggleWatcher: () => void
   onOpenSettings: () => void
   onGo: (t: NotificationTarget) => void
+  onOpenHistory: () => void
+  onOpenPalette: () => void
 }) {
   const on = status === 'on'
   return (
@@ -39,7 +43,25 @@ export function Header({
       </div>
 
       <div className="flex items-center gap-4">
+        <button
+          type="button"
+          data-testid="palette-button"
+          onClick={onOpenPalette}
+          title="Paleta de comandos: rodar scripts, executar projetos, ligar Remote… (Ctrl+K)"
+          className="hidden h-9 cursor-pointer items-center gap-2 rounded-lg border border-line bg-card px-3 text-xs text-zinc-500 transition-colors hover:border-violet/60 hover:text-white md:inline-flex"
+        >
+          <Command size={13} /> Comandos <kbd className="rounded border border-line px-1 text-[10px]">Ctrl K</kbd>
+        </button>
         <WatcherPill state={watcher} enabled={watcherEnabled} onClick={onToggleWatcher} />
+        <button
+          type="button"
+          data-testid="history-button"
+          onClick={onOpenHistory}
+          title="Histórico de execuções"
+          className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border border-line bg-card text-zinc-400 transition-colors hover:border-violet/60 hover:text-white"
+        >
+          <History size={16} />
+        </button>
         <NotificationBell onGo={onGo} />
         <button
           type="button"
