@@ -303,6 +303,7 @@ try {
   if (!analysis.includes('Teste smoke modo leitura')) fail('Análise da demanda não chegou (ou não foi só leitura): ' + analysis.slice(0, 200))
   else if (hoursPh !== '6') fail('Sugestão de horas da IA não apareceu: ' + hoursPh)
   else console.log('✓ Demanda criada, analisada em modo só leitura, com sugestão de 6h')
+  const shotDemand = await cdp('Page.captureScreenshot', { format: 'jpeg', quality: 55 })
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
   await sleep(500)
   const row = await evaluate(`[...document.querySelectorAll('[data-testid="demand-row"]')].map(r => r.textContent).join(' | ')`)
@@ -348,7 +349,7 @@ try {
 
   // Print da tela (vai no log, entre marcadores, para poder ser visto sem baixar artefatos)
   const shotOnline = await cdp('Page.captureScreenshot', { format: 'jpeg', quality: 55 })
-  for (const [name, s] of [['online', shotOnline], ['ausente', shot]]) {
+  for (const [name, s] of [['online', shotOnline], ['ausente', shot], ['demanda', shotDemand]]) {
     const b64 = s.result?.data ?? ''
     writeFileSync(`smoke-${name}.jpg`, Buffer.from(b64, 'base64'))
     console.log(`::group::screenshot-${name}`)
