@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { AppWindow, ArrowLeftRight, Bell, Bot, Eye, Gem, Github, KeyRound, Loader2, MessageSquare, MessageSquareReply, Plug, Plus, RefreshCw, Rocket, Search, Send, Settings, ShieldCheck, SquareKanban, Trash2, Workflow, Zap } from 'lucide-react'
+import { AppWindow, ArrowLeftRight, Bell, Bot, Eye, Gem, Github, KeyRound, Loader2, MessageSquare, MessageSquareReply, Pencil, Plug, Plus, RefreshCw, Rocket, Search, Send, Settings, ShieldCheck, SquareKanban, Trash2, Workflow, X, Zap } from 'lucide-react'
 import type {
   AiProvider,
   AppConfig,
@@ -15,7 +15,7 @@ import type {
   UpdateState,
   WatcherState
 } from '@shared/types'
-import { Button, Field, Modal, Toggle, inputCls } from './ui'
+import { Button, Field, IconButton, Modal, Toggle, inputCls } from './ui'
 import { cn, uid } from '../lib/utils'
 import { isProdEnv } from '@shared/vars'
 import { ClaudePermsEditor } from './ClaudePermsEditor'
@@ -104,23 +104,44 @@ export function SettingsModal({
 
 // ---------------------------------------------------------------- helpers
 
+/** Bolinha "?" que mostra uma explicação ao passar o mouse */
+function HelpTip({ children }: { children: ReactNode }) {
+  return (
+    <span className="group relative inline-flex">
+      <span
+        tabIndex={0}
+        className="flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-zinc-600 text-[10px] font-bold text-zinc-400 group-hover:border-violet group-hover:text-purple"
+      >
+        ?
+      </span>
+      <span className="pointer-events-none invisible absolute top-6 left-1/2 z-50 w-80 -translate-x-1/2 rounded-lg border border-line bg-card p-3 text-[11px] font-normal leading-relaxed text-zinc-300 opacity-0 shadow-2xl transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
+        {children}
+      </span>
+    </span>
+  )
+}
+
 function Section({
   icon,
   title,
   children,
-  right
+  right,
+  help
 }: {
   icon: ReactNode
   title: string
   children: ReactNode
   right?: ReactNode
+  /** Texto do "?" ao lado do título (aparece no hover) */
+  help?: ReactNode
 }) {
   return (
     <div className="rounded-xl border border-line bg-card-2 p-4">
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
           <span className="text-purple">{icon}</span>
           {title}
+          {help && <HelpTip>{help}</HelpTip>}
         </div>
         {right}
       </div>
@@ -245,7 +266,7 @@ function CheckList({ check, testing }: { check: IntegrationCheck | undefined; te
 function CheckBadge({ check, testing }: { check: IntegrationCheck | undefined; testing: boolean }) {
   if (testing) return <span className="text-[11px] text-zinc-500">testando…</span>
   if (!check) return null
-  const main = check.lines.filter((l) => l.label !== 'Conectores da sua conta claude.ai (todos)')
+  const main = check.lines.filter((l) => !l.label.startsWith('Conectores da sua conta'))
   if (main.some((l) => l.state === 'ok')) {
     const fails = main.some((l) => l.state === 'fail')
     return <span className={cn('text-[11px]', fails ? 'text-amber-300' : 'text-emerald-400')}>{fails ? '● funcionando em parte' : '● funcionando'}</span>
@@ -284,7 +305,8 @@ function IntegrationsTab({ config, sec, save }: { config: AppConfig; sec: Secret
         setGcSecret('')
         setGcJson('')
       }
-      test(id)
+      await test(id)
+      setEditing((e) => ({ ...e, [id]: false }))
     })
 
   // Teste de verdade: roda sozinho ao abrir a aba e depois de aplicar
@@ -304,33 +326,46 @@ function IntegrationsTab({ config, sec, save }: { config: AppConfig; sec: Secret
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const status = (id: IntegrationId) => test(id)
+  // Funcionando = algo deu certo e nada falhou: os campos ficam fechados (lápis para editar)
+  const [editing, setEditing] = useState<Partial<Record<IntegrationId, boolean>>>({})
+  const working = (id: IntegrationId) => {
+    const main = checks[id]?.lines.filter((l) => !l.label.startsWith('Conectores da sua conta')) ?? []
+    return main.some((l) => l.state === 'ok') && !main.some((l) => l.state === 'fail')
+  }
+  const showForm = (id: IntegrationId) => !working(id) || !!editing[id]
 
   const clearSecret = (k: SecretKey) => save({ secrets: { [k]: null } })
 
   return (
     <div className="space-y-3">
-      <div className="space-y-1.5 rounded-lg border border-line bg-bg p-3 text-[11px] leading-relaxed text-zinc-400">
-        <div className="text-xs font-semibold text-zinc-200">Para que servem</div>
-        <div>
-          <b className="text-zinc-300">Jira:</b> as Demandas puxam o card (título, descrição, comentários) e o Claude pode
-          consultar cards sozinho. Para as Demandas bastam URL, e-mail e token.
-        </div>
-        <div>
-          <b className="text-zinc-300">GitHub:</b> opcional. Deixa o Claude ler PRs, issues e outros repositórios. O git do
-          card (branch, puxar, atualizar com a master) <i>não</i> precisa disso: usa o git do seu PC.
-        </div>
-        <div>
-          <b className="text-zinc-300">Google Chat:</b> é o que o <b>Vigia</b> usa para ler as conversas e achar pedidos de
-          deploy. Sem ele, o Vigia não tem o que ler.
-        </div>
-        <div className="text-zinc-500">
-          "Salvar e aplicar" registra o servidor no Claude Code (<code className="text-purple">claude mcp</code>, nomes{' '}
-          <code className="text-purple">ccc-*</code>). O teste abaixo de cada um verifica de verdade se está funcionando.
-        </div>
-      </div>
+      <p className="text-[11px] text-zinc-500">
+        Cada integração é testada de verdade ao abrir esta aba. Passe o mouse no <b>?</b> para ver para que serve. As que
+        estão funcionando ficam fechadas; use o lápis para editar.
+      </p>
 
       {/* GitHub */}
-      <Section icon={<Github size={15} />} title="Git (GitHub)" right={<CheckBadge check={checks.github} testing={!!testing.github} />}>
+      <Section
+        icon={<Github size={15} />}
+        title="Git (GitHub)"
+        help={
+          <>
+              <b>Opcional.</b> Deixa o Claude ler PRs, issues e outros repositórios do GitHub. O git do card (branch,
+              alterados, puxar, atualizar com a master) <b>não</b> precisa disso: usa o git do seu PC.
+            </>
+        }
+        right={
+          <span className="flex items-center gap-2">
+            <CheckBadge check={checks.github} testing={!!testing.github} />
+            {working('github') && (
+              <IconButton title={editing.github ? 'Fechar edição' : 'Editar'} tone="accent" onClick={() => setEditing((e) => ({ ...e, github: !e.github }))}>
+                {editing.github ? <X size={13} /> : <Pencil size={13} />}
+              </IconButton>
+            )}
+          </span>
+        }
+      >
+        {showForm('github') ? (
+          <>
         <Toggle checked={gh.enabled} onChange={(v) => setGh({ ...gh, enabled: v })} label="Ativar MCP do GitHub" />
         <Toggle
           checked={gh.readOnly}
@@ -362,12 +397,42 @@ function IntegrationsTab({ config, sec, save }: { config: AppConfig; sec: Secret
             <Spin on={!!testing.github} /> <Search size={12} /> Testar
           </Button>
         </div>
+          </>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Button size="sm" disabled={!!testing.github} onClick={() => status('github')}>
+              <Spin on={!!testing.github} /> <Search size={12} /> Testar de novo
+            </Button>
+          </div>
+        )}
         <Result r={results.github ?? null} />
         <CheckList check={checks.github} testing={!!testing.github} />
       </Section>
 
       {/* Jira */}
-      <Section icon={<SquareKanban size={15} />} title="Jira" right={<CheckBadge check={checks.jira} testing={!!testing.jira} />}>
+      <Section
+        icon={<SquareKanban size={15} />}
+        title="Jira"
+        help={
+          <>
+              As <b>Demandas</b> usam a URL, o e-mail e o token para puxar o card (título, descrição, comentários).
+              O <b>MCP</b> é opcional: deixa o Claude consultar o Jira sozinho, mas se a sua conta claude.ai já tem o
+              conector Atlassian, ele já faz isso.
+            </>
+        }
+        right={
+          <span className="flex items-center gap-2">
+            <CheckBadge check={checks.jira} testing={!!testing.jira} />
+            {working('jira') && (
+              <IconButton title={editing.jira ? 'Fechar edição' : 'Editar'} tone="accent" onClick={() => setEditing((e) => ({ ...e, jira: !e.jira }))}>
+                {editing.jira ? <X size={13} /> : <Pencil size={13} />}
+              </IconButton>
+            )}
+          </span>
+        }
+      >
+        {showForm('jira') ? (
+          <>
         <Toggle
           checked={jira.enabled}
           onChange={(v) => setJira({ ...jira, enabled: v })}
@@ -424,12 +489,41 @@ function IntegrationsTab({ config, sec, save }: { config: AppConfig; sec: Secret
             <Spin on={!!testing.jira} /> <Search size={12} /> Testar
           </Button>
         </div>
+          </>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Button size="sm" disabled={!!testing.jira} onClick={() => status('jira')}>
+              <Spin on={!!testing.jira} /> <Search size={12} /> Testar de novo
+            </Button>
+          </div>
+        )}
         <Result r={results.jira ?? null} />
         <CheckList check={checks.jira} testing={!!testing.jira} />
       </Section>
 
       {/* Google Chat */}
-      <Section icon={<MessageSquare size={15} />} title="Google Chat" right={<CheckBadge check={checks.gchat} testing={!!testing.gchat} />}>
+      <Section
+        icon={<MessageSquare size={15} />}
+        title="Google Chat"
+        help={
+          <>
+              É o que o <b>Vigia</b> usa para ler as conversas e achar pedidos de deploy, e o que as respostas
+              automáticas usam para responder. Sem ele, o Vigia não tem o que ler.
+            </>
+        }
+        right={
+          <span className="flex items-center gap-2">
+            <CheckBadge check={checks.gchat} testing={!!testing.gchat} />
+            {working('gchat') && (
+              <IconButton title={editing.gchat ? 'Fechar edição' : 'Editar'} tone="accent" onClick={() => setEditing((e) => ({ ...e, gchat: !e.gchat }))}>
+                {editing.gchat ? <X size={13} /> : <Pencil size={13} />}
+              </IconButton>
+            )}
+          </span>
+        }
+      >
+        {showForm('gchat') ? (
+          <>
         <Toggle
           checked={gc.enabled}
           onChange={(v) => setGc({ ...gc, enabled: v })}
@@ -569,6 +663,14 @@ function IntegrationsTab({ config, sec, save }: { config: AppConfig; sec: Secret
             <Spin on={!!testing.gchat} /> <Search size={12} /> Testar
           </Button>
         </div>
+          </>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Button size="sm" disabled={!!testing.gchat} onClick={() => status('gchat')}>
+              <Spin on={!!testing.gchat} /> <Search size={12} /> Testar de novo
+            </Button>
+          </div>
+        )}
         <Result r={results.gchat ?? null} />
         <CheckList check={checks.gchat} testing={!!testing.gchat} />
       </Section>

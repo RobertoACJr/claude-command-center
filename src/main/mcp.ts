@@ -254,6 +254,6 @@ export async function integrationCheck(id: IntegrationId, cfg: AppConfig): Promi
   }
 
   const all = await connectorsP
-  if (all.length) lines.push({ state: 'warn', label: 'Conectores da sua conta claude.ai (todos)', detail: all.join(' · ') })
+  if (all.length) lines.push({ state: 'warn', label: 'Conectores da sua conta claude.ai (só para referência)', detail: all.join(' · ') })
   return { lines, at: Date.now() }
 }
