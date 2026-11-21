@@ -9,7 +9,8 @@ const ORIGIN: Record<HistoryEntry['origin'], string> = {
   telegram: 'Telegram',
   pedido: 'pedido do chat',
   projeto: 'projeto',
-  demanda: 'demanda'
+  demanda: 'demanda',
+  fila: 'fila'
 }
 
 const KIND: Record<HistoryEntry['kind'], string> = { terminal: 'Terminal', claude: 'Claude', gemini: 'Gemini', codex: 'ChatGPT' }

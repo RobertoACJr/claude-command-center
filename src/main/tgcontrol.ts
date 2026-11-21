@@ -17,7 +17,7 @@ type Action = () => Promise<string | void>
 /** Quanto do texto cabe numa mensagem do Telegram (limite real: 4096) */
 const MAX_MSG = 3800
 
-const ORIGIN: Record<string, string> = { app: 'app', telegram: 'Telegram', pedido: 'pedido', projeto: 'projeto', demanda: 'demanda' }
+const ORIGIN: Record<string, string> = { app: 'app', telegram: 'Telegram', pedido: 'pedido', projeto: 'projeto', demanda: 'demanda', fila: 'fila' }
 const STATUS_ICON: Record<HistoryEntry['status'], string> = { running: '⏳', ok: '✅', error: '❌', stopped: '⏹' }
 
 const fmt = (t: number) =>
