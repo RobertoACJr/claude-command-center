@@ -1,6 +1,6 @@
 import { homedir } from 'os'
 import { spawnSync } from 'child_process'
-import { MCP_NAMES, type AppConfig, type IntegrationId, type OpResult } from '../shared/types'
+import { MCP_NAMES, type AppConfig, type IntegrationCheck, type IntegrationId, type OpResult } from '../shared/types'
 import { secrets } from './secrets'
 import { IS_WIN, runClaudeCapture } from './proc'
 
@@ -148,4 +148,112 @@ export async function integrationLogin(id: IntegrationId, onLine: (l: string) =>
     onLine
   })
   return { ok: r.code === 0, message: summarize(r) }
+}
+
+// ---------------------------------------------------------------- teste de verdade
+
+type Line = IntegrationCheck['lines'][number]
+
+/** Estado de um MCP no Claude Code, lendo a saída de `claude mcp get <nome>` */
+async function mcpLine(name: string, label: string, enabled: boolean): Promise<Line> {
+  const r = await runClaudeCapture(['mcp', 'get', name], { cwd: cwd(), timeoutMs: 60_000 })
+  const out = `${r.stdout}\n${r.stderr}`
+  if (r.spawnError) return { state: 'fail', label, detail: 'Claude Code não encontrado neste PC.' }
+  if (/No MCP server named/i.test(out)) {
+    return enabled
+      ? { state: 'fail', label, detail: 'Não está registrado no Claude. Clique em "Salvar e aplicar" de novo e veja a mensagem.' }
+      : { state: 'off', label, detail: 'Desligado (o interruptor "Ativar MCP" está desmarcado).' }
+  }
+  const status = out.match(/Status:\s*(.+)/)?.[1]?.trim() ?? ''
+  const issue = out.match(/Issue:\s*(.+)/)?.[1]?.trim() ?? ''
+  if (/connected|✓|✔/i.test(status) && !/fail|✘|✗/i.test(status)) return { state: 'ok', label, detail: 'Conectado: o Claude consegue usar.' }
+  if (/auth/i.test(status)) return { state: 'warn', label, detail: 'Registrado, mas falta fazer login (botão "Autenticar").' }
+  let detail = issue || status || summarize(r)
+  if (/uvx/i.test(detail)) detail = 'O comando uvx não foi encontrado: instale o uv (Configurações → Começar).'
+  return { state: 'fail', label, detail: 'Registrado, mas não conecta: ' + detail }
+}
+
+/** Conectores da sua conta claude.ai que o Claude Code enxerga (ex: "claude.ai Atlassian") */
+async function claudeAiConnectors(): Promise<string[]> {
+  const r = await runClaudeCapture(['mcp', 'list'], { cwd: cwd(), timeoutMs: 90_000 })
+  return [...`${r.stdout}`.matchAll(/^claude\.ai ([^:]+):.*$/gim)].map((m) => `${m[1].trim()}${/✓|connected/i.test(m[0]) ? '' : ' (sem conexão)'}`)
+}
+
+async function httpJson(url: string, headers: Record<string, string>): Promise<{ status: number; body: any; headers?: Headers; error?: string }> {
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), 20_000)
+  try {
+    const res = await fetch(url, { headers: { Accept: 'application/json', ...headers }, signal: ctrl.signal })
+    let body: any = null
+    try {
+      body = await res.json()
+    } catch {
+      /* sem corpo JSON */
+    }
+    return { status: res.status, body, headers: res.headers }
+  } catch (e) {
+    const err = e as Error & { cause?: { code?: string } }
+    return { status: 0, body: null, error: err.name === 'AbortError' ? 'demorou demais' : err.cause?.code === 'ENOTFOUND' ? 'endereço não existe' : err.message }
+  } finally {
+    clearTimeout(t)
+  }
+}
+
+export async function integrationCheck(id: IntegrationId, cfg: AppConfig): Promise<IntegrationCheck> {
+  const lines: Line[] = []
+  const name = MCP_NAMES[id]
+  const connectorsP = claudeAiConnectors()
+
+  if (id === 'jira') {
+    const j = cfg.integrations.jira
+    const token = secrets.get('jira.token')
+    const label = 'Conta do Jira (usada pelas Demandas)'
+    if (!j.url || !j.email || !token) {
+      lines.push({ state: 'off', label, detail: 'Preencha URL, e-mail e API token e clique em "Salvar e aplicar".' })
+    } else {
+      const r = await httpJson(`${j.url.replace(/\/+$/, '')}/rest/api/2/myself`, {
+        Authorization: 'Basic ' + Buffer.from(`${j.email}:${token}`).toString('base64')
+      })
+      if (r.status === 200) lines.push({ state: 'ok', label, detail: `Conectado como ${r.body?.displayName ?? j.email}. As Demandas já puxam os cards.` })
+      else if (r.status === 401 || r.status === 403) lines.push({ state: 'fail', label, detail: 'O Jira recusou: e-mail ou API token errado (o token é o de id.atlassian.com, não a senha).' })
+      else if (r.status === 0) lines.push({ state: 'fail', label, detail: `Não consegui falar com ${j.url}: ${r.error}. Confira a URL (ex: https://suaempresa.atlassian.net).` })
+      else lines.push({ state: 'fail', label, detail: `O Jira respondeu HTTP ${r.status}. Confira a URL.` })
+    }
+    lines.push(await mcpLine(name, 'MCP ccc-jira (o Claude consulta o Jira sozinho)', j.enabled))
+    const conn = (await connectorsP).filter((c) => /atlassian|jira/i.test(c))
+    if (conn.length) {
+      lines.push({ state: 'ok', label: 'Conector da sua conta claude.ai', detail: `${conn.join(', ')}: o Claude já acessa o Jira por aqui, então o ccc-jira é opcional.` })
+    }
+  }
+
+  if (id === 'github') {
+    const pat = secrets.get('github.pat')
+    const label = 'Token do GitHub'
+    if (!pat) lines.push({ state: 'off', label, detail: 'Sem token. (O git do card funciona sem isso: ele usa o git do seu PC.)' })
+    else {
+      const r = await httpJson('https://api.github.com/user', { Authorization: `Bearer ${pat}`, 'User-Agent': 'claude-command-center' })
+      if (r.status === 200) lines.push({ state: 'ok', label, detail: `Token válido: conta ${r.body?.login}.` })
+      else if (r.status === 401) lines.push({ state: 'fail', label, detail: 'Token inválido ou expirado.' })
+      else lines.push({ state: 'fail', label, detail: r.status ? `GitHub respondeu HTTP ${r.status}.` : `Sem conexão: ${r.error}.` })
+    }
+    lines.push(await mcpLine(name, 'MCP ccc-github (o Claude lê PRs, issues e repos)', cfg.integrations.github.enabled))
+    const conn = (await connectorsP).filter((c) => /github/i.test(c))
+    if (conn.length) lines.push({ state: 'ok', label: 'Conector da sua conta claude.ai', detail: `${conn.join(', ')}: o Claude já acessa o GitHub por aqui.` })
+  }
+
+  if (id === 'gchat') {
+    lines.push(await mcpLine(name, 'MCP ccc-gchat (o Vigia lê o Google Chat por ele)', cfg.integrations.gchat.enabled))
+    const conn = (await connectorsP).filter((c) => /chat|google/i.test(c))
+    if (conn.length) {
+      lines.push({
+        state: 'warn',
+        label: 'Conector da sua conta claude.ai',
+        detail: `${conn.join(', ')}: existe, mas o Vigia ainda só usa o ccc-gchat.`
+      })
+    }
+  }
+
+  const all = await connectorsP
+  if (all.length) lines.push({ state: 'warn', label: 'Conectores da sua conta claude.ai (todos)', detail: all.join(' · ') })
+  return { lines, at: Date.now() }
 }

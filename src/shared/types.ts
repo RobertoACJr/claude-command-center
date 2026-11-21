@@ -118,6 +118,13 @@ export interface AppNotification {
 
 export type IntegrationId = 'github' | 'jira' | 'gchat'
 
+/** Resultado do teste de uma integração: uma linha por coisa verificada */
+export interface IntegrationCheck {
+  /** ok = funcionando · warn = opcional/atenção · fail = não funciona · off = não configurado */
+  lines: Array<{ state: 'ok' | 'warn' | 'fail' | 'off'; label: string; detail: string }>
+  at: number
+}
+
 /** Nomes com prefixo ccc- para nunca sobrescrever MCPs que você já tenha */
 export const MCP_NAMES: Record<IntegrationId, string> = {
   github: 'ccc-github',
@@ -580,6 +587,8 @@ export interface CommandCenterApi {
   secretsStatus(): Promise<SecretsStatus>
   mcpApply(id: IntegrationId): Promise<OpResult>
   mcpStatus(id: IntegrationId): Promise<OpResult>
+  /** Testa de verdade: conta (API), MCP no Claude e conectores da conta claude.ai */
+  integrationCheck(id: IntegrationId): Promise<IntegrationCheck>
   mcpLogin(id: IntegrationId): Promise<OpResult>
   telegramTest(): Promise<OpResult>
   telegramDetectChat(): Promise<OpResult>

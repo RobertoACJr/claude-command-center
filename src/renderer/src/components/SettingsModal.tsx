@@ -6,6 +6,7 @@ import type {
   AutomationRule,
   ReplyTemplate,
   RuleMode,
+  IntegrationCheck,
   IntegrationId,
   OpResult,
   SecretKey,
@@ -205,17 +206,53 @@ function Spin({ on }: { on: boolean }) {
   return on ? <Loader2 size={13} className="animate-spin" /> : null
 }
 
-function AppliedLine({ config, id }: { config: AppConfig; id: IntegrationId }) {
-  const a = config.integrations.lastApplied[id]
-  if (!a) return <span className="text-[11px] text-zinc-600">nunca aplicado</span>
+type SaveFn = (patch: SettingsPatch) => Promise<void>
+
+const CHECK_STYLE = {
+  ok: ['✓', 'text-emerald-300'],
+  warn: ['•', 'text-zinc-400'],
+  fail: ['✗', 'text-red-300'],
+  off: ['○', 'text-zinc-500']
+} as const
+
+/** Resultado do teste de verdade (conta, MCP no Claude, conectores da conta claude.ai) */
+function CheckList({ check, testing }: { check: IntegrationCheck | undefined; testing: boolean }) {
+  if (testing && !check)
+    return (
+      <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+        <Loader2 size={12} className="animate-spin" /> testando de verdade… (pode levar uns segundos)
+      </div>
+    )
+  if (!check) return null
   return (
-    <span className={cn('text-[11px]', a.ok ? 'text-emerald-400' : 'text-red-400')}>
-      {a.ok ? '● aplicado' : '● falhou'} · {new Date(a.at).toLocaleString()}
-    </span>
+    <div data-testid="integration-check" className="space-y-1 rounded-lg border border-line bg-bg p-2.5">
+      {check.lines.map((l, i) => (
+        <div key={i} className="flex gap-2 text-[11px] leading-relaxed">
+          <span className={cn('w-3 shrink-0 font-bold', CHECK_STYLE[l.state][1])}>{CHECK_STYLE[l.state][0]}</span>
+          <span className="min-w-0 [overflow-wrap:anywhere]">
+            <b className="text-zinc-300">{l.label}:</b> <span className={CHECK_STYLE[l.state][1]}>{l.detail}</span>
+          </span>
+        </div>
+      ))}
+      <div className="text-[10px] text-zinc-600">
+        testado {new Date(check.at).toLocaleTimeString()} {testing && '· testando de novo…'}
+      </div>
+    </div>
   )
 }
 
-type SaveFn = (patch: SettingsPatch) => Promise<void>
+/** Resumo no canto do card a partir do teste */
+function CheckBadge({ check, testing }: { check: IntegrationCheck | undefined; testing: boolean }) {
+  if (testing) return <span className="text-[11px] text-zinc-500">testando…</span>
+  if (!check) return null
+  const main = check.lines.filter((l) => l.label !== 'Conectores da sua conta claude.ai (todos)')
+  if (main.some((l) => l.state === 'ok')) {
+    const fails = main.some((l) => l.state === 'fail')
+    return <span className={cn('text-[11px]', fails ? 'text-amber-300' : 'text-emerald-400')}>{fails ? '● funcionando em parte' : '● funcionando'}</span>
+  }
+  if (main.some((l) => l.state === 'fail')) return <span className="text-[11px] text-red-400">● com problema</span>
+  return <span className="text-[11px] text-zinc-500">○ não configurado</span>
+}
 
 // ---------------------------------------------------------------- Integrações
 
@@ -247,26 +284,53 @@ function IntegrationsTab({ config, sec, save }: { config: AppConfig; sec: Secret
         setGcSecret('')
         setGcJson('')
       }
+      test(id)
     })
 
-  const status = (id: IntegrationId) =>
-    run(id + ':status', async () => {
-      const r = await window.api.mcpStatus(id)
-      setResults((s) => ({ ...s, [id]: r }))
-    })
+  // Teste de verdade: roda sozinho ao abrir a aba e depois de aplicar
+  const [checks, setChecks] = useState<Partial<Record<IntegrationId, IntegrationCheck>>>({})
+  const [testing, setTesting] = useState<Partial<Record<IntegrationId, boolean>>>({})
+  const test = async (id: IntegrationId) => {
+    setTesting((t) => ({ ...t, [id]: true }))
+    try {
+      const c = await window.api.integrationCheck(id)
+      setChecks((s) => ({ ...s, [id]: c }))
+    } finally {
+      setTesting((t) => ({ ...t, [id]: false }))
+    }
+  }
+  useEffect(() => {
+    for (const id of ['jira', 'github', 'gchat'] as IntegrationId[]) test(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const status = (id: IntegrationId) => test(id)
 
   const clearSecret = (k: SecretKey) => save({ secrets: { [k]: null } })
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-zinc-500">
-        Ao aplicar, o app registra o servidor no Claude Code com <code className="text-purple">claude mcp</code> (escopo
-        do usuário), com nomes <code className="text-purple">ccc-*</code> para não mexer nos seus MCPs existentes. Os
-        tokens vão pelo stdin, nunca na linha de comando.
-      </p>
+      <div className="space-y-1.5 rounded-lg border border-line bg-bg p-3 text-[11px] leading-relaxed text-zinc-400">
+        <div className="text-xs font-semibold text-zinc-200">Para que servem</div>
+        <div>
+          <b className="text-zinc-300">Jira:</b> as Demandas puxam o card (título, descrição, comentários) e o Claude pode
+          consultar cards sozinho. Para as Demandas bastam URL, e-mail e token.
+        </div>
+        <div>
+          <b className="text-zinc-300">GitHub:</b> opcional. Deixa o Claude ler PRs, issues e outros repositórios. O git do
+          card (branch, puxar, atualizar com a master) <i>não</i> precisa disso: usa o git do seu PC.
+        </div>
+        <div>
+          <b className="text-zinc-300">Google Chat:</b> é o que o <b>Vigia</b> usa para ler as conversas e achar pedidos de
+          deploy. Sem ele, o Vigia não tem o que ler.
+        </div>
+        <div className="text-zinc-500">
+          "Salvar e aplicar" registra o servidor no Claude Code (<code className="text-purple">claude mcp</code>, nomes{' '}
+          <code className="text-purple">ccc-*</code>). O teste abaixo de cada um verifica de verdade se está funcionando.
+        </div>
+      </div>
 
       {/* GitHub */}
-      <Section icon={<Github size={15} />} title="Git (GitHub)" right={<AppliedLine config={config} id="github" />}>
+      <Section icon={<Github size={15} />} title="Git (GitHub)" right={<CheckBadge check={checks.github} testing={!!testing.github} />}>
         <Toggle checked={gh.enabled} onChange={(v) => setGh({ ...gh, enabled: v })} label="Ativar MCP do GitHub" />
         <Toggle
           checked={gh.readOnly}
@@ -295,15 +359,21 @@ function IntegrationsTab({ config, sec, save }: { config: AppConfig; sec: Secret
             <Spin on={busy === 'github'} /> Salvar e aplicar
           </Button>
           <Button size="sm" disabled={!!busy} onClick={() => status('github')}>
-            <Spin on={busy === 'github:status'} /> <Search size={12} /> Ver status
+            <Spin on={!!testing.github} /> <Search size={12} /> Testar
           </Button>
         </div>
         <Result r={results.github ?? null} />
+        <CheckList check={checks.github} testing={!!testing.github} />
       </Section>
 
       {/* Jira */}
-      <Section icon={<SquareKanban size={15} />} title="Jira" right={<AppliedLine config={config} id="jira" />}>
-        <Toggle checked={jira.enabled} onChange={(v) => setJira({ ...jira, enabled: v })} label="Ativar MCP do Jira" />
+      <Section icon={<SquareKanban size={15} />} title="Jira" right={<CheckBadge check={checks.jira} testing={!!testing.jira} />}>
+        <Toggle
+          checked={jira.enabled}
+          onChange={(v) => setJira({ ...jira, enabled: v })}
+          label="Ativar MCP do Jira (opcional)"
+          hint="As Demandas funcionam só com URL, e-mail e token. Ativar deixa o Claude consultar o Jira por conta própria (precisa do uv). Se o teste mostrar o conector Atlassian da sua conta claude.ai, nem precisa."
+        />
         <div className="grid grid-cols-2 gap-3">
           <Field label="URL">
             <input
@@ -351,14 +421,15 @@ function IntegrationsTab({ config, sec, save }: { config: AppConfig; sec: Secret
             <Spin on={busy === 'jira'} /> Salvar e aplicar
           </Button>
           <Button size="sm" disabled={!!busy} onClick={() => status('jira')}>
-            <Spin on={busy === 'jira:status'} /> <Search size={12} /> Ver status
+            <Spin on={!!testing.jira} /> <Search size={12} /> Testar
           </Button>
         </div>
         <Result r={results.jira ?? null} />
+        <CheckList check={checks.jira} testing={!!testing.jira} />
       </Section>
 
       {/* Google Chat */}
-      <Section icon={<MessageSquare size={15} />} title="Google Chat" right={<AppliedLine config={config} id="gchat" />}>
+      <Section icon={<MessageSquare size={15} />} title="Google Chat" right={<CheckBadge check={checks.gchat} testing={!!testing.gchat} />}>
         <Toggle
           checked={gc.enabled}
           onChange={(v) => setGc({ ...gc, enabled: v })}
@@ -495,10 +566,11 @@ function IntegrationsTab({ config, sec, save }: { config: AppConfig; sec: Secret
             </Button>
           )}
           <Button size="sm" disabled={!!busy} onClick={() => status('gchat')}>
-            <Spin on={busy === 'gchat:status'} /> <Search size={12} /> Ver status
+            <Spin on={!!testing.gchat} /> <Search size={12} /> Testar
           </Button>
         </div>
         <Result r={results.gchat ?? null} />
+        <CheckList check={checks.gchat} testing={!!testing.gchat} />
       </Section>
     </div>
   )

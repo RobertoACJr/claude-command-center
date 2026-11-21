@@ -119,6 +119,7 @@ const api: CommandCenterApi = {
   secretsStatus: () => ipcRenderer.invoke('secrets:status'),
   mcpApply: (id) => ipcRenderer.invoke('mcp:apply', id),
   mcpStatus: (id) => ipcRenderer.invoke('mcp:status', id),
+  integrationCheck: (id) => ipcRenderer.invoke('integration:check', id),
   mcpLogin: (id) => ipcRenderer.invoke('mcp:login', id),
   telegramTest: () => ipcRenderer.invoke('telegram:test'),
   telegramDetectChat: () => ipcRenderer.invoke('telegram:detectChat'),

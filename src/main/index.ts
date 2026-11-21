@@ -12,7 +12,7 @@ import { checkGuides, guidesInstruction } from './guides'
 import { RunManager } from './runner'
 import { RemoteManager } from './remote'
 import { secrets } from './secrets'
-import { applyIntegration, integrationLogin, integrationStatus } from './mcp'
+import { applyIntegration, integrationCheck, integrationLogin, integrationStatus } from './mcp'
 import { detectChatId, editTelegramMessage, escapeHtml, formatAlert, registerBot, sendTelegram, sendTelegramMessage, TelegramBot } from './telegram'
 import { Automation } from './automation'
 import { geminiCheck, geminiSetup } from './gemini'
@@ -567,6 +567,9 @@ function registerIpc(): void {
   })
   ipcMain.handle('mcp:status', (_e, id: IntegrationId) =>
     INTEGRATIONS.includes(id) ? integrationStatus(id) : { ok: false, message: 'Integração desconhecida' }
+  )
+  ipcMain.handle('integration:check', (_e, id: IntegrationId) =>
+    INTEGRATIONS.includes(id) ? integrationCheck(id, store.get()) : { lines: [], at: Date.now() }
   )
   ipcMain.handle('mcp:login', async (_e, id: IntegrationId) => {
     if (!INTEGRATIONS.includes(id)) return { ok: false, message: 'Integração desconhecida' }
