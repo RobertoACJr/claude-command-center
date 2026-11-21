@@ -58,10 +58,10 @@ export function Header({
           data-testid="palette-button"
           onClick={onOpenPalette}
           title="Paleta de comandos: rodar scripts, executar projetos, ligar Remote… (Ctrl+K)"
-          className="hidden h-9 cursor-pointer items-center gap-2 rounded-lg border border-line bg-card px-3 text-xs text-zinc-500 transition-colors hover:border-violet/60 hover:text-white md:inline-flex"
+          className="hidden h-9 cursor-pointer items-center gap-2 rounded-lg border border-line bg-card px-3 text-xs whitespace-nowrap text-zinc-500 transition-colors hover:border-violet/60 hover:text-white md:inline-flex"
         >
           <Command size={13} /> <span className="hidden xl:inline">Comandos</span>{' '}
-          <kbd className="hidden rounded border border-line px-1 text-[10px] xl:inline">Ctrl K</kbd>
+          <kbd className="hidden rounded border border-line px-1 text-[10px] whitespace-nowrap xl:inline">Ctrl K</kbd>
         </button>
         <WatcherPill state={watcher} enabled={watcherEnabled} onClick={onToggleWatcher} />
         <button
@@ -70,7 +70,7 @@ export function Header({
           onClick={onOpenCosts}
           title={costGuard?.over ? 'Limite diário de gastos atingido: automações pausadas' : 'Gastos com IA hoje'}
           className={cn(
-            'hidden h-9 cursor-pointer items-center rounded-lg border px-2.5 text-xs tabular-nums transition-colors md:inline-flex',
+            'hidden h-9 cursor-pointer items-center rounded-lg border px-2.5 text-xs whitespace-nowrap tabular-nums transition-colors md:inline-flex',
             costGuard?.over && !costGuard.overridden
               ? 'border-red-500/50 bg-red-500/10 text-red-300'
               : 'border-line bg-card text-zinc-400 hover:border-violet/60 hover:text-white'
