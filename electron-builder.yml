@@ -20,12 +20,14 @@ linux:
   icon: build/icons
   category: Development
   executableName: claude-command-center
-  synopsis: Painel de projetos, scripts e Claude Code
+  synopsis: Hélice, central de comando de projetos, demandas e IAs
   description: Painel desktop para projetos, scripts, Claude Code, Remote Control e alertas de deploy.
   maintainer: Roberto <RobertoACJr@users.noreply.github.com>
   desktop:
     entry:
-      Keywords: claude;terminal;deploy;scripts;
+      Name: Hélice
+      Comment: Central de comando de projetos, demandas e IAs
+      Keywords: helice;claude;terminal;deploy;scripts;
 appImage:
   artifactName: ${name}-${version}-${arch}.AppImage
 deb:
@@ -46,8 +48,8 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: always
   createStartMenuShortcut: true
-  shortcutName: Claude Command Center
-  uninstallDisplayName: Claude Command Center
+  shortcutName: Hélice
+  uninstallDisplayName: Hélice
   deleteAppDataOnUninstall: false
 
 # Onde o app procura atualizações (o upload é feito pelo workflow; o build roda com --publish never)

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  SyncStatus,
   CostGuard,
   QueueState,
   Demand,
@@ -80,6 +81,16 @@ const api: CommandCenterApi = {
   demandReview: (id) => ipcRenderer.invoke('demands:review', id),
   demandSaveReview: (id, text) => ipcRenderer.invoke('demands:saveReview', id, text),
   demandPublishReview: (id) => ipcRenderer.invoke('demands:publishReview', id),
+  demandQueueCopy: (id) => ipcRenderer.invoke('demands:queueCopy', id),
+  demandBringQueue: (id) => ipcRenderer.invoke('demands:bringQueue', id),
+  demandRemoveQueueCopy: (id) => ipcRenderer.invoke('demands:removeQueueCopy', id),
+  demandPrDraft: (id) => ipcRenderer.invoke('demands:prDraft', id),
+  demandCreatePr: (id, pr) => ipcRenderer.invoke('demands:createPr', id, pr),
+  demandTimings: () => ipcRenderer.invoke('demands:timings'),
+  daily: () => ipcRenderer.invoke('daily:text'),
+  syncStatus: () => ipcRenderer.invoke('sync:status'),
+  syncNow: () => ipcRenderer.invoke('sync:now'),
+  onSync: (cb) => subscribe<SyncStatus>('sync:update', cb),
   queue: () => ipcRenderer.invoke('queue:state'),
   onQueue: (cb) => subscribe<QueueState>('queue:update', cb),
   queueAdd: (t) => ipcRenderer.invoke('queue:add', t),

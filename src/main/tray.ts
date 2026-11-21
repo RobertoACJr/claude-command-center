@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import type { AppConfig } from '../shared/types'
+import { TRAY_FRAMES } from './trayFrames'
 
 export interface TrayActions {
   show: () => void
@@ -16,6 +17,10 @@ export interface TrayActions {
 /** Ícone na bandeja (ao lado do relógio) com status, Vigia e pedidos pendentes */
 export class AppTray {
   private tray: Tray | null = null
+  private frame = 0
+  private timer: NodeJS.Timeout | null = null
+  private state: 'online' | 'away' = 'online'
+  private busy = false
 
   constructor(
     private iconPath: string,
@@ -24,24 +29,48 @@ export class AppTray {
 
   create(): void {
     if (this.tray) return
-    const size = process.platform === 'win32' ? 16 : 22
-    const img = nativeImage.createFromPath(this.iconPath).resize({ width: size, height: size })
-    this.tray = new Tray(img)
-    this.tray.setToolTip('Claude Command Center')
+    void this.iconPath
+    this.tray = new Tray(this.image())
+    this.tray.setToolTip('Hélice')
     // Windows: clique simples abre a janela (no Linux o menu já tem "Abrir")
     this.tray.on('click', () => this.actions.show())
+  }
+
+  private image() {
+    const size = process.platform === 'win32' ? 16 : 22
+    return nativeImage.createFromDataURL(TRAY_FRAMES[this.state][this.frame]).resize({ width: size, height: size })
+  }
+
+  /** Gira a hélice enquanto a fila ou o Vigia trabalham; azul-petróleo no modo Ausente */
+  setActivity(busy: boolean, away: boolean): void {
+    const state = away ? 'away' : 'online'
+    if (busy === this.busy && state === this.state) return
+    this.busy = busy
+    this.state = state
+    if (busy && !this.timer) {
+      this.timer = setInterval(() => {
+        this.frame = (this.frame + 1) % TRAY_FRAMES[this.state].length
+        this.tray?.setImage(this.image())
+      }, 150)
+    } else if (!busy && this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+      this.frame = 0
+    }
+    this.tray?.setImage(this.image())
   }
 
   update(cfg: AppConfig, watcherOn: boolean): void {
     if (!this.tray) return
     const away = cfg.status === 'off'
+    this.setActivity(this.busy, away)
     const pending = cfg.alerts.filter((a) => a.status === 'pending').length
     this.tray.setToolTip(
-      `Claude Command Center · ${away ? 'Ausente' : 'Online'}${watcherOn ? ' · Vigia ligado' : ''}` +
+      `Hélice · ${away ? 'Ausente' : 'Online'}${watcherOn ? ' · Vigia ligado' : ''}` +
         (pending ? ` · ${pending} pedido(s)` : '')
     )
     const menu = Menu.buildFromTemplate([
-      { label: 'Abrir Claude Command Center', click: () => this.actions.show() },
+      { label: 'Abrir a Hélice', click: () => this.actions.show() },
       { type: 'separator' },
       { label: 'Online (no PC)', type: 'radio', checked: !away, click: () => away && this.actions.goOnline() },
       { label: 'Ausente', type: 'radio', checked: away, click: () => !away && this.actions.setAway() },
@@ -60,6 +89,8 @@ export class AppTray {
   }
 
   destroy(): void {
+    if (this.timer) clearInterval(this.timer)
+    this.timer = null
     this.tray?.destroy()
     this.tray = null
   }
@@ -85,7 +116,7 @@ export function applyOpenAtLogin(enabled: boolean): string | null {
       [
         '[Desktop Entry]',
         'Type=Application',
-        'Name=Claude Command Center',
+        'Name=Hélice',
         `Exec="${exec}" --hidden`,
         'X-GNOME-Autostart-enabled=true',
         'Terminal=false',

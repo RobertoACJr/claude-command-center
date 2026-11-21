@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { DollarSign, Unlock } from 'lucide-react'
-import type { AppConfig, CostEntry, CostGuard, Demand } from '@shared/types'
+import type { AppConfig, CostEntry, CostGuard, Demand, DemandTiming } from '@shared/types'
 import { cn } from '../lib/utils'
 import { Button, Modal } from './ui'
 
@@ -95,10 +95,12 @@ export function CostsModal({
   const [days, setDays] = useState<7 | 30>(7)
   const [limit, setLimit] = useState('')
   const [hover, setHover] = useState<number | null>(null)
+  const [timings, setTimings] = useState<DemandTiming[]>([])
 
   useEffect(() => {
     if (!open) return
     window.api.costs().then(setEntries)
+    window.api.demandTimings().then(setTimings)
     setLimit(config.costs.dailyLimitUsd ? String(config.costs.dailyLimitUsd) : '')
   }, [open, guard?.todayUsd, config.costs.dailyLimitUsd])
 
@@ -121,7 +123,7 @@ export function CostsModal({
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Gastos com IA" icon={<DollarSign size={16} />} width="max-w-5xl">
+    <Modal open={open} onClose={onClose} title="Gastos com IA e tempo das demandas" icon={<DollarSign size={16} />} width="max-w-5xl">
       <div className="grid grid-cols-3 gap-3">
         <div className="rounded-xl border border-line bg-bg/50 p-3">
           <div className="text-[11px] text-zinc-500">Hoje</div>
@@ -230,6 +232,39 @@ export function CostsModal({
         />
         <Table title="Por IA" rows={group(list, (e) => e.ai, (k) => AI[k as CostEntry['ai']] ?? k)} />
         <Table title="Por origem" rows={group(list, (e) => e.source, (k) => SOURCE[k as CostEntry['source']] ?? k)} />
+      </div>
+
+      <div data-testid="timings" className="rounded-xl border border-line bg-bg/50 p-3">
+        <div className="mb-1 text-xs font-semibold text-zinc-200">Demandas: estimado × real</div>
+        <p className="mb-2 text-[11px] text-zinc-500">
+          Real = dias úteis de "Em dev" até "Feita" (ou até hoje). Estimado = sua estimativa em horas ÷ 8.
+        </p>
+        {timings.filter((t) => t.realDays !== null).length === 0 && <p className="text-[11px] text-zinc-500">Nenhuma demanda começou ainda.</p>}
+        <table className="w-full text-[11px]">
+          <tbody>
+            {timings
+              .filter((t) => t.realDays !== null)
+              .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
+              .slice(0, 12)
+              .map((t) => {
+                const est = t.estimateHours ? t.estimateHours / 8 : null
+                const ratio = est && t.realDays ? t.realDays / est : null
+                return (
+                  <tr key={t.demandId} className="border-t border-line/50">
+                    <td className="py-1 pr-2 font-mono text-purple">{t.key}</td>
+                    <td className="max-w-[260px] truncate py-1 pr-2 text-zinc-300">{t.title}</td>
+                    <td className="py-1 pr-2 text-right text-zinc-400 tabular-nums">{est ? `${Math.round(est * 10) / 10} d` : '—'}</td>
+                    <td className="py-1 pr-2 text-right text-zinc-200 tabular-nums">
+                      {String(t.realDays).replace('.', ',')} d{t.done ? '' : ' (em andamento)'}
+                    </td>
+                    <td className={cn('py-1 text-right tabular-nums', ratio && ratio > 1.2 ? 'text-amber-300' : 'text-zinc-500')}>
+                      {ratio ? `${Math.round(ratio * 100)}%` : ''}
+                    </td>
+                  </tr>
+                )
+              })}
+          </tbody>
+        </table>
       </div>
 
       <div className="rounded-xl border border-line bg-bg/50 p-3">

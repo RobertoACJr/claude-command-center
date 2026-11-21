@@ -33,6 +33,7 @@ export function ProjectModal({
   const [perms, setPerms] = useState<ClaudePerms>({ claudeMode: 'ask', allowedTools: [] })
   const [branch, setBranch] = useState<string | null>(null)
   const [guides, setGuides] = useState('')
+  const [checkCommand, setCheckCommand] = useState('')
   const [guideOk, setGuideOk] = useState<boolean[]>([])
 
   useEffect(() => {
@@ -45,6 +46,7 @@ export function ProjectModal({
     setVars(initial?.vars ?? [])
     setPerms({ claudeMode: initial?.claudeMode ?? 'ask', allowedTools: initial?.allowedTools ?? [] })
     setGuides((initial?.guides ?? []).join('\n'))
+    setCheckCommand(initial?.checkCommand ?? '')
   }, [open, initial])
 
   const guideList = guides
@@ -100,7 +102,8 @@ export function ProjectModal({
         .filter((v) => v.key),
       claudeMode: perms.claudeMode,
       allowedTools: perms.allowedTools,
-      guides: guideList
+      guides: guideList,
+      checkCommand: checkCommand.trim()
     })
     onClose()
   }
@@ -243,6 +246,19 @@ export function ProjectModal({
             ))}
           </div>
         </div>
+      </Field>
+
+      <Field
+        label="Comando de verificação (opcional)"
+        hint="Roda no fim de cada tarefa da fila, na pasta onde o Claude trabalhou. O resultado entra no resumo (ex: npm run lint && npm test)."
+      >
+        <input
+          data-testid="project-check"
+          className={inputCls + ' font-mono text-xs'}
+          value={checkCommand}
+          onChange={(e) => setCheckCommand(e.target.value)}
+          placeholder="npm run lint && npm test"
+        />
       </Field>
 
       <Field

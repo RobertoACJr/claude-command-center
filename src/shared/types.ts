@@ -24,6 +24,8 @@ export interface Project {
   allowedTools: string[]
   /** Arquivos-guia do projeto, relativos à pasta (ex: docs/STYLE_GUIDE.md): as IAs leem e seguem */
   guides: string[]
+  /** Comando de verificação (ex: npm run lint && npm test): roda no fim de cada tarefa da fila */
+  checkCommand: string
 }
 
 /**
@@ -268,6 +270,22 @@ export interface AppConfig {
   rules: AutomationRule[]
   queue: QueueConfig
   costs: CostsConfig
+  sync: SyncConfig
+}
+
+export interface SyncConfig {
+  enabled: boolean
+  /** Repositório git privado (ex: git@github.com:voce/helice-sync.git) */
+  repoUrl: string
+}
+
+export interface SyncStatus extends SyncConfig {
+  running: boolean
+  lastAt: number | null
+  lastResult: string
+  ok: boolean
+  /** Nome deste PC no repositório (as pastas dos projetos ficam por PC) */
+  machine: string
 }
 
 export interface QueueConfig {
@@ -275,6 +293,8 @@ export interface QueueConfig {
   onlyAway: boolean
   /** Fila pausada à mão */
   paused: boolean
+  /** Tarefas de demanda rodam numa cópia separada do projeto (git worktree), sem mexer na sua pasta */
+  useWorktree: boolean
 }
 
 export interface CostsConfig {
@@ -299,6 +319,7 @@ export interface SettingsPatch {
   rules?: AutomationRule[]
   queue?: Partial<QueueConfig>
   costs?: Partial<CostsConfig>
+  sync?: Partial<SyncConfig>
   /** string = grava, null = apaga, ausente = mantém */
   secrets?: Partial<Record<SecretKey, string | null>>
 }
@@ -440,6 +461,12 @@ export interface Demand {
   /** Última revisão com IA (rascunho até publicar) */
   review: DemandReview | null
   reviewAi: ReviewAi
+  /** Conversa do Claude na cópia da fila (outra pasta = outra conversa) */
+  queueSessionId: string | null
+  /** PR aberto pelo app */
+  prUrl: string | null
+  /** Quando a etapa mudou (para estimado × real) */
+  statusLog: Array<{ at: number; status: DemandStatus }>
   timeline: Array<{ at: number; text: string }>
   createdAt: number
   updatedAt: number
@@ -523,6 +550,42 @@ export interface QueueTask {
   origin: 'app' | 'telegram'
   /** Já entrou num resumo enviado */
   reported?: boolean
+  /** Rodando: o Claude trabalhando ou o comando de verificação */
+  phase?: 'trabalhando' | 'verificando'
+  /** Pasta onde rodou (cópia da fila) */
+  cwd?: string
+  /** Commit local que o app fez na cópia da fila */
+  committed?: boolean
+  /** Resultado do comando de verificação do projeto */
+  check?: { command: string; ok: boolean; output: string }
+}
+
+/** Situação da cópia da fila de uma demanda */
+export interface DemandQueueCopy {
+  dir: string
+  exists: boolean
+  /** Commits da fila que ainda não estão na branch do card */
+  ahead: number
+}
+
+/** Rascunho do PR montado a partir do card, desenho e revisão */
+export interface PrDraft {
+  title: string
+  body: string
+  base: string
+}
+
+/** Estimado × real de uma demanda */
+export interface DemandTiming {
+  demandId: string
+  key: string
+  title: string
+  estimateHours: number | null
+  /** Dias úteis entre começar (Em dev) e terminar (Feita) — ou até hoje, se não terminou */
+  realDays: number | null
+  done: boolean
+  startedAt: number | null
+  doneAt: number | null
 }
 
 export interface QueueState {
@@ -657,6 +720,19 @@ export interface CommandCenterApi {
   demandReview(id: string): Promise<OpResult>
   demandSaveReview(id: string, text: string): Promise<void>
   demandPublishReview(id: string): Promise<OpResult>
+  demandQueueCopy(id: string): Promise<DemandQueueCopy | null>
+  demandBringQueue(id: string): Promise<OpResult>
+  demandRemoveQueueCopy(id: string): Promise<OpResult>
+  demandPrDraft(id: string): Promise<PrDraft | null>
+  demandCreatePr(id: string, pr: { title: string; body: string; draft: boolean }): Promise<OpResult>
+  demandTimings(): Promise<DemandTiming[]>
+  /** Resumo para a daily (texto pronto para colar) */
+  daily(): Promise<string>
+
+  // Sincronizar entre PCs
+  syncStatus(): Promise<SyncStatus>
+  syncNow(): Promise<OpResult>
+  onSync(cb: (s: SyncStatus) => void): () => void
 
   // Fila de tarefas
   queue(): Promise<QueueState>

@@ -134,6 +134,16 @@ O usuário não conseguiu configurar Git, Jira, Google Chat nem Telegram sozinho
 - [x] `npm test`: 30 testes dos módulos (variáveis, git com repositórios reais, demandas com Jira falso, fila, custos,
   histórico, Telegram com servidor falso, Claude falso no runner, configuração). Rodam no CI antes de gerar os instaladores.
 
+### Rodada 5 ✅ (v0.13.0)
+- [x] Novo nome e ícone: **Hélice** (três C girando); a hélice gira na bandeja e no topo quando a fila/Vigia trabalham;
+  azul-petróleo no modo Ausente. O nome técnico do pacote continua o mesmo (atualizações e configurações intactas).
+- [x] Fila em cópia separada (git worktree) com commit local por tarefa, "Trazer para a branch" e "Remover cópia".
+- [x] Comando de verificação do projeto no fim de cada tarefa da fila.
+- [x] Abrir PR pelo app (push + gh pr create, rascunho opcional).
+- [x] Resumo para a daily (app e /daily).
+- [x] Estimado × real por demanda.
+- [x] Sincronizar entre PCs por repositório git privado (mescla de três vias; segredos ficam em cada PC).
+
 ### Fase 14: Modelos de projeto (sem prioridade por enquanto)
 - [ ] "Projeto Node", "Laravel", etc. com comando de execução, variáveis e scripts comuns já prontos.
 

@@ -89,6 +89,12 @@ export function QueueModal({
           label="Só quando eu estiver Ausente"
           hint="Desligado: começa assim que a tarefa entra na fila."
         />
+        <Toggle
+          checked={q.useWorktree}
+          onChange={(v) => onSaveSettings({ useWorktree: v })}
+          label="Tarefas de demanda numa cópia separada"
+          hint="O Claude trabalha em outra pasta (git worktree), sem mexer na sua. O trabalho vira commits em fila/WEB-123."
+        />
         <div className="ml-auto flex gap-2">
           <Button size="sm" onClick={() => onSaveSettings({ paused: !q.paused })}>
             {q.paused ? <Play size={12} /> : <Pause size={12} />} {q.paused ? 'Retomar' : 'Pausar'}
@@ -170,7 +176,13 @@ export function QueueModal({
                     <span className="font-mono text-purple">{name(t)}</span> · {t.prompt}
                   </div>
                   <div className="text-[10px] text-zinc-500">
-                    <span className={STATUS[t.status].cls}>{STATUS[t.status].label}</span>
+                    <span className={STATUS[t.status].cls}>{t.phase === 'verificando' ? 'Verificando' : STATUS[t.status].label}</span>
+                    {t.check && (
+                      <span className={t.check.ok ? 'text-emerald-300' : 'text-red-300'}>
+                        {' · '}
+                        {t.check.ok ? 'verificação ok' : t.phase === 'verificando' ? '' : 'verificação falhou'}
+                      </span>
+                    )}
                     {t.startedAt ? ` · começou ${fmt(t.startedAt)}` : ` · criada ${fmt(t.createdAt)}`}
                     {t.endedAt ? ` · terminou ${fmt(t.endedAt)}` : ''}
                     {t.costUsd ? ` · US$ ${t.costUsd.toFixed(2)}` : ''}
@@ -208,10 +220,13 @@ export function QueueModal({
                   </button>
                 )}
               </div>
-              {expanded && (t.summary || t.error) && (
+              {expanded && (t.summary || t.error || t.check) && (
                 <pre className="selectable max-h-60 overflow-y-auto border-t border-line px-3 py-2 font-sans text-[11px] whitespace-pre-wrap text-zinc-300 [overflow-wrap:anywhere]">
                   {t.error ? `⚠ ${t.error}\n\n` : ''}
                   {t.summary}
+                  {t.check && t.phase !== 'verificando'
+                    ? `\n\n${t.check.ok ? '✔' : '✖'} ${t.check.command}\n${t.check.output}`
+                    : ''}
                 </pre>
               )}
             </div>

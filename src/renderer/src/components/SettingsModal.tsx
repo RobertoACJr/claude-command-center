@@ -7,6 +7,7 @@ import type {
   ReplyTemplate,
   RuleMode,
   IntegrationCheck,
+  SyncStatus,
   IntegrationId,
   OpResult,
   SecretKey,
@@ -103,6 +104,55 @@ export function SettingsModal({
 }
 
 // ---------------------------------------------------------------- helpers
+
+/** Sincronizar configuração e demandas entre PCs por um repositório git privado */
+function SyncSection({ config, save }: { config: AppConfig; save: SaveFn }) {
+  const [st, setSt] = useState<SyncStatus | null>(null)
+  const [url, setUrl] = useState(config.sync.repoUrl)
+  useEffect(() => {
+    window.api.syncStatus().then(setSt)
+    return window.api.onSync(setSt)
+  }, [])
+  useEffect(() => setUrl(config.sync.repoUrl), [config.sync.repoUrl])
+  return (
+    <Section
+      icon={<RefreshCw size={15} />}
+      title="Sincronizar entre PCs"
+      help={
+        <>
+          Mantém igual no Ubuntu e no Windows: projetos, scripts, ações, regras, respostas, preferências e demandas. Usa um
+          repositório git <b>privado</b> seu (crie um vazio no GitHub, ex: helice-sync). <b>Não vão</b> tokens e senhas (cada PC
+          tem os seus), histórico, gastos e fila. A pasta de cada projeto é guardada por PC.
+        </>
+      }
+    >
+      <Field label="Repositório (privado)" hint="Ex: git@github.com:RobertoACJr/helice-sync.git ou https://github.com/RobertoACJr/helice-sync.git (usa o login do git deste PC).">
+        <div className="flex gap-2">
+          <input data-testid="sync-url" className={inputCls + ' font-mono text-xs'} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="git@github.com:voce/helice-sync.git" />
+          <Button size="sm" onClick={() => save({ sync: { repoUrl: url.trim() } })} disabled={url.trim() === config.sync.repoUrl}>
+            Salvar
+          </Button>
+        </div>
+      </Field>
+      <Toggle
+        checked={config.sync.enabled}
+        onChange={(v) => save({ sync: { enabled: v } })}
+        label="Sincronizar sozinho (ao abrir e a cada 15 min)"
+        hint={st ? `Este PC aparece no repositório como "${st.machine}".` : undefined}
+      />
+      <div className="flex flex-wrap items-center gap-3">
+        <Button size="sm" disabled={!config.sync.repoUrl || st?.running} onClick={() => window.api.syncNow()}>
+          {st?.running ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Sincronizar agora
+        </Button>
+        {st?.lastAt && (
+          <span className={cn('text-[11px]', st.ok ? 'text-zinc-400' : 'text-red-300')}>
+            {new Date(st.lastAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })} · {st.lastResult}
+          </span>
+        )}
+      </div>
+    </Section>
+  )
+}
 
 /** Bolinha "?" que mostra uma explicação ao passar o mouse */
 function HelpTip({ children }: { children: ReactNode }) {
@@ -954,6 +1004,8 @@ function GeneralTab({ config, save }: { config: AppConfig; save: SaveFn }) {
           hint="Com sucesso ou falha. Clicar leva para a aba do script."
         />
       </Section>
+
+      <SyncSection config={config} save={save} />
 
       <Section icon={<RefreshCw size={15} />} title={`Atualizações · versão ${up?.current ?? ''}`}>
         <p className="text-xs text-zinc-400">{upText}</p>

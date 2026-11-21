@@ -30,6 +30,8 @@ import { TelegramControl } from './tgcontrol'
 import { DemandManager } from './demands'
 import { costs } from './costs'
 import { QueueManager, queueSummary } from './queue'
+import { buildDaily } from './daily'
+import { SyncManager } from './sync'
 import type {
   AlertStatus,
   AppNotification,
@@ -85,7 +87,20 @@ const runs = new RunManager((e) => {
   if (e.type === 'exit') approvals.runEnded(e.runId)
   send('run:event', e)
 })
-const demands = new DemandManager(app.getPath('userData'), runs, (list, busy) => send('demands:update', { list, busy }))
+const demands = new DemandManager(app.getPath('userData'), runs, (list, busy) => {
+  send('demands:update', { list, busy })
+  refreshTrayActivity()
+})
+/** Hélice da bandeja gira enquanto a fila, o Vigia ou uma demanda trabalham */
+function refreshTrayActivity(): void {
+  try {
+    const busy =
+      queue.state().tasks.some((t) => t.status === 'rodando') || watcher.getState().phase === 'checking' || demands.busyList().length > 0
+    tray.setActivity(busy, store.get().status === 'off')
+  } catch {
+    /* durante a inicialização algum ainda não existe */
+  }
+}
 
 // ---------- Custos ----------
 costs.init(app.getPath('userData'), {
@@ -118,13 +133,42 @@ function recordRunCost(e: Extract<RunEvent, { type: 'usage' }>): void {
   })
 }
 
+// ---------- Daily ----------
+function dailyText(): string {
+  const cfg = store.get()
+  return buildDaily({ now: Date.now(), demands: demands.all(), history: history.list(), queue: queue.state().tasks, projects: cfg.projects })
+}
+
+// ---------- Sincronizar entre PCs ----------
+const sync = new SyncManager(app.getPath('userData'), {
+  config: () => store.get(),
+  applyConfig: (merged, paths) => {
+    const c = store.applySynced(merged, paths)
+    send('config:changed', c)
+  },
+  demands: () => demands.all(),
+  applyDemands: (list) => demands.replaceAll(list),
+  onChange: (s) => send('sync:update', s)
+})
+let syncTimer: NodeJS.Timeout | null = null
+function scheduleSync(): void {
+  if (syncTimer) clearInterval(syncTimer)
+  syncTimer = null
+  const c = store.get().sync
+  if (!c.enabled || !c.repoUrl) return
+  syncTimer = setInterval(() => void sync.sync().then((r) => !r.ok && appLog({ kind: 'error', text: `[Sincronizar] ${r.message}` })), 15 * 60_000)
+}
+
 // ---------- Fila de tarefas ----------
 const queueName = (t: { projectId: string; demandId?: string }) =>
   (t.demandId && demands.get(t.demandId)?.key) || store.get().projects.find((p) => p.id === t.projectId)?.name || '?'
 const queue = new QueueManager(app.getPath('userData'), {
   runs,
   demands,
-  onChange: (q) => send('queue:update', q),
+  onChange: (q) => {
+    send('queue:update', q)
+    refreshTrayActivity()
+  },
   onDrained: (done) => {
     const text = queueSummary(done, queueName)
     notify('📋 Fila concluída', text.split('\n')[0], 'queue', 'fila', 'unfocused', false)
@@ -252,6 +296,7 @@ const watcher = new Watcher(
   (s) => {
     send('watcher:state', s)
     tray.update(store.get(), s.phase === 'idle' || s.phase === 'checking')
+    refreshTrayActivity()
   },
   appLog,
   (a) => automation.onNewAlert(a)
@@ -278,6 +323,7 @@ async function telegramStatus(): Promise<string> {
 }
 
 const tg = new TelegramControl({
+  daily: () => dailyText(),
   runs,
   demands,
   queue,
@@ -510,7 +556,7 @@ function createWindow(): void {
     minWidth: 980,
     minHeight: 640,
     show: false,
-    title: 'Claude Command Center',
+    title: 'Hélice',
     backgroundColor: '#09090B',
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon: appIcon } : {}),
@@ -615,6 +661,10 @@ function registerIpc(): void {
       if (SECRET_KEYS.includes(k as SecretKey) && v !== undefined) secrets.set(k as SecretKey, v)
     }
     const out = store.saveSettings({ ...patch, secrets: undefined })
+    if (patch.sync) {
+      scheduleSync()
+      send('sync:update', sync.status())
+    }
     if (patch.queue || patch.costs) {
       void queue.tick()
       send('costs:update', costs.guard())
@@ -644,7 +694,7 @@ function registerIpc(): void {
     return r
   })
   ipcMain.handle('telegram:test', () =>
-    sendTelegram(store.get().telegram.chatId, '✅ <b>Claude Command Center</b>\nNotificações funcionando.')
+    sendTelegram(store.get().telegram.chatId, '✅ <b>Hélice</b>\nNotificações funcionando.')
   )
   ipcMain.handle('telegram:detectChat', () => detectChatId())
   ipcMain.handle('watcher:state', () => watcher.getState())
@@ -705,6 +755,20 @@ function registerIpc(): void {
     const g = costs.overrideToday()
     void queue.tick()
     return g
+  })
+  ipcMain.handle('demands:queueCopy', (_e, id: string) => demands.queueCopy(String(id)))
+  ipcMain.handle('demands:bringQueue', (_e, id: string) => demands.bringQueue(String(id)))
+  ipcMain.handle('demands:removeQueueCopy', (_e, id: string) => demands.removeQueueCopy(String(id)))
+  ipcMain.handle('demands:prDraft', (_e, id: string) => demands.prDraft(String(id)))
+  ipcMain.handle('demands:createPr', (_e, id: string, pr: { title: string; body: string; draft: boolean }) =>
+    demands.createPr(String(id), { title: String(pr?.title ?? ''), body: String(pr?.body ?? ''), draft: Boolean(pr?.draft) })
+  )
+  ipcMain.handle('demands:timings', () => demands.timings())
+  ipcMain.handle('daily:text', () => dailyText())
+  ipcMain.handle('sync:status', () => sync.status())
+  ipcMain.handle('sync:now', async () => {
+    const r = await sync.sync()
+    return r
   })
   ipcMain.handle('history:list', () => history.list())
   ipcMain.handle('history:log', (_e, id: string) => history.log(String(id)))
@@ -784,6 +848,11 @@ if (!gotLock) {
     mainWindow?.webContents.once('did-finish-load', () => {
       remote.sync(cfg)
       watcher.evaluate(cfg)
+      // Sincronização entre PCs: logo ao abrir e depois a cada 15 min
+      if (cfg.sync.enabled && cfg.sync.repoUrl) {
+        setTimeout(() => void sync.sync().then((r) => appLog({ kind: r.ok ? 'info' : 'error', text: `[Sincronizar] ${r.message}` })), 8000)
+      }
+      scheduleSync()
     })
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -794,6 +863,7 @@ if (!gotLock) {
   app.on('before-quit', () => {
     quitting = true
     history.flush()
+    if (syncTimer) clearInterval(syncTimer)
     updater.stop()
     bot.stop()
     approvals.stop()

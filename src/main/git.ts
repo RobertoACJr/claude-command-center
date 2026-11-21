@@ -137,3 +137,104 @@ export async function updateWithBase(p: Project, expectBranch: string): Promise<
   }
   return { ok: false, message: 'O merge falhou: ' + m.out.split('\n').slice(-2).join(' ') }
 }
+
+// ---------------------------------------------------------------- cópia separada para a fila (git worktree)
+
+/** Branch da fila para um card: fila/WEB-482 */
+export const queueBranch = (key: string) => `fila/${key}`
+
+const exists = async (cwd: string, ref: string) => (await git(cwd, ['rev-parse', '--verify', '--quiet', ref], 6000)).ok
+
+/**
+ * Garante a cópia da fila (worktree) em `dir`, na branch fila/<card>.
+ * Nasce da branch do card (ou da principal, se o card ainda não tem branch) e, a cada tarefa,
+ * recebe o que você avançou na branch do card.
+ */
+export async function ensureWorktree(p: Project, key: string, dir: string): Promise<OpResult> {
+  if (!SAFE_BRANCH.test(key)) return { ok: false, message: 'Número do card inválido para branch.' }
+  const qb = queueBranch(key)
+  await git(p.path, ['worktree', 'prune'], 10_000)
+  const ready = existsSync(dir) && (await git(dir, ['rev-parse', '--is-inside-work-tree'], 6000)).ok
+  if (!ready) {
+    let r
+    if (await exists(p.path, `refs/heads/${qb}`)) r = await git(p.path, ['worktree', 'add', dir, qb], 120_000)
+    else {
+      const base = await baseBranch(p)
+      const start = (await exists(p.path, `refs/heads/${key}`))
+        ? key
+        : (await exists(p.path, `refs/remotes/origin/${base}`))
+          ? `origin/${base}`
+          : base
+      r = await git(p.path, ['worktree', 'add', '-b', qb, dir, start], 120_000)
+    }
+    if (!r.ok) return { ok: false, message: 'Não consegui criar a cópia da fila: ' + r.out.split('\n').slice(-2).join(' ') }
+  }
+  // Traz o que você fez na branch do card desde a última tarefa
+  if (await exists(p.path, `refs/heads/${key}`)) {
+    const behind = await git(dir, ['rev-list', '--count', `HEAD..${key}`], 8000)
+    if (behind.ok && behind.out.trim() !== '0') {
+      const dirty = (await git(dir, ['status', '--porcelain'], 8000)).out.trim()
+      if (dirty) await commitAll(dir, `${key} (fila): alterações deixadas na cópia`)
+      const m = await git(dir, ['merge', '--no-edit', key], 120_000)
+      if (!m.ok) {
+        await git(dir, ['merge', '--abort'], 10_000)
+        return { ok: false, message: `A branch ${key} e a cópia da fila (${qb}) conflitam. Traga a fila para ${key} ou resolva no terminal.` }
+      }
+    }
+  }
+  return { ok: true, message: 'Cópia pronta.' }
+}
+
+/** Guarda tudo que mudou na cópia num commit local (sem push). Devolve se houve commit. */
+export async function commitAll(dir: string, message: string): Promise<boolean> {
+  const st = await git(dir, ['status', '--porcelain'], 8000)
+  if (!st.ok || !st.out.trim()) return false
+  await git(dir, ['add', '-A'], 30_000)
+  const c = await git(dir, ['commit', '-q', '--no-verify', '-m', message], 30_000)
+  return c.ok
+}
+
+/** Quantos commits da fila ainda não estão na branch do card */
+export async function queueAhead(p: Project, key: string): Promise<number> {
+  const qb = queueBranch(key)
+  if (!(await exists(p.path, `refs/heads/${qb}`))) return 0
+  const ref = (await exists(p.path, `refs/heads/${key}`)) ? key : await baseBranch(p)
+  const r = await git(p.path, ['rev-list', '--count', `${ref}..${qb}`], 8000)
+  return r.ok ? Number(r.out.trim()) || 0 : 0
+}
+
+/** Traz os commits da fila (fila/<card>) para a branch do card */
+export async function bringQueueToBranch(p: Project, key: string): Promise<OpResult> {
+  const qb = queueBranch(key)
+  if (!(await exists(p.path, `refs/heads/${qb}`))) return { ok: false, message: 'A fila ainda não trabalhou nesta demanda.' }
+  if (!(await exists(p.path, `refs/heads/${key}`))) {
+    const r = await git(p.path, ['branch', key, qb])
+    return r.ok ? { ok: true, message: `Branch ${key} criada com o trabalho da fila.` } : { ok: false, message: r.out }
+  }
+  const ahead = await queueAhead(p, key)
+  if (!ahead) return { ok: true, message: `Nada novo: ${key} já tem tudo da fila.` }
+  const info = await gitInfo(p)
+  if (info?.branch === key) {
+    if (info.changed) return { ok: false, message: `Você tem ${info.changed} alteração(ões) sem commit em ${key}. Faça commit ou stash antes de trazer a fila.` }
+    const m = await git(p.path, ['merge', '--no-edit', qb], 120_000)
+    if (m.ok) return { ok: true, message: `${ahead} commit(s) da fila trazidos para ${key}.` }
+    await git(p.path, ['merge', '--abort'], 10_000)
+    return { ok: false, message: `Conflito ao trazer a fila para ${key}. Resolva no terminal: git merge ${qb}` }
+  }
+  // A branch do card não está aberta: só avança se for direto (sem misturar)
+  const ff = await git(p.path, ['merge-base', '--is-ancestor', key, qb], 8000)
+  if (!ff.ok) return { ok: false, message: `${key} e a fila andaram separadas. Vá para a branch ${key} no card e tente de novo (aí eu faço o merge).` }
+  const r = await git(p.path, ['branch', '-f', key, qb])
+  return r.ok ? { ok: true, message: `${ahead} commit(s) da fila trazidos para ${key}.` } : { ok: false, message: r.out }
+}
+
+/** Apaga a cópia da fila e a branch fila/<card> */
+export async function removeWorktree(p: Project, key: string, dir: string): Promise<OpResult> {
+  if (existsSync(dir)) {
+    const r = await git(p.path, ['worktree', 'remove', '--force', dir], 60_000)
+    if (!r.ok) return { ok: false, message: 'Não consegui remover a cópia: ' + r.out.split('\n').slice(-1)[0] }
+  }
+  await git(p.path, ['worktree', 'prune'], 10_000)
+  await git(p.path, ['branch', '-D', queueBranch(key)], 10_000)
+  return { ok: true, message: 'Cópia da fila removida.' }
+}

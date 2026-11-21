@@ -64,6 +64,7 @@ export class TelegramControl {
   constructor(
     private d: {
       runs: RunManager
+      daily: () => string
       demands: DemandManager
       queue: QueueManager
       projects: ProjectProcesses
@@ -146,6 +147,7 @@ export class TelegramControl {
     '/claude · escolhe o projeto; depois é só mandar texto que vira ordem para o Claude',
     '/demandas · escolhe uma demanda; o texto vai para a conversa do Claude dela (ou /demanda WEB-482 texto)',
     '/fila · tarefas na fila; /fila WEB-482 texto (ou /fila NomeDoProjeto texto) põe uma tarefa na fila',
+    '/daily · resumo de ontem/hoje/impedimentos para a daily',
     '/novo · começa uma conversa nova com o Claude',
     '/parar · interrompe o que o Telegram mandou rodar',
     '/log [nome] · últimas linhas de um projeto ou script',
@@ -180,6 +182,9 @@ export class TelegramControl {
       case 'fila':
       case 'f':
         await this.queueCmd(args)
+        return true
+      case 'daily':
+        await this.say(`<pre>${escapeHtml(this.d.daily())}</pre>`)
         return true
       case 'novo':
         this.sessions.clear()

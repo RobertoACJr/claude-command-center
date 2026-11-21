@@ -277,6 +277,11 @@ function ProjectCard({
       </div>
 
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+        {!p.path && (
+          <span title="Veio da sincronização de outro PC: edite o projeto e escolha a pasta aqui" className="rounded-md border border-amber-400/50 px-1.5 py-0.5 text-[11px] text-amber-300">
+            defina a pasta neste PC
+          </span>
+        )}
         <GitMenu p={p} branch={branch} git={git} onDiff={() => onGitDiff(p)} onResult={onGitResult} />
         {git && git.changed > 0 && (
           <span

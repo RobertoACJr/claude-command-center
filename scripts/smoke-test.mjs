@@ -345,6 +345,19 @@ try {
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
   await sleep(300)
 
+  // 4j) Daily pela paleta
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }))`)
+  await sleep(300)
+  await setVal('[data-testid="palette-input"]', 'resumo daily')
+  await sleep(200)
+  await evaluate(`document.querySelector('[data-testid="palette-input"]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`)
+  await sleep(1200)
+  const daily = await evaluate(`document.querySelector('[data-testid="daily-text"]')?.value ?? ''`)
+  if (!daily.includes('Hoje:') || !daily.includes('WEB-482')) fail('Resumo da daily não saiu: ' + daily.slice(0, 200))
+  else console.log('✓ Resumo da daily gerado (com a demanda WEB-482)')
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
+  await sleep(300)
+
   // 4f) Paleta de comandos (Ctrl+K) → Histórico com as execuções de antes
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }))`)
   await sleep(400)

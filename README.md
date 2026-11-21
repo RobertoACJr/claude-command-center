@@ -1,4 +1,6 @@
-# Claude Command Center
+# Hélice
+
+*(antes Claude Command Center)*
 
 Painel desktop para Windows e Ubuntu: seus projetos (rodar, parar, branch), scripts e ações globais,
 ordens para o Claude Code e o Gemini, Remote Control, Modo Vigia no Google Chat com aviso e aprovação pelo Telegram.
@@ -232,6 +234,16 @@ Engrenagem no header → **Configurações & Integrações**.
   Claude, ChatGPT, Gemini ou em dupla. Fica como rascunho; "Publicar no PR" usa o `gh`.
 - **Gastos com IA** (valor de hoje no topo): por dia, projeto, demanda, IA e origem, com limite diário que pausa a
   fila, o Vigia e as regras automáticas.
+- **Fila em cópia separada**: tarefas de demanda rodam numa pasta só da fila (git worktree, branch `fila/WEB-123`),
+  sem mexer na sua. Cada tarefa vira um commit local; na demanda, **Trazer para WEB-123** junta tudo na branch do card.
+  Se o projeto tiver um **comando de verificação** (ex: `npm run lint && npm test`), ele roda no fim de cada tarefa e
+  o resultado entra no resumo.
+- **Abrir PR pelo app** (aba Revisão da demanda): título e descrição montados do card, do desenho e da revisão; você
+  edita, e o app faz o push e abre o PR (rascunho, se quiser) com o `gh`.
+- **Resumo para a daily** (`Ctrl+K` → "daily", ou `/daily` no Telegram): ontem (ou sexta) / hoje / impedimentos.
+- **Estimado × real** (painel de gastos e cabeçalho da demanda): dias úteis de "Em dev" até "Feita" contra a estimativa.
+- **Sincronizar entre PCs** (Configurações → Geral): um repositório git privado seu mantém projetos, scripts, regras,
+  preferências e demandas iguais no Ubuntu e no Windows. Segredos não vão; a pasta de cada projeto é por PC.
 - **Histórico** (ícone de relógio no topo): as últimas 300 execuções com quem disparou (app, Telegram, pedido),
   resultado, duração e a saída completa. Fica só no PC (`history.json` + `history/` na pasta de dados do app).
 - **Paleta de comandos** (`Ctrl+K`): rodar qualquer script, executar/parar projeto, ligar Remote, falar com o Claude

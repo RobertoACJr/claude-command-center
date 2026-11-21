@@ -4,11 +4,15 @@ import { join } from 'path'
 import type { OpResult, QueueState, QueueTask, RunEvent } from '../shared/types'
 import { costs } from './costs'
 import type { DemandManager } from './demands'
-import { git, gitCheckout, gitInfo } from './git'
+import { commitAll, ensureWorktree, git, gitCheckout, gitInfo, queueBranch } from './git'
 import type { RunManager } from './runner'
 import { store } from './store'
 
 /** Vai junto de toda tarefa: ninguém está olhando */
+/** Na cópia separada o app guarda o trabalho num commit local ao fim da tarefa */
+export const QUEUE_COPY_NOTE =
+  '\n\n(Você está numa cópia separada do projeto, só da fila. Não faça commit nem push: o app guarda o que você mudar.)'
+
 export const QUEUE_SUFFIX =
   '\n\n(Tarefa da fila, sem ninguém acompanhando: não faça commit nem push. Se algo exigir uma decisão minha, pare e ' +
   'explique o que falta. No fim, resuma em poucas linhas o que fez, como testar e o que ficou pendente.)'
@@ -33,6 +37,8 @@ export class QueueManager {
   private ticking = false
   /** runId → linhas de texto do Claude */
   private text = new Map<string, string[]>()
+  /** runId → saída do comando de verificação */
+  private out = new Map<string, string[]>()
 
   constructor(
     base: string,
@@ -193,7 +199,19 @@ export class QueueManager {
     const p = cfg.projects.find((x) => x.id === t.projectId)
     if (!p) return this.fail(t, 'O projeto não existe mais.')
     let runId: string | undefined
-    if (t.demandId) {
+    let cwd = p.path
+    if (t.demandId && cfg.queue.useWorktree) {
+      // Cópia separada (git worktree): o Claude trabalha sem tocar na sua pasta
+      const dm = this.d.demands.get(t.demandId)
+      if (!dm) return this.fail(t, 'A demanda não existe mais.')
+      if (!(await gitInfo(p))) return this.fail(t, `${p.name} não é um repositório git.`)
+      cwd = this.d.demands.queueCopyDir(dm)
+      const w = await ensureWorktree(p, dm.key, cwd)
+      if (!w.ok) return this.fail(t, w.message)
+      const r = this.d.demands.implement(dm.id, t.prompt + QUEUE_COPY_NOTE + QUEUE_SUFFIX, false, 'fila', { cwd, queueCopy: true })
+      if (!r.ok || !r.runId) return this.fail(t, r.message)
+      runId = r.runId
+    } else if (t.demandId) {
       const dm = this.d.demands.get(t.demandId)
       if (!dm) return this.fail(t, 'A demanda não existe mais.')
       // Garante a branch da demanda (sem perder nada: só troca com a árvore limpa)
@@ -219,6 +237,8 @@ export class QueueManager {
       })
     }
     t.status = 'rodando'
+    t.phase = 'trabalhando'
+    t.cwd = cwd
     t.runId = runId
     t.startedAt = Date.now()
     this.text.set(runId, [])
@@ -230,6 +250,13 @@ export class QueueManager {
     const t = this.tasks.find((x) => x.runId === e.runId && x.status === 'rodando')
     if (!t) return
     if (e.type === 'lines') {
+      if (t.phase === 'verificando') {
+        const o = this.out.get(e.runId) ?? []
+        for (const l of e.lines) if (l.kind !== 'info') o.push(l.text)
+        if (o.length > 300) o.splice(0, o.length - 300)
+        this.out.set(e.runId, o)
+        return
+      }
       const buf = this.text.get(e.runId)
       if (buf) for (const l of e.lines) if (l.kind === 'claude') buf.push(l.text)
       return
@@ -239,11 +266,62 @@ export class QueueManager {
       return
     }
     if (e.type !== 'exit') return
-    t.endedAt = Date.now()
-    t.status = e.killed ? 'cancelada' : e.code === 0 ? 'feita' : 'falhou'
+    if (t.phase === 'verificando') return this.finishCheck(t, e)
     t.summary = tail(this.text.get(e.runId) ?? []) || undefined
-    if (t.status === 'falhou') t.error = `O Claude saiu com código ${e.code ?? '?'}.`
     this.text.delete(e.runId)
+    if (!e.killed && e.code === 0) {
+      void this.afterWork(t)
+      return
+    }
+    t.endedAt = Date.now()
+    t.status = e.killed ? 'cancelada' : 'falhou'
+    if (t.status === 'falhou') t.error = `O Claude saiu com código ${e.code ?? '?'}.`
+    this.finish(t)
+  }
+
+  /** Claude terminou bem: guarda o trabalho (cópia da fila) e roda a verificação do projeto */
+  private async afterWork(t: QueueTask): Promise<void> {
+    const dm = t.demandId ? this.d.demands.get(t.demandId) : undefined
+    const copy = !!dm && !!t.cwd && t.cwd === this.d.demands.queueCopyDir(dm)
+    if (copy) t.committed = await commitAll(t.cwd!, `${dm!.key} (fila): ${t.prompt.replace(/\s+/g, ' ').slice(0, 60)}`)
+    const p = store.get().projects.find((x) => x.id === t.projectId)
+    const cmd = p?.checkCommand?.trim()
+    if (cmd) {
+      t.phase = 'verificando'
+      const runId = this.d.runs.start({
+        kind: 'terminal',
+        tab: t.demandId ? `demand:${t.demandId}` : 'fila',
+        title: `Verificação · ${dm?.key ?? p!.name}`,
+        content: cmd,
+        cwd: t.cwd ?? p!.path,
+        projectId: t.projectId,
+        origin: 'fila'
+      })
+      t.runId = runId
+      this.text.set(runId, [])
+      t.check = { command: cmd, ok: false, output: '' }
+      this.persist()
+      return
+    }
+    t.status = 'feita'
+    t.endedAt = Date.now()
+    if (copy) t.summary = (t.summary ? t.summary + '\n\n' : '') + (t.committed ? `(guardado num commit em ${queueBranch(dm!.key)})` : '(nada mudou nos arquivos)')
+    this.finish(t)
+  }
+
+  private finishCheck(t: QueueTask, e: Extract<RunEvent, { type: 'exit' }>): void {
+    const out = tail(this.out.get(e.runId) ?? [], 1200)
+    this.out.delete(e.runId)
+    t.check = { command: t.check?.command ?? '', ok: !e.killed && e.code === 0, output: out }
+    t.status = e.killed ? 'cancelada' : 'feita'
+    t.endedAt = Date.now()
+    const dm = t.demandId ? this.d.demands.get(t.demandId) : undefined
+    if (t.committed && dm) t.summary = (t.summary ? t.summary + '\n\n' : '') + `(guardado num commit em ${queueBranch(dm.key)})`
+    this.finish(t)
+  }
+
+  private finish(t: QueueTask): void {
+    t.phase = undefined
     this.d.log(`[Fila] ${t.status}: ${t.prompt.slice(0, 80)}`, t.status === 'feita' ? 'success' : 'error')
     this.persist()
     const more = this.tasks.some((x) => x.status === 'pendente')
@@ -257,15 +335,16 @@ export class QueueManager {
 
 /** Texto do resumo (Telegram e sino) */
 export function queueSummary(done: QueueTask[], names: (t: QueueTask) => string): string {
-  const ok = done.filter((t) => t.status === 'feita').length
+  const ok = done.filter((t) => t.status === 'feita' && (!t.check || t.check.ok)).length
   const bad = done.length - ok
   const cost = done.reduce((s, t) => s + (t.costUsd ?? 0), 0)
   const head = `${ok} feita(s)${bad ? `, ${bad} com problema` : ''}${cost ? ` · US$ ${cost.toFixed(2)}` : ''}`
   const lines = done.map((t) => {
-    const icon = t.status === 'feita' ? '✅' : '❌'
+    const icon = t.status !== 'feita' ? '❌' : t.check && !t.check.ok ? '⚠️' : '✅'
     const what = t.prompt.replace(/\s+/g, ' ').slice(0, 90)
     const note = t.status === 'feita' ? (t.summary ?? '').replace(/\s+/g, ' ').slice(-220) : (t.error ?? '')
-    return `${icon} ${names(t)}: ${what}${note ? `\n   ↳ ${note}` : ''}`
+    const check = t.check ? `\n   ${t.check.ok ? '✔ verificação ok' : '✖ verificação falhou'} (${t.check.command})` : ''
+    return `${icon} ${names(t)}: ${what}${note ? `\n   ↳ ${note}` : ''}${check}`
   })
   return `${head}\n\n${lines.join('\n')}`
 }

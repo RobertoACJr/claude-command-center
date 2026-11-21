@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Command, Eye, EyeOff, History, ListTodo, Loader2, Settings, TerminalSquare } from 'lucide-react'
 import type { CostGuard, NotificationTarget, PresenceStatus, WatcherState } from '@shared/types'
 import { NotificationBell } from './NotificationBell'
+import { HelixLogo } from './HelixLogo'
 import { cn } from '../lib/utils'
 
 export function Header({
@@ -18,12 +19,15 @@ export function Header({
   onOpenPalette,
   onOpenQueue,
   onOpenCosts,
+  busy,
   queueCount,
   queueRunning,
   costGuard
 }: {
   onOpenQueue: () => void
   onOpenCosts: () => void
+  /** Fila ou Vigia trabalhando: a hélice gira */
+  busy: boolean
   queueCount: number
   queueRunning: boolean
   costGuard: CostGuard | null
@@ -43,12 +47,10 @@ export function Header({
   return (
     <header className="flex h-16 shrink-0 items-center justify-between border-b border-line bg-bg/80 px-5">
       <div className="flex items-center gap-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-purple to-violet glow-violet">
-          <TerminalSquare size={19} className="text-white" />
-        </div>
+        <HelixLogo size={36} away={!on} spin={busy} />
         <div className="leading-tight">
-          <div className="text-[15px] font-semibold tracking-tight text-zinc-50">Claude Command Center</div>
-          <div className="text-[11px] text-zinc-500">Projetos · Scripts · Claude Code</div>
+          <div className="text-[15px] font-semibold tracking-tight text-zinc-50">Hélice</div>
+          <div className="text-[11px] text-zinc-500">central de comando · projetos, demandas e IAs</div>
         </div>
       </div>
 

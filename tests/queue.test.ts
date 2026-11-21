@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { writeFileSync } from 'fs'
+import { existsSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { fakeRuns, makeRepo, sh, sleep, tempDir, until, useTempUserData } from './helpers'
 
@@ -110,7 +110,7 @@ test('pausada, limite de gastos, cancelar, mover e tentar de novo', async () => 
 
 test('tarefa de demanda vai para a branch dela (e não troca com alterações pendentes)', async () => {
   costs.init(tempDir(), { limit: () => 0 })
-  store.saveSettings({ queue: { onlyAway: false, paused: false } })
+  store.saveSettings({ queue: { onlyAway: false, paused: false, useWorktree: false } })
   const { work, runs, demands, q } = setup()
   demands.save(normDemand({ id: 'd1', projectId: 'web', key: 'WEB-9' }))
   writeFileSync(join(work, 'sujo.txt'), 'x')
@@ -126,4 +126,66 @@ test('tarefa de demanda vai para a branch dela (e não troca com alterações pe
   assert.equal(runs.started.length, 1)
   assert.equal(runs.started[0].req.tab, 'demand:d1')
   assert.match(runs.started[0].req.content, /implementa/)
+})
+
+test('cópia separada: trabalha fora da sua pasta, guarda em commit, verifica e traz para a branch', async () => {
+  costs.init(tempDir(), { limit: () => 0 })
+  store.saveSettings({ queue: { onlyAway: false, paused: false, useWorktree: true } })
+  const { work, runs, demands, q } = setup()
+  store.saveProject({ ...store.get().projects.find((p) => p.id === 'web')!, checkCommand: 'npm test' })
+  sh(work, 'branch', 'WEB-10')
+  demands.save(normDemand({ id: 'd2', projectId: 'web', key: 'WEB-10' }))
+  writeFileSync(join(work, 'meu-trabalho.txt'), 'não mexa')
+  q.add({ projectId: 'web', demandId: 'd2', prompt: 'cria o filtro' })
+  await until(() => runs.started.length === 1)
+  const run = runs.started[0]
+  const copy = demands.queueCopyDir(demands.get('d2')!)
+  assert.equal(run.req.cwd, copy, 'roda na cópia')
+  assert.equal(sh(work, 'branch', '--show-current'), 'master', 'sua pasta não trocou de branch')
+  assert.equal(sh(copy, 'branch', '--show-current'), 'fila/WEB-10')
+  // O Claude "mexe" na cópia e termina; o app comita e roda a verificação
+  writeFileSync(join(copy, 'filtro.ts'), 'export const f = 1\n')
+  q.handleRunEvent({ runId: run.id, tab: 'demand:d2', type: 'session', sessionId: 's-copia' })
+  demands.handleRunEvent({ runId: run.id, tab: 'demand:d2', type: 'session', sessionId: 's-copia' })
+  demands.handleRunEvent({ runId: run.id, tab: 'demand:d2', type: 'exit', code: 0, signal: null, killed: false })
+  exit(q, runs, run.id)
+  await until(() => runs.started.length === 2)
+  const check = runs.started[1]
+  assert.equal(check.req.kind, 'terminal')
+  assert.equal(check.req.content, 'npm test')
+  assert.equal(check.req.cwd, copy)
+  assert.equal(demands.get('d2')!.queueSessionId, 's-copia', 'conversa da cópia separada')
+  assert.equal(demands.get('d2')!.sessionId, null, 'não mistura com a sua conversa')
+  q.handleRunEvent({ runId: check.id, tab: 'demand:d2', type: 'lines', lines: [{ kind: 'stdout', text: '3 passing' }] })
+  exit(q, runs, check.id, 1)
+  await until(() => q.state().tasks[0].status === 'feita')
+  const t = q.state().tasks[0]
+  assert.equal(t.committed, true)
+  assert.deepEqual({ ok: t.check?.ok, out: t.check?.output }, { ok: false, out: '3 passing' })
+  assert.match(queueSummary([t], () => 'WEB-10'), /verificação falhou/)
+  assert.equal((await demands.queueCopy('d2'))?.ahead, 1)
+  // Trazer para a branch do card (ela não está aberta: avança direto)
+  const b = await demands.bringQueue('d2')
+  assert.equal(b.ok, true, b.message)
+  assert.match(sh(work, 'log', '--oneline', 'WEB-10'), /WEB-10 \(fila\): cria o filtro/)
+  // Próxima tarefa recebe o que você fez na branch do card
+  sh(work, 'checkout', '-q', 'WEB-10')
+  writeFileSync(join(work, 'meu.txt'), 'eu')
+  sh(work, 'add', 'meu.txt')
+  sh(work, 'commit', '-q', '-m', 'meu commit')
+  q.add({ projectId: 'web', demandId: 'd2', prompt: 'ajusta' })
+  await until(() => runs.started.length === 3)
+  assert.ok(existsSync(join(copy, 'meu.txt')), 'a cópia recebeu seu commit')
+  assert.equal(runs.started[2].req.resumeSessionId, 's-copia')
+  demands.handleRunEvent({ runId: runs.started[2].id, tab: 'demand:d2', type: 'exit', code: 0, signal: null, killed: false })
+  exit(q, runs, runs.started[2].id)
+  await until(() => runs.started.length === 4)
+  exit(q, runs, runs.started[3].id, 0)
+  await until(() => q.state().tasks[1].status === 'feita')
+  assert.equal(q.state().tasks[1].committed, false, 'nada mudou, nada comitado')
+  // Remover a cópia
+  const rm = await demands.removeQueueCopy('d2')
+  assert.equal(rm.ok, true, rm.message)
+  assert.equal(existsSync(copy), false)
+  assert.doesNotMatch(sh(work, 'branch'), /fila\/WEB-10/)
 })

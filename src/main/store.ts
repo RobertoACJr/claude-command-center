@@ -59,8 +59,9 @@ function defaults(): AppConfig {
       }
     ],
     rules: [],
-    queue: { onlyAway: true, paused: false },
-    costs: { dailyLimitUsd: 0 }
+    queue: { onlyAway: true, paused: false, useWorktree: true },
+    costs: { dailyLimitUsd: 0 },
+    sync: { enabled: false, repoUrl: '' }
   }
 }
 
@@ -135,8 +136,9 @@ function normalize(raw: unknown): AppConfig {
     claudeGlobal: normPerms(r.claudeGlobal),
     replies: Array.isArray(r.replies) ? (r.replies as ReplyTemplate[]).filter((x) => x && x.id).map(normReply) : d.replies,
     rules: Array.isArray(r.rules) ? (r.rules as AutomationRule[]).filter((x) => x && x.id).map(normRule) : [],
-    queue: { onlyAway: bool(r.queue?.onlyAway, true), paused: bool(r.queue?.paused, false) },
-    costs: { dailyLimitUsd: num(r.costs?.dailyLimitUsd, 0, 0, 10_000) }
+    queue: { onlyAway: bool(r.queue?.onlyAway, true), paused: bool(r.queue?.paused, false), useWorktree: bool(r.queue?.useWorktree, true) },
+    costs: { dailyLimitUsd: num(r.costs?.dailyLimitUsd, 0, 0, 10_000) },
+    sync: { enabled: bool(r.sync?.enabled, false), repoUrl: str(r.sync?.repoUrl).trim() }
   }
 }
 
@@ -200,6 +202,7 @@ function normProject(p: Project): Project {
           .map((v) => ({ key: v.key.trim().replace(/[^\w.-]/g, '_'), value: str(v.value) }))
           .filter((v) => v.key)
       : [],
+    checkCommand: str(p.checkCommand).trim(),
     guides: Array.isArray(p.guides)
       ? [...new Set(p.guides.filter((g) => typeof g === 'string').map((g) => g.trim().replace(/\\/g, '/')).filter(Boolean))].slice(0, 10)
       : []
@@ -322,6 +325,22 @@ class ConfigStore {
     return { projects: incoming.projects.length, scripts: incoming.scripts.length, rules: incoming.rules.length }
   }
 
+  /** Aplica o que veio da sincronização: mantém pastas deste PC, segredos, status e pedidos */
+  applySynced(merged: Record<string, unknown>, paths: Record<string, string>): AppConfig {
+    const cur = this.get()
+    const localPath = new Map(cur.projects.map((p) => [p.id, p.path]))
+    const incoming = normalize({ ...cur, ...merged })
+    return this.update((d) => {
+      for (const k of ['projects', 'scripts', 'replies', 'rules', 'general', 'integrations', 'telegram', 'ai', 'claudeGlobal', 'queue', 'costs'] as const) {
+        ;(d as unknown as Record<string, unknown>)[k] = incoming[k]
+      }
+      d.projects = incoming.projects.map((p) => ({ ...p, path: localPath.get(p.id) || paths[p.id] || '' }))
+      d.general = { ...incoming.general, trayHintShown: cur.general.trayHintShown, openAtLogin: cur.general.openAtLogin }
+      d.integrations = { ...incoming.integrations, lastApplied: cur.integrations.lastApplied }
+      d.watcher = { ...incoming.watcher, seen: cur.watcher.seen, lastCheckAt: cur.watcher.lastCheckAt }
+    })
+  }
+
   markTrayHintShown(): AppConfig {
     return this.update((d) => {
       d.general.trayHintShown = true
@@ -383,6 +402,7 @@ class ConfigStore {
       if (patch.rules) d.rules = patch.rules
       if (patch.queue) d.queue = { ...d.queue, ...patch.queue }
       if (patch.costs) d.costs = { ...d.costs, ...patch.costs }
+      if (patch.sync) d.sync = { ...d.sync, ...patch.sync }
     })
   }
 

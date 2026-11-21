@@ -1,9 +1,9 @@
 import { randomUUID } from 'crypto'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import type { Demand, DemandAi, DemandBusy, DemandJira, DemandReview, DemandStatus, OpResult, Project, ReviewAi, RunEvent } from '../shared/types'
+import type { Demand, DemandAi, DemandBusy, DemandJira, DemandQueueCopy, DemandReview, DemandStatus, DemandTiming, OpResult, PrDraft, Project, ReviewAi, RunEvent } from '../shared/types'
 import { spawn } from 'child_process'
-import { git, gitInfo, updateWithBase } from './git'
+import { baseBranch, bringQueueToBranch, git, gitInfo, queueAhead, removeWorktree, updateWithBase } from './git'
 import { readGuides } from './guides'
 import type { RunManager } from './runner'
 import { secrets } from './secrets'
@@ -46,6 +46,9 @@ export function normDemand(r: Partial<Demand>): Demand {
     sessionId: str(r.sessionId) || null,
     review: r.review && typeof r.review === 'object' && typeof (r.review as DemandReview).text === 'string' ? (r.review as DemandReview) : null,
     reviewAi: REVIEW_AIS.includes(r.reviewAi as ReviewAi) ? (r.reviewAi as ReviewAi) : 'claude',
+    queueSessionId: str(r.queueSessionId) || null,
+    prUrl: str(r.prUrl) || null,
+    statusLog: Array.isArray(r.statusLog) ? r.statusLog.filter((x) => x && typeof x.at === 'number').slice(-100) : [],
     timeline: Array.isArray(r.timeline) ? r.timeline.slice(-200) : [],
     createdAt: num(r.createdAt) ?? now,
     updatedAt: num(r.updatedAt) ?? now
@@ -190,6 +193,75 @@ Pontos que não seguem o guia (se houver guia).
 "Pronto para PR" ou "Precisa de ajustes", com uma frase.`
 }
 
+/** Monta o PR a partir do card, do desenho e da revisão (você edita antes de abrir) */
+export function buildPrDraft(d: Demand, base: string): PrDraft {
+  const section = (md: string, name: RegExp) => {
+    const m = md.match(new RegExp(`##\\s*${name.source}[^\\n]*\\n([\\s\\S]*?)(?=\\n##\\s|$)`, 'i'))
+    return m ? m[1].trim() : ''
+  }
+  const title = `${d.key}: ${d.title || d.jira?.summary || 'ajustes'}`
+  const parts: string[] = []
+  if (d.jira?.url) parts.push(`**Card:** [${d.key}](${d.jira.url})`)
+  const goal = section(d.design, /Objetivo/) || section(d.analysis, /Entendimento/) || d.jira?.summary || ''
+  if (goal) parts.push(`## O que muda\n${goal}`)
+  const sol = section(d.design, /Desenho da solu/)
+  if (sol) parts.push(`## Como foi feito\n${sol}`)
+  const test = section(d.design, /Como testar/)
+  if (test) parts.push(`## Como testar\n${test}`)
+  const verdict = d.review ? section(d.review.text, /Veredito/) : ''
+  if (verdict) parts.push(`## Revisão com IA\n${verdict}`)
+  return { title, body: parts.join('\n\n') || title, base }
+}
+
+/** Dias úteis (seg-sex) entre dois instantes, com fração */
+export function businessDays(from: number, to: number): number {
+  if (to <= from) return 0
+  let total = 0
+  let t = from
+  while (t < to) {
+    const d = new Date(t)
+    const next = new Date(d)
+    next.setHours(24, 0, 0, 0)
+    const end = Math.min(next.getTime(), to)
+    const wd = d.getDay()
+    if (wd !== 0 && wd !== 6) total += (end - t) / 86_400_000
+    t = end
+  }
+  return Math.round(total * 10) / 10
+}
+
+/** Estimado × real: do primeiro "Em dev" até o último "Feita" (ou até agora) */
+export function demandTiming(d: Demand, now = Date.now()): DemandTiming {
+  const startedAt = d.statusLog.find((s) => s.status === 'dev')?.at ?? null
+  const doneEntry = [...d.statusLog].reverse().find((s) => s.status === 'feita')
+  const done = d.status === 'feita'
+  const doneAt = done ? (doneEntry?.at ?? null) : null
+  return {
+    demandId: d.id,
+    key: d.key,
+    title: d.title || d.jira?.summary || '',
+    estimateHours: d.hours,
+    realDays: startedAt ? businessDays(startedAt, doneAt ?? now) : null,
+    done,
+    startedAt,
+    doneAt
+  }
+}
+
+/** Roda o gh com texto no stdin */
+function ghRun(cwd: string, args: string[], input: string): Promise<{ ok: boolean; out: string; missing?: boolean }> {
+  return new Promise((resolve) => {
+    const child = spawn('gh', args, { cwd, windowsHide: true })
+    let out = ''
+    child.stdout?.on('data', (b) => (out += b))
+    child.stderr?.on('data', (b) => (out += b))
+    child.on('error', () => resolve({ ok: false, out: '', missing: true }))
+    child.on('close', (code) => resolve({ ok: code === 0, out: out.trim() }))
+    child.stdin?.on('error', () => {})
+    child.stdin?.end(input)
+  })
+}
+
 // ---------------------------------------------------------------- Jira
 
 /** Texto puro a partir do formato de texto do Jira (wiki markup) */
@@ -269,12 +341,13 @@ export class DemandManager {
       text: string[]
       /** Revisão: dados para guardar no fim (e para a segunda passada da revisão dupla) */
       review?: { base: string; commit: string; scope: string; diff: string; truncated: boolean; ai: ReviewAi }
+      sessionField?: 'sessionId' | 'queueSessionId'
     }
   >()
   private file: string
 
   constructor(
-    base: string,
+    private base: string,
     private runs: RunManager,
     private onChange: (list: Demand[], busy: DemandBusy[]) => void
   ) {
@@ -315,6 +388,12 @@ export class DemandManager {
     this.onChange(this.list, this.busyList())
   }
 
+  private setStatus(d: Demand, s: DemandStatus): void {
+    if (d.status === s) return
+    d.status = s
+    d.statusLog.push({ at: Date.now(), status: s })
+  }
+
   private note(d: Demand, text: string): void {
     d.timeline.push({ at: Date.now(), text })
     d.updatedAt = Date.now()
@@ -337,7 +416,13 @@ export class DemandManager {
       d.createdAt = old.createdAt
       if (this.busy.get(d.id)?.what === 'design') d.design = old.design
       d.review = old.review
-      if (old.status !== d.status) this.note(d, `Etapa: ${d.status}`)
+      d.queueSessionId = old.queueSessionId
+      d.prUrl = old.prUrl
+      d.statusLog = old.statusLog
+      if (old.status !== d.status) {
+        this.note(d, `Etapa: ${d.status}`)
+        d.statusLog.push({ at: Date.now(), status: d.status })
+      }
       if (old.hours !== d.hours && d.hours) this.note(d, `Estimativa: ${hoursLabel(d.hours)}`)
       if (!old.designApproved && d.designApproved) this.note(d, 'Desenho aprovado')
       d.updatedAt = Date.now()
@@ -345,6 +430,12 @@ export class DemandManager {
     }
     this.persist()
     return this.list
+  }
+
+  /** Lista que veio da sincronização entre PCs */
+  replaceAll(list: Demand[]): void {
+    this.list = list.map(normDemand)
+    this.persist()
   }
 
   delete(id: string): Demand[] {
@@ -413,14 +504,23 @@ export class DemandManager {
   }
 
   /** Conversa do Claude da demanda: a primeira mensagem leva todo o contexto e o desenho */
-  implement(id: string, message: string, fresh = false, origin: 'app' | 'telegram' | 'fila' = 'app'): OpResult & { runId?: string } {
+  implement(
+    id: string,
+    message: string,
+    fresh = false,
+    origin: 'app' | 'telegram' | 'fila' = 'app',
+    /** Fila na cópia separada: outra pasta e outra conversa */
+    opts: { cwd?: string; queueCopy?: boolean } = {}
+  ): OpResult & { runId?: string } {
     const d = this.get(id)
     if (!d) return { ok: false, message: 'Demanda não encontrada.' }
     if (this.busy.has(id)) return { ok: false, message: 'O Claude ainda está trabalhando nesta demanda.' }
     const p = this.projectOf(d)
     if (!p) return { ok: false, message: 'O projeto desta demanda não existe mais.' }
-    if (fresh) d.sessionId = null
-    const first = !d.sessionId
+    const field = opts.queueCopy ? 'queueSessionId' : 'sessionId'
+    if (fresh) d[field] = null
+    const session = d[field]
+    const first = !session
     const refs = this.refs(d)
     const content = first
       ? implementPrompt(demandContext(d, p, refs), d) + (message.trim() ? `\n\nObservação: ${message.trim()}` : '')
@@ -431,16 +531,16 @@ export class DemandManager {
       tab: `demand:${d.id}`,
       title: `${d.key} · Claude`,
       content,
-      cwd: p.path,
+      cwd: opts.cwd ?? p.path,
       projectId: p.id,
       origin: origin === 'app' ? 'demanda' : origin,
-      resumeSessionId: d.sessionId ?? undefined,
+      resumeSessionId: session ?? undefined,
       addDirs: refs.map((r) => r.path)
     })
-    this.running.set(runId, { demandId: id, what: 'dev', text: [] })
+    this.running.set(runId, { demandId: id, what: 'dev', text: [], sessionField: field })
     this.setBusy(id, { demandId: id, what: 'dev', runId })
-    if (first) this.note(d, 'Implementação começou com o Claude')
-    if (d.status === 'nova' || d.status === 'estimada' || d.status === 'desenhada') d.status = 'dev'
+    if (first) this.note(d, opts.queueCopy ? 'A fila começou a trabalhar na cópia separada' : 'Implementação começou com o Claude')
+    if (d.status === 'nova' || d.status === 'estimada' || d.status === 'desenhada') this.setStatus(d, 'dev')
     this.persist()
     return { ok: true, message: first ? 'O Claude começou a implementar.' : 'Mensagem enviada ao Claude.', runId }
   }
@@ -581,6 +681,93 @@ export class DemandManager {
     return { ok: true, message: 'Revisão publicada como comentário no PR.' + (r.out ? ` ${r.out.split('\n').pop()}` : '') }
   }
 
+  // ---------------------------------------------------------------- cópia da fila
+
+  /** Pasta da cópia da fila desta demanda (fora do projeto, na pasta de dados do app) */
+  queueCopyDir(d: Demand): string {
+    const p = this.projectOf(d)
+    const slug = (p?.name ?? 'projeto').normalize('NFD').replace(/[^\w-]+/g, '-').toLowerCase()
+    return join(this.base, 'worktrees', `${slug}-${d.key}`)
+  }
+
+  async queueCopy(id: string): Promise<DemandQueueCopy | null> {
+    const d = this.get(id)
+    const p = d && this.projectOf(d)
+    if (!d || !p) return null
+    const dir = this.queueCopyDir(d)
+    return { dir, exists: existsSync(dir), ahead: await queueAhead(p, d.key) }
+  }
+
+  async bringQueue(id: string): Promise<OpResult> {
+    const d = this.get(id)
+    const p = d && this.projectOf(d)
+    if (!d || !p) return { ok: false, message: 'Demanda não encontrada.' }
+    const r = await bringQueueToBranch(p, d.key)
+    if (r.ok && !/Nada novo/.test(r.message)) {
+      this.note(d, r.message)
+      this.persist()
+    }
+    return r
+  }
+
+  async removeQueueCopy(id: string): Promise<OpResult> {
+    const d = this.get(id)
+    const p = d && this.projectOf(d)
+    if (!d || !p) return { ok: false, message: 'Demanda não encontrada.' }
+    const r = await removeWorktree(p, d.key, this.queueCopyDir(d))
+    if (r.ok) {
+      d.queueSessionId = null
+      this.note(d, 'Cópia da fila removida')
+      this.persist()
+    }
+    return r
+  }
+
+  // ---------------------------------------------------------------- PR
+
+  async prDraft(id: string): Promise<PrDraft | null> {
+    const d = this.get(id)
+    const p = d && this.projectOf(d)
+    if (!d || !p) return null
+    return buildPrDraft(d, await baseBranch(p))
+  }
+
+  /** Envia a branch (push) e abre o PR com o gh */
+  async createPr(id: string, pr: { title: string; body: string; draft: boolean }): Promise<OpResult> {
+    const d = this.get(id)
+    const p = d && this.projectOf(d)
+    if (!d || !p) return { ok: false, message: 'Demanda não encontrada.' }
+    if (!(await git(p.path, ['rev-parse', '--verify', '--quiet', `refs/heads/${d.key}`])).ok) return { ok: false, message: `A branch ${d.key} ainda não existe.` }
+    const base = await baseBranch(p)
+    const push = await git(p.path, ['push', '-u', 'origin', d.key], 180_000)
+    if (!push.ok) return { ok: false, message: 'O push da branch falhou: ' + push.out.split('\n').slice(-2).join(' ') }
+    const args = ['pr', 'create', '--base', base, '--head', d.key, '--title', pr.title.trim() || `${d.key}`, '--body-file', '-']
+    if (pr.draft) args.push('--draft')
+    const r = await ghRun(p.path, args, pr.body)
+    if (r.missing) return { ok: false, message: 'O GitHub CLI (gh) não está instalado. Veja em Configurações → Começar.' }
+    if (!r.ok) {
+      const existing = r.out.match(/https:\/\/github\.com\/\S+\/pull\/\d+/)?.[0]
+      if (/already exists/i.test(r.out) && existing) {
+        d.prUrl = existing
+        this.persist()
+        return { ok: true, message: `Já existia um PR desta branch: ${existing}` }
+      }
+      if (/auth|login/i.test(r.out)) return { ok: false, message: 'O gh não está logado: rode "gh auth login" (Configurações → Começar).' }
+      return { ok: false, message: 'O gh recusou: ' + r.out.split('\n').slice(-2).join(' ') }
+    }
+    const url = r.out.match(/https:\/\/\S+\/pull\/\d+/)?.[0] ?? r.out.split('\n').pop() ?? ''
+    d.prUrl = url || null
+    this.note(d, `PR aberto${pr.draft ? ' (rascunho)' : ''}: ${url}`)
+    this.persist()
+    return { ok: true, message: `PR aberto: ${url}` }
+  }
+
+  // ---------------------------------------------------------------- estimado × real
+
+  timings(now = Date.now()): DemandTiming[] {
+    return this.list.map((d) => demandTiming(d, now))
+  }
+
   handleRunEvent(e: RunEvent): void {
     const r = this.running.get(e.runId)
     if (!r) return
@@ -590,7 +777,7 @@ export class DemandManager {
       return
     }
     if (e.type === 'session' && r.what === 'dev' && d) {
-      d.sessionId = e.sessionId
+      d[r.sessionField ?? 'sessionId'] = e.sessionId
       return
     }
     if (e.type !== 'exit') return
@@ -638,7 +825,7 @@ export class DemandManager {
     } else if (r.what === 'analysis') {
       d.analysis = extractResult(text).replace(/^ESTIMATIVA_HORAS:.*$/im, '').trim()
       d.aiHours = extractHours(text)
-      if (d.status === 'nova') d.status = 'estimada'
+      if (d.status === 'nova') this.setStatus(d, 'estimada')
       this.note(d, `Análise pronta${d.aiHours ? ` · sugestão: ${hoursLabel(d.aiHours)}` : ''}`)
     } else {
       d.design = extractResult(text)

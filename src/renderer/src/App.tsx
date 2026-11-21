@@ -42,12 +42,14 @@ import { CommandPalette, type PaletteItem } from './components/CommandPalette'
 import { DemandModal, newDemand } from './components/DemandModal'
 import { QueueModal } from './components/QueueModal'
 import { CostsModal } from './components/CostsModal'
+import { DailyModal } from './components/DailyModal'
 import {
   Bell,
   Bot,
   ClipboardList,
   DollarSign,
   ListTodo,
+  MessageSquareText,
   Eye,
   FolderPlus,
   Gem,
@@ -110,6 +112,7 @@ export default function App() {
   const [queueOpen, setQueueOpen] = useState<null | { demandId?: string; projectId?: string }>(null)
   const [costGuard, setCostGuard] = useState<CostGuard | null>(null)
   const [costsOpen, setCostsOpen] = useState(false)
+  const [dailyOpen, setDailyOpen] = useState(false)
   useEffect(() => {
     window.api.queue().then(setQueueState)
     window.api.costGuard().then(setCostGuard)
@@ -233,7 +236,7 @@ export default function App() {
       if (cfg.projects[0]) setConsoleTarget(cfg.projects[0].id)
       setRemote(Object.fromEntries(sessions.map((s) => [s.projectId, s])))
       setRunStates(Object.fromEntries(ps.map((s) => [s.projectId, s])))
-      log('info', `Claude Command Center pronto · config: ${cfgPath}`)
+      log('info', `Hélice pronta · config: ${cfgPath}`)
       // Primeira vez (nenhum projeto): abre o assistente de configuração
       if (cfg.projects.length === 0) openSettings('setup')
     })
@@ -720,6 +723,12 @@ export default function App() {
       icon: <Eye size={14} />,
       run: () => window.api.watcherRunNow()
     },
+    { id: 'daily', group: 'App', label: 'Resumo para a daily', icon: <MessageSquareText size={14} />, keywords: 'daily standup ontem hoje', run: () => setDailyOpen(true) },
+    { id: 'sync', group: 'App', label: 'Sincronizar entre PCs agora', icon: <RefreshCw size={14} />, keywords: 'sync windows ubuntu', run: async () => {
+      const r = await window.api.syncNow()
+      if (r.ok) log('success', `[Sincronizar] ${r.message}`)
+      else showToast(r.message)
+    } },
     { id: 'queue', group: 'App', label: 'Fila de tarefas do Claude', icon: <ListTodo size={14} />, keywords: 'fila tarefas', run: () => setQueueOpen({}) },
     { id: 'costs', group: 'App', label: 'Gastos com IA', icon: <DollarSign size={14} />, keywords: 'custos limite dinheiro', run: () => setCostsOpen(true) },
     { id: 'history', group: 'App', label: 'Histórico de execuções', icon: <HistoryIcon size={14} />, keywords: 'log', run: () => setHistoryOpen(true) },
@@ -783,6 +792,7 @@ export default function App() {
         queueCount={queueState.tasks.filter((t) => t.status === 'pendente' || t.status === 'rodando').length}
         queueRunning={queueState.tasks.some((t) => t.status === 'rodando')}
         costGuard={costGuard}
+        busy={queueState.tasks.some((t) => t.status === 'rodando') || watcher.phase === 'checking' || demandsBusy.length > 0}
         onOpenPalette={() => setPaletteOpen(true)}
       />
       {update?.phase === 'ready' && (
@@ -935,6 +945,7 @@ export default function App() {
           />
         )
       })()}
+      <DailyModal open={dailyOpen} onClose={() => setDailyOpen(false)} />
       <QueueModal
         open={!!queueOpen}
         onClose={() => setQueueOpen(null)}

@@ -6,6 +6,7 @@ import {
   ExternalLink,
   GitBranch,
   GitMerge,
+  GitPullRequest,
   ListTodo,
   Loader2,
   MessageSquarePlus,
@@ -18,7 +19,7 @@ import {
   SquareTerminal,
   Trash2
 } from 'lucide-react'
-import type { Demand, DemandAi, DemandBusy, DemandStatus, GitInfo, OpResult, Project, ReviewAi } from '@shared/types'
+import type { Demand, DemandAi, DemandBusy, DemandQueueCopy, DemandStatus, GitInfo, OpResult, PrDraft, Project, ReviewAi } from '@shared/types'
 import { cn, uid } from '../lib/utils'
 import { Button, Modal } from './ui'
 
@@ -59,6 +60,9 @@ export function newDemand(projectId: string): Demand {
     sessionId: null,
     review: null,
     reviewAi: 'claude',
+    queueSessionId: null,
+    prUrl: null,
+    statusLog: [],
     timeline: [],
     createdAt: now,
     updatedAt: now
@@ -312,6 +316,16 @@ export function DemandModal({
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
         <span>Projeto: {project?.name ?? '?'}</span>
         {d.hours && <span>· estimativa {d.hours}h ({days(d.hours)})</span>}
+        {realDays(d) !== null && (
+          <span title="Dias úteis desde que entrou em Em dev (até Feita, ou até hoje)">
+            · real {String(realDays(d)).replace('.', ',')} dia(s) útil(eis)
+          </span>
+        )}
+        {d.prUrl && (
+          <button type="button" className="inline-flex cursor-pointer items-center gap-1 text-purple hover:underline" onClick={() => window.api.openExternal(d.prUrl!)}>
+            · PR <ExternalLink size={10} />
+          </button>
+        )}
         {d.jira?.url && (
           <button type="button" className="inline-flex cursor-pointer items-center gap-1 text-purple hover:underline" onClick={() => window.api.openExternal(d.jira!.url)}>
             · abrir no Jira <ExternalLink size={10} />
@@ -653,6 +667,8 @@ export function DemandModal({
             )}
           </div>
 
+          <QueueCopyBox d={d} working={working} onResult={setResult} onGitChanged={onGitChanged} />
+
           <div className="space-y-2 rounded-xl border border-line bg-bg/50 p-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-zinc-200">Conversa com o Claude</span>
@@ -736,7 +752,10 @@ export function DemandModal({
 
       {/* ---------------- Revisão ---------------- */}
       {!isNew && tab === 'revisao' && (
-        <ReviewTab d={d} working={working} reviewing={busy?.what === 'review'} onAi={(reviewAi) => change({ reviewAi })} onResult={setResult} flush={() => flush(d)} />
+        <>
+          <ReviewTab d={d} working={working} reviewing={busy?.what === 'review'} onAi={(reviewAi) => change({ reviewAi })} onResult={setResult} flush={() => flush(d)} />
+          <PrBox d={d} onResult={setResult} />
+        </>
       )}
 
       {/* ---------------- Linha do tempo ---------------- */}
@@ -755,6 +774,160 @@ export function DemandModal({
         </div>
       )}
     </Modal>
+  )
+}
+
+/** Dias úteis de Em dev até Feita (ou até agora) */
+function realDays(d: Demand): number | null {
+  const start = d.statusLog.find((s) => s.status === 'dev')?.at
+  if (!start) return null
+  const end = d.status === 'feita' ? ([...d.statusLog].reverse().find((s) => s.status === 'feita')?.at ?? Date.now()) : Date.now()
+  let total = 0
+  for (let t = start; t < end; ) {
+    const next = new Date(t)
+    next.setHours(24, 0, 0, 0)
+    const stop = Math.min(next.getTime(), end)
+    const wd = new Date(t).getDay()
+    if (wd !== 0 && wd !== 6) total += (stop - t) / 86_400_000
+    t = stop
+  }
+  return Math.round(total * 10) / 10
+}
+
+/** Cópia separada onde a fila trabalha (git worktree) */
+function QueueCopyBox({
+  d,
+  working,
+  onResult,
+  onGitChanged
+}: {
+  d: Demand
+  working: boolean
+  onResult: (r: OpResult) => void
+  onGitChanged: () => void
+}) {
+  const [copy, setCopy] = useState<DemandQueueCopy | null>(null)
+  const [busy, setBusy] = useState(false)
+  const load = () => window.api.demandQueueCopy(d.id).then(setCopy)
+  useEffect(() => {
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.id, d.updatedAt, working])
+  if (!copy || (!copy.exists && !copy.ahead)) return null
+  const act = async (fn: () => Promise<OpResult>) => {
+    setBusy(true)
+    onResult(await fn())
+    setBusy(false)
+    load()
+    onGitChanged()
+  }
+  return (
+    <div data-testid="queue-copy" className="space-y-2 rounded-xl border border-teal-500/30 bg-teal-500/[0.04] p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs font-semibold text-zinc-200">
+          Cópia da fila <code className="font-mono text-teal-300">fila/{d.key}</code>
+          {copy.ahead > 0 ? (
+            <span className="font-normal text-teal-300"> · {copy.ahead} commit(s) prontos para trazer</span>
+          ) : (
+            <span className="font-normal text-zinc-500"> · nada novo</span>
+          )}
+        </span>
+        <div className="flex gap-1.5">
+          <Button size="sm" disabled={!copy.exists} onClick={() => window.api.openSystemTerminal(copy.dir)} title={copy.dir}>
+            <SquareTerminal size={12} /> Terminal na cópia
+          </Button>
+          <Button size="sm" variant="primary" disabled={busy || working || !copy.ahead} onClick={() => act(() => window.api.demandBringQueue(d.id))}>
+            <GitMerge size={12} /> Trazer para {d.key}
+          </Button>
+          <Button
+            size="sm"
+            disabled={busy || working}
+            onClick={() => {
+              if (copy.ahead && !confirm(`A cópia tem ${copy.ahead} commit(s) que ainda não estão em ${d.key}. Remover mesmo assim?`)) return
+              act(() => window.api.demandRemoveQueueCopy(d.id))
+            }}
+          >
+            <Trash2 size={12} /> Remover cópia
+          </Button>
+        </div>
+      </div>
+      <p className="text-[11px] text-zinc-500">
+        A fila trabalha numa pasta separada, sem mexer na sua. Cada tarefa vira um commit local em fila/{d.key}; "Trazer"
+        junta esses commits na branch {d.key} (se ela estiver aberta no card, faz merge; precisa estar sem alterações
+        pendentes).
+      </p>
+    </div>
+  )
+}
+
+/** Abrir o PR pelo app: título e descrição montados do card, desenho e revisão */
+function PrBox({ d, onResult }: { d: Demand; onResult: (r: OpResult) => void }) {
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState<PrDraft | null>(null)
+  const [title, setTitle] = useState('')
+  const [body, setBody] = useState('')
+  const [asDraft, setAsDraft] = useState(true)
+  const [sending, setSending] = useState(false)
+  const start = async () => {
+    const p = await window.api.demandPrDraft(d.id)
+    setDraft(p)
+    setTitle(p?.title ?? d.key)
+    setBody(p?.body ?? '')
+    setOpen(true)
+  }
+  return (
+    <div className="space-y-2 rounded-xl border border-line bg-bg/50 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-semibold text-zinc-200">
+          Pull request
+          {d.prUrl && (
+            <button type="button" className="ml-2 cursor-pointer font-normal text-purple hover:underline" onClick={() => window.api.openExternal(d.prUrl!)}>
+              {d.prUrl.replace(/^https:\/\/github\.com\//, '')}
+            </button>
+          )}
+        </span>
+        {!open && (
+          <Button size="sm" variant={d.prUrl ? 'outline' : 'primary'} onClick={start} data-testid="pr-start">
+            <GitPullRequest size={12} /> {d.prUrl ? 'Abrir outro PR' : 'Abrir PR'}
+          </Button>
+        )}
+      </div>
+      {open && (
+        <>
+          <input className={inputCls + ' w-full'} value={title} onChange={(e) => setTitle(e.target.value)} />
+          <textarea rows={10} className={areaCls + ' font-mono'} value={body} onChange={(e) => setBody(e.target.value)} />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-300">
+              <input type="checkbox" checked={asDraft} onChange={(e) => setAsDraft(e.target.checked)} /> Abrir como rascunho (draft)
+            </label>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={() => setOpen(false)}>
+                Cancelar
+              </Button>
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={sending || !title.trim()}
+                onClick={async () => {
+                  if (!confirm(`Enviar a branch ${d.key} (git push) e abrir o PR contra ${draft?.base ?? 'a principal'}?`)) return
+                  setSending(true)
+                  const r = await window.api.demandCreatePr(d.id, { title, body, draft: asDraft })
+                  setSending(false)
+                  onResult(r)
+                  if (r.ok) setOpen(false)
+                }}
+              >
+                {sending ? <Loader2 size={12} className="animate-spin" /> : <GitPullRequest size={12} />} Enviar e abrir PR
+              </Button>
+            </div>
+          </div>
+          <p className="text-[11px] text-zinc-500">
+            Faz o push da branch {d.key} e abre o PR contra a {draft?.base} com o GitHub CLI (gh). Nada acontece antes de você
+            confirmar.
+          </p>
+        </>
+      )}
+    </div>
   )
 }
 
