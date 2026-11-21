@@ -11,8 +11,8 @@ export function git(cwd: string, args: string[], timeout = 30_000): Promise<{ ok
       args,
       { cwd, timeout, windowsHide: true, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } },
       (err, stdout, stderr) => {
-        const code = err ? ((err as NodeJS.ErrnoException & { code?: number | string }).code as number) ?? 1 : 0
-        resolve({ ok: !err, out: `${stdout}${stderr}`.trim(), code: typeof code === 'number' ? code : 1 })
+        const raw: unknown = err ? (err as unknown as { code?: unknown }).code : 0
+        resolve({ ok: !err, out: `${stdout}${stderr}`.trim(), code: typeof raw === 'number' ? raw : 1 })
       }
     )
   })
