@@ -67,6 +67,9 @@ export class History {
       for (const l of e.lines) buf.push((PREFIX[l.kind] ?? '') + l.text)
       if (buf.length > MAX_LINES) buf.splice(0, buf.length - MAX_LINES)
       if (entry) entry.lineCount += e.lines.length
+    } else if (e.type === 'usage' && entry) {
+      if (e.costUsd !== null) entry.costUsd = (entry.costUsd ?? 0) + e.costUsd
+      if (e.tokens !== null) entry.tokens = (entry.tokens ?? 0) + e.tokens
     } else if (e.type === 'error' && buf) {
       buf.push('! ' + e.message)
     } else if (e.type === 'exit' && entry) {

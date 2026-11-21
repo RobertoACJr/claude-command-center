@@ -241,6 +241,9 @@ export class RunManager {
             )
           }
           push('info', `✓ concluído ${secs}${turns}${cost}`)
+          const u = msg.usage ?? {}
+          const tk = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0)
+          this.emit({ runId, type: 'usage', costUsd: typeof msg.total_cost_usd === 'number' ? msg.total_cost_usd : null, tokens: tk || null })
           break
         }
       }
@@ -320,6 +323,7 @@ export class RunManager {
           const tokens = st.total_tokens ?? st.totalTokens
           const ms = st.duration_ms ?? st.durationMs
           push('info', `✓ concluído${ms ? ` ${(ms / 1000).toFixed(1)}s` : ''}${tokens ? ` · ${tokens} tokens` : ''}`)
+          this.emit({ runId, type: 'usage', costUsd: null, tokens: typeof tokens === 'number' ? tokens : null })
           break
         }
       }
@@ -374,6 +378,7 @@ export class RunManager {
           const u = msg.usage ?? {}
           const tokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0)
           push('info', `✓ concluído${tokens ? ` · ${tokens} tokens` : ''}`)
+          this.emit({ runId, type: 'usage', costUsd: null, tokens: tokens || null })
           break
         }
       }

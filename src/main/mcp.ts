@@ -154,11 +154,8 @@ export async function integrationLogin(id: IntegrationId, onLine: (l: string) =>
 
 type Line = IntegrationCheck['lines'][number]
 
-/** Estado de um MCP no Claude Code, lendo a saída de `claude mcp get <nome>` */
-async function mcpLine(name: string, label: string, enabled: boolean): Promise<Line> {
-  const r = await runClaudeCapture(['mcp', 'get', name], { cwd: cwd(), timeoutMs: 60_000 })
-  const out = `${r.stdout}\n${r.stderr}`
-  if (r.spawnError) return { state: 'fail', label, detail: 'Claude Code não encontrado neste PC.' }
+/** Interpreta a saída de `claude mcp get <nome>` (função pura, testada) */
+export function parseMcpGet(out: string, label: string, enabled: boolean): Line {
   if (/No MCP server named/i.test(out)) {
     return enabled
       ? { state: 'fail', label, detail: 'Não está registrado no Claude. Clique em "Salvar e aplicar" de novo e veja a mensagem.' }
@@ -168,15 +165,25 @@ async function mcpLine(name: string, label: string, enabled: boolean): Promise<L
   const issue = out.match(/Issue:\s*(.+)/)?.[1]?.trim() ?? ''
   if (/connected|✓|✔/i.test(status) && !/fail|✘|✗/i.test(status)) return { state: 'ok', label, detail: 'Conectado: o Claude consegue usar.' }
   if (/auth/i.test(status)) return { state: 'warn', label, detail: 'Registrado, mas falta fazer login (botão "Autenticar").' }
-  let detail = issue || status || summarize(r)
+  let detail = issue || status || out.trim().split('\n').slice(-1)[0] || 'sem detalhes'
   if (/uvx/i.test(detail)) detail = 'O comando uvx não foi encontrado: instale o uv (Configurações → Começar).'
   return { state: 'fail', label, detail: 'Registrado, mas não conecta: ' + detail }
 }
 
-/** Conectores da sua conta claude.ai que o Claude Code enxerga (ex: "claude.ai Atlassian") */
+/** Conectores da conta claude.ai na saída de `claude mcp list` (ex: "claude.ai Atlassian MCP") */
+export function parseConnectors(out: string): string[] {
+  return [...out.matchAll(/^claude\.ai ([^:]+):.*$/gim)].map((m) => `${m[1].trim()}${/✓|connected/i.test(m[0]) ? '' : ' (sem conexão)'}`)
+}
+
+async function mcpLine(name: string, label: string, enabled: boolean): Promise<Line> {
+  const r = await runClaudeCapture(['mcp', 'get', name], { cwd: cwd(), timeoutMs: 60_000 })
+  if (r.spawnError) return { state: 'fail', label, detail: 'Claude Code não encontrado neste PC.' }
+  return parseMcpGet(`${r.stdout}\n${r.stderr}`, label, enabled)
+}
+
 async function claudeAiConnectors(): Promise<string[]> {
   const r = await runClaudeCapture(['mcp', 'list'], { cwd: cwd(), timeoutMs: 90_000 })
-  return [...`${r.stdout}`.matchAll(/^claude\.ai ([^:]+):.*$/gim)].map((m) => `${m[1].trim()}${/✓|connected/i.test(m[0]) ? '' : ' (sem conexão)'}`)
+  return parseConnectors(`${r.stdout}`)
 }
 
 async function httpJson(url: string, headers: Record<string, string>): Promise<{ status: number; body: any; headers?: Headers; error?: string }> {

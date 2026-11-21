@@ -108,7 +108,6 @@ O usuário não conseguiu configurar Git, Jira, Google Chat nem Telegram sozinho
 - [x] Desenho da solução (editável, com aprovação) consultando projetos relacionados só para leitura (ex: a API).
 - [x] Implementação com o Claude numa conversa própria por demanda (app, terminal da demanda ou Telegram `/demanda`).
 - [x] Branch com o nome do card (cria ou troca), etapas, linha do tempo, paleta e avisos no sino.
-- [ ] Próximo: ligar pedidos de deploy do Vigia à demanda pelo número do card (etapa Beta automática).
 
 
 ### Fase 10: Git no card do projeto ✅ (v0.11.0)
@@ -117,22 +116,26 @@ O usuário não conseguiu configurar Git, Jira, Google Chat nem Telegram sozinho
 - [x] Demanda: "Atualizar com a master" (fetch + merge, só com a árvore limpa; em conflito, botão para o Claude resolver).
 - [x] Guias do projeto (ex: docs/STYLE_GUIDE.md): o Claude segue em tudo no projeto; as Demandas levam o conteúdo.
 
-### Fase 11: Fila de tarefas para o Claude
-- [ ] Enfileirar ordens por projeto (pelo app ou Telegram); roda uma por vez, de preferência no Ausente.
-- [ ] Resumo da manhã: o que foi feito, custo, o que ficou pendente (no app e no Telegram).
-- [ ] Cada tarefa numa branch/worktree própria para não misturar mudanças.
+### Fase 11: Fila de tarefas para o Claude ✅ (v0.12.0)
+- [x] Tarefas por demanda (na branch e na conversa dela) ou por projeto; uma por vez; só no Ausente (opcional).
+- [x] Pausar, rodar agora, mover, cancelar, tentar de novo; `/fila` no Telegram.
+- [x] Resumo no Telegram quando a fila esvazia no Ausente e no sino quando você volta.
 
-### Fase 12: Revisão de PR com IA
-- [ ] Pegar PR do GitHub (manual ou pelo Vigia); Gemini faz a primeira passada barata, Claude aprofunda se precisar.
-- [ ] Comentários ficam como rascunho até você aprovar a publicação.
+### Fase 12: Revisão com IA ✅ (v0.12.0)
+- [x] Diff da branch da demanda contra a principal (commits + sem commit), seguindo card, desenho e guia.
+- [x] Claude, ChatGPT, Gemini ou dupla (ChatGPT faz a 1ª passada, Claude confere e aprofunda).
+- [x] Rascunho editável; publicar como comentário no PR com o gh só quando você clicar.
 
-### Fase 13: Custos e limites
-- [ ] Painel de gasto por projeto, IA e dia (os dados já vêm nas respostas do Claude/Gemini).
-- [ ] Limite diário que pausa automações e avisa.
+### Fase 13: Custos e limites ✅ (v0.12.0)
+- [x] Gastos por dia, projeto, demanda, IA e origem (Claude em US$; Gemini/ChatGPT em tokens); Vigia e respostas incluídos.
+- [x] Limite diário: pausa fila, Vigia e regras automáticas até o dia seguinte (ou "Liberar hoje"); aviso no sino e Telegram.
+
+### Testes automáticos ✅ (v0.12.0)
+- [x] `npm test`: 30 testes dos módulos (variáveis, git com repositórios reais, demandas com Jira falso, fila, custos,
+  histórico, Telegram com servidor falso, Claude falso no runner, configuração). Rodam no CI antes de gerar os instaladores.
 
 ### Fase 14: Modelos de projeto (sem prioridade por enquanto)
 - [ ] "Projeto Node", "Laravel", etc. com comando de execução, variáveis e scripts comuns já prontos.
 
 ### Ideias soltas
 - [ ] Aprovação de permissões também para o Gemini.
-- [ ] Testes automáticos dos módulos do main (os mocks de desenvolvimento viram testes do CI).

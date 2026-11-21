@@ -99,10 +99,10 @@ export interface GeneralPrefs {
   notifyScriptDone: boolean
 }
 
-export type NotificationKind = 'pedido' | 'permissao' | 'projeto' | 'script' | 'atualizacao' | 'vigia' | 'remote' | 'demanda' | 'sistema'
+export type NotificationKind = 'pedido' | 'permissao' | 'projeto' | 'script' | 'atualizacao' | 'vigia' | 'remote' | 'demanda' | 'fila' | 'custos' | 'sistema'
 
 /** Para onde o clique na notificação leva */
-export type NotificationTarget = 'alerts' | 'terminals' | 'settings' | `tab:${string}` | `demand:${string}`
+export type NotificationTarget = 'alerts' | 'terminals' | 'settings' | 'queue' | 'costs' | `tab:${string}` | `demand:${string}`
 
 export interface AppNotification {
   id: string
@@ -266,6 +266,20 @@ export interface AppConfig {
   claudeGlobal: ClaudePerms
   replies: ReplyTemplate[]
   rules: AutomationRule[]
+  queue: QueueConfig
+  costs: CostsConfig
+}
+
+export interface QueueConfig {
+  /** Só começa tarefas quando você está Ausente (padrão). Desligado: roda assim que entra na fila */
+  onlyAway: boolean
+  /** Fila pausada à mão */
+  paused: boolean
+}
+
+export interface CostsConfig {
+  /** Limite diário em US$ (0 = sem limite). Passou: pausa fila, Vigia e regras automáticas até o dia seguinte */
+  dailyLimitUsd: number
 }
 
 export interface SecretsStatus {
@@ -283,6 +297,8 @@ export interface SettingsPatch {
   claudeGlobal?: Partial<ClaudePerms>
   replies?: ReplyTemplate[]
   rules?: AutomationRule[]
+  queue?: Partial<QueueConfig>
+  costs?: Partial<CostsConfig>
   /** string = grava, null = apaga, ausente = mantém */
   secrets?: Partial<Record<SecretKey, string | null>>
 }
@@ -421,6 +437,9 @@ export interface Demand {
   designApproved: boolean
   /** Conversa do Claude desta demanda */
   sessionId: string | null
+  /** Última revisão com IA (rascunho até publicar) */
+  review: DemandReview | null
+  reviewAi: ReviewAi
   timeline: Array<{ at: number; text: string }>
   createdAt: number
   updatedAt: number
@@ -429,12 +448,12 @@ export interface Demand {
 /** O que a IA está fazendo agora numa demanda */
 export interface DemandBusy {
   demandId: string
-  what: 'jira' | 'analysis' | 'design' | 'dev' | 'branch'
+  what: 'jira' | 'analysis' | 'design' | 'dev' | 'branch' | 'review'
   runId?: string
 }
 
 /** Quem disparou uma execução */
-export type RunOrigin = 'app' | 'telegram' | 'pedido' | 'projeto' | 'demanda'
+export type RunOrigin = 'app' | 'telegram' | 'pedido' | 'projeto' | 'demanda' | 'fila'
 
 /** Uma execução registrada no histórico (fica só no seu PC, na pasta do app) */
 export interface HistoryEntry {
@@ -450,6 +469,83 @@ export interface HistoryEntry {
   status: 'running' | 'ok' | 'error' | 'stopped'
   code: number | null
   lineCount: number
+  /** Custo estimado (Claude informa em US$; Gemini/ChatGPT só tokens) */
+  costUsd?: number | null
+  tokens?: number | null
+}
+
+// ---------------------------------------------------------------- Custos
+
+export type CostSource = 'app' | 'telegram' | 'pedido' | 'projeto' | 'demanda' | 'fila' | 'vigia' | 'resposta'
+
+export interface CostEntry {
+  at: number
+  source: CostSource
+  ai: 'claude' | 'gemini' | 'codex'
+  title: string
+  projectId?: string
+  demandId?: string
+  runId?: string
+  /** US$ estimado (equivalente da API; no plano Pro/Max não é cobrado à parte) */
+  usd: number | null
+  tokens: number | null
+}
+
+export interface CostGuard {
+  todayUsd: number
+  limitUsd: number
+  /** Passou do limite hoje: automações pausadas */
+  over: boolean
+  /** Você liberou hoje mesmo passando do limite */
+  overridden: boolean
+}
+
+// ---------------------------------------------------------------- Fila
+
+export type QueueStatus = 'pendente' | 'rodando' | 'feita' | 'falhou' | 'cancelada'
+
+export interface QueueTask {
+  id: string
+  projectId: string
+  /** Tarefa de uma demanda: roda na conversa e na branch dela */
+  demandId?: string
+  prompt: string
+  status: QueueStatus
+  createdAt: number
+  startedAt?: number
+  endedAt?: number
+  runId?: string
+  /** Resposta final do Claude (resumida) */
+  summary?: string
+  /** Por que falhou / não começou */
+  error?: string
+  costUsd?: number | null
+  origin: 'app' | 'telegram'
+  /** Já entrou num resumo enviado */
+  reported?: boolean
+}
+
+export interface QueueState {
+  tasks: QueueTask[]
+  /** Por que a fila não está andando agora (null = andando ou vazia) */
+  waiting: string | null
+}
+
+// ---------------------------------------------------------------- Revisão
+
+export type ReviewAi = 'claude' | 'codex' | 'gemini' | 'dupla'
+
+export interface DemandReview {
+  at: number
+  ai: ReviewAi
+  base: string
+  /** Commit revisado (HEAD na hora) */
+  commit: string
+  /** O que entrou: commits da branch + alterações ainda sem commit */
+  scope: string
+  text: string
+  /** Já publicado como comentário no PR */
+  publishedAt?: number
 }
 
 export type RunLineKind = 'stdout' | 'stderr' | 'claude' | 'tool' | 'info'
@@ -468,6 +564,7 @@ export type RunEvent =
     }
   | { runId: string; tab: TabKey; type: 'lines'; lines: Array<{ kind: RunLineKind; text: string }> }
   | { runId: string; tab: TabKey; type: 'session'; sessionId: string }
+  | { runId: string; tab: TabKey; type: 'usage'; costUsd: number | null; tokens: number | null }
   | { runId: string; tab: TabKey; type: 'exit'; code: number | null; signal: string | null; killed: boolean }
   | { runId: string; tab: TabKey; type: 'error'; message: string }
 
@@ -557,6 +654,26 @@ export interface CommandCenterApi {
   demandImplement(id: string, message: string, fresh?: boolean): Promise<OpResult>
   demandBranch(id: string, base: string): Promise<OpResult>
   demandStop(id: string): Promise<void>
+  demandReview(id: string): Promise<OpResult>
+  demandSaveReview(id: string, text: string): Promise<void>
+  demandPublishReview(id: string): Promise<OpResult>
+
+  // Fila de tarefas
+  queue(): Promise<QueueState>
+  onQueue(cb: (q: QueueState) => void): () => void
+  queueAdd(t: { projectId: string; demandId?: string; prompt: string }): Promise<OpResult>
+  queueCancel(id: string): Promise<void>
+  queueRemove(id: string): Promise<void>
+  queueRetry(id: string): Promise<void>
+  queueMove(id: string, dir: -1 | 1): Promise<void>
+  queueRunNow(): Promise<OpResult>
+  queueClearDone(): Promise<void>
+
+  // Custos
+  costs(): Promise<CostEntry[]>
+  costGuard(): Promise<CostGuard>
+  onCosts(cb: (guard: CostGuard) => void): () => void
+  costOverrideToday(): Promise<CostGuard>
 
   // Histórico de execuções
   history(): Promise<HistoryEntry[]>

@@ -95,7 +95,17 @@ npm run dev          # abre o app em modo desenvolvimento
 npm run typecheck    # checagem de tipos
 ```
 
-### Publicar uma versão nova
+### Testes
+
+```bash
+npm test            # todos
+npm test -- fila    # só os arquivos com "fila" no nome (ex: queue)
+```
+
+Testam os módulos do processo principal sem abrir o app (git com repositórios reais, Jira e Telegram com servidores
+falsos, um Claude falso). O CI roda os testes e depois um teste de fumaça que abre o app empacotado.
+
+## Publicar uma versão nova
 
 Os instaladores são gerados pelo GitHub Actions (`.github/workflows/release.yml`) numa máquina Windows e numa Ubuntu,
 passam por um **teste de fumaça** (abre o app empacotado, confere as telas principais, roda um comando no console e
@@ -215,6 +225,13 @@ Engrenagem no header → **Configurações & Integrações**.
   Na demanda, **Atualizar com a master** (usa a variável `branch_principal` do projeto, ou a padrão do remoto).
 - **Guias do projeto** (no formulário do projeto, ex: `docs/STYLE_GUIDE.md`): o Claude é instruído a ler e seguir em
   tudo que fizer naquele projeto, e as Demandas levam o conteúdo do guia na análise, no desenho e na implementação.
+- **Fila de tarefas** (ícone de lista no topo, `/fila` no Telegram ou "Pôr na fila" na demanda): o Claude faz uma
+  tarefa por vez, por padrão só quando você está Ausente. Tarefa de demanda roda na branch e na conversa dela. Quando
+  a fila esvazia, o resumo chega no Telegram; ao voltar, no sino.
+- **Revisão com IA** (aba Revisão da demanda): compara a branch do card com a principal e revisa como num PR, com
+  Claude, ChatGPT, Gemini ou em dupla. Fica como rascunho; "Publicar no PR" usa o `gh`.
+- **Gastos com IA** (valor de hoje no topo): por dia, projeto, demanda, IA e origem, com limite diário que pausa a
+  fila, o Vigia e as regras automáticas.
 - **Histórico** (ícone de relógio no topo): as últimas 300 execuções com quem disparou (app, Telegram, pedido),
   resultado, duração e a saída completa. Fica só no PC (`history.json` + `history/` na pasta de dados do app).
 - **Paleta de comandos** (`Ctrl+K`): rodar qualquer script, executar/parar projeto, ligar Remote, falar com o Claude

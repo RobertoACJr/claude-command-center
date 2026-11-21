@@ -322,6 +322,29 @@ try {
   if (!row.includes('WEB-482') || !row.includes('Estimada')) fail('Demanda não aparece no card do projeto como Estimada: ' + row)
   else console.log('✓ Demanda aparece no card do projeto (WEB-482 · Estimada)')
 
+  // 4i) Fila (espera o modo Ausente) e painel de gastos
+  await evaluate(`document.querySelector('[data-testid="queue-button"]').click()`)
+  await sleep(500)
+  await setVal('[data-testid="queue-prompt"]', 'tarefa de teste da fila')
+  await sleep(200)
+  await evaluate(`document.querySelector('[data-testid="queue-add"]').click()`)
+  await sleep(800)
+  const ql = await evaluate(`document.querySelector('[data-testid="queue-list"]')?.textContent ?? ''`)
+  if (!ql.includes('tarefa de teste da fila') || !(await bodyText()).includes('Esperando você ir para Ausente')) fail('Fila não recebeu a tarefa ou não está esperando o Ausente: ' + ql.slice(0, 200))
+  else console.log('✓ Fila recebeu a tarefa e espera o modo Ausente')
+  // Remove para não rodar quando o teste for para Ausente
+  await evaluate(`[...document.querySelectorAll('[data-testid="queue-list"] button[title="Cancelar"]')].forEach(b => b.click())`)
+  await sleep(300)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
+  await sleep(300)
+  await evaluate(`document.querySelector('[data-testid="costs-button"]').click()`)
+  await sleep(800)
+  const today = await evaluate(`document.querySelector('[data-testid="costs-today"]')?.textContent ?? ''`)
+  if (!today.startsWith('US$')) fail('Painel de gastos não abriu')
+  else console.log(`✓ Painel de gastos abriu (hoje: ${today})`)
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
+  await sleep(300)
+
   // 4f) Paleta de comandos (Ctrl+K) → Histórico com as execuções de antes
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }))`)
   await sleep(400)

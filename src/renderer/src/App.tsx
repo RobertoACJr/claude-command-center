@@ -15,7 +15,9 @@ import type {
   GitInfo,
   NotificationTarget,
   Demand,
-  DemandBusy
+  DemandBusy,
+  QueueState,
+  CostGuard
 } from '@shared/types'
 import { Header } from './components/Header'
 import { ProjectsPanel } from './components/ProjectsPanel'
@@ -38,10 +40,14 @@ import { ApprovalModal } from './components/ApprovalModal'
 import { HistoryModal } from './components/HistoryModal'
 import { CommandPalette, type PaletteItem } from './components/CommandPalette'
 import { DemandModal, newDemand } from './components/DemandModal'
+import { QueueModal } from './components/QueueModal'
+import { CostsModal } from './components/CostsModal'
 import {
   Bell,
   Bot,
   ClipboardList,
+  DollarSign,
+  ListTodo,
   Eye,
   FolderPlus,
   Gem,
@@ -100,6 +106,20 @@ export default function App() {
   }
   const [goOnlineOpen, setGoOnlineOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [queueState, setQueueState] = useState<QueueState>({ tasks: [], waiting: null })
+  const [queueOpen, setQueueOpen] = useState<null | { demandId?: string; projectId?: string }>(null)
+  const [costGuard, setCostGuard] = useState<CostGuard | null>(null)
+  const [costsOpen, setCostsOpen] = useState(false)
+  useEffect(() => {
+    window.api.queue().then(setQueueState)
+    window.api.costGuard().then(setCostGuard)
+    const a = window.api.onQueue(setQueueState)
+    const b = window.api.onCosts(setCostGuard)
+    return () => {
+      a()
+      b()
+    }
+  }, [])
   const [demands, setDemands] = useState<Demand[]>([])
   const [demandsBusy, setDemandsBusy] = useState<DemandBusy[]>([])
   /** Demanda aberta: id de uma existente, ou o rascunho de uma nova */
@@ -187,6 +207,8 @@ export default function App() {
       if (t.startsWith('tab:')) return activate(t.slice(4))
       if (t === 'settings') return openSettings('general')
       if (t.startsWith('demand:')) return setDemandOpen({ id: t.slice('demand:'.length) })
+      if (t === 'queue') return setQueueOpen({})
+      if (t === 'costs') return setCostsOpen(true)
       if (t === 'alerts') document.querySelector('[data-testid="alerts-bar"]')?.scrollIntoView({ behavior: 'smooth' })
     },
     [activate]
@@ -698,6 +720,8 @@ export default function App() {
       icon: <Eye size={14} />,
       run: () => window.api.watcherRunNow()
     },
+    { id: 'queue', group: 'App', label: 'Fila de tarefas do Claude', icon: <ListTodo size={14} />, keywords: 'fila tarefas', run: () => setQueueOpen({}) },
+    { id: 'costs', group: 'App', label: 'Gastos com IA', icon: <DollarSign size={14} />, keywords: 'custos limite dinheiro', run: () => setCostsOpen(true) },
     { id: 'history', group: 'App', label: 'Histórico de execuções', icon: <HistoryIcon size={14} />, keywords: 'log', run: () => setHistoryOpen(true) },
     {
       id: 'notifs',
@@ -754,6 +778,11 @@ export default function App() {
         onOpenSettings={() => openSettings()}
         onGo={goTo}
         onOpenHistory={() => setHistoryOpen(true)}
+        onOpenQueue={() => setQueueOpen({})}
+        onOpenCosts={() => setCostsOpen(true)}
+        queueCount={queueState.tasks.filter((t) => t.status === 'pendente' || t.status === 'rodando').length}
+        queueRunning={queueState.tasks.some((t) => t.status === 'rodando')}
+        costGuard={costGuard}
         onOpenPalette={() => setPaletteOpen(true)}
       />
       {update?.phase === 'ready' && (
@@ -894,6 +923,10 @@ export default function App() {
             }}
             onCreated={(d) => setDemandOpen({ id: d.id })}
             onDeleted={() => setDemandOpen(null)}
+            onQueue={(d) => {
+              setDemandOpen(null)
+              setQueueOpen({ demandId: d.id })
+            }}
             onOpenTerminal={(d) => {
               setDemandOpen(null)
               ensureTab(`demand:${d.id}`, `${d.key}`)
@@ -902,6 +935,29 @@ export default function App() {
           />
         )
       })()}
+      <QueueModal
+        open={!!queueOpen}
+        onClose={() => setQueueOpen(null)}
+        config={config}
+        demands={demands}
+        queue={queueState}
+        preset={queueOpen}
+        onSaveSettings={async (q) => setConfig(await window.api.saveSettings({ queue: q }))}
+        onOpenTerminal={(t) => {
+          setQueueOpen(null)
+          const tab = t.demandId ? `demand:${t.demandId}` : 'fila'
+          ensureTab(tab, t.demandId ? demands.find((d) => d.id === t.demandId)?.key ?? 'Demanda' : 'Fila')
+          activate(tab)
+        }}
+      />
+      <CostsModal
+        open={costsOpen}
+        onClose={() => setCostsOpen(false)}
+        config={config}
+        demands={demands}
+        guard={costGuard}
+        onSaveLimit={async (v) => setConfig(await window.api.saveSettings({ costs: { dailyLimitUsd: v } }))}
+      />
       <HistoryModal open={historyOpen} onClose={() => setHistoryOpen(false)} projects={config.projects} />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={paletteItems} />
 

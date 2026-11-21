@@ -21,6 +21,7 @@ import {
 } from '../shared/vars'
 import { GCHAT_OFFICIAL_WRITE_TOOLS } from './mcp'
 import { runClaudeCapture } from './proc'
+import { costs } from './costs'
 import type { RunManager } from './runner'
 import { secrets } from './secrets'
 import { store } from './store'
@@ -104,6 +105,13 @@ export class Automation {
         this.log({ kind: 'error', text: `[Regras] "${rule.name}" NÃO rodou sozinha: o ambiente "${a.environment}" parece produção. Aprove no PC.` })
         store.patchAlert(a.id, {}, `regra "${rule.name}" bloqueada (produção)`)
         await this.notifyTelegram(`🛑 Regra "${escapeHtml(rule.name)}" não rodou sozinha: <b>${escapeHtml(a.environment)}</b> parece produção. Aprove no PC.`)
+        return
+      }
+      if (!costs.allowsAutomation()) {
+        const g = costs.guard()
+        this.log({ kind: 'error', text: `[Regras] "${rule.name}" não rodou sozinha: limite diário de gastos (US$ ${g.limitUsd.toFixed(2)}) atingido.` })
+        store.patchAlert(a.id, {}, `regra "${rule.name}" pausada (limite de gastos)`)
+        await this.notifyTelegram(`💸 Regra "${escapeHtml(rule.name)}" não rodou sozinha: limite diário de gastos atingido. Aprove manualmente.`)
         return
       }
       await this.approve(a.id, 'pela regra automática', true)
@@ -243,7 +251,8 @@ export class Automation {
     ].join('\n')
 
     const r = await runClaudeCapture(args, { cwd: homedir(), stdin: prompt, timeoutMs: 120_000 })
-    const env = parseLastJson(r.stdout) as { result?: string; is_error?: boolean } | null
+    const env = parseLastJson(r.stdout) as { result?: string; is_error?: boolean; total_cost_usd?: number } | null
+    if (env) costs.record({ source: 'resposta', ai: 'claude', title: `Resposta "${reply.name}"`, usd: env.total_cost_usd ?? null, tokens: null })
     const ok = !r.spawnError && !r.timedOut && !!env && !env.is_error && /^\s*OK\b/i.test(String(env.result ?? ''))
     const why = r.spawnError ?? (r.timedOut ? 'tempo esgotado' : String(env?.result ?? r.stderr).trim().slice(0, 200))
     store.patchAlert(alertId, {}, ok ? `resposta "${reply.name}" enviada (${via})` : `resposta "${reply.name}" falhou`)

@@ -28,6 +28,8 @@ import { AppTray, applyOpenAtLogin } from './tray'
 import { History } from './history'
 import { TelegramControl } from './tgcontrol'
 import { DemandManager } from './demands'
+import { costs } from './costs'
+import { QueueManager, queueSummary } from './queue'
 import type {
   AlertStatus,
   AppNotification,
@@ -72,7 +74,9 @@ const runs = new RunManager((e) => {
       notify(`${ok ? '✔' : '✖'} ${title}`, ok ? 'Terminou com sucesso.' : `Falhou (código ${e.code ?? '?'}).`, `tab:${e.tab}`, 'script', 'unfocused', toTelegram)
     }
   }
+  if (e.type === 'usage') recordRunCost(e)
   history.handle(e)
+  queue.handleRunEvent(e)
   demandsDoneNotice(e)
   demands.handleRunEvent(e)
   tg.handleRunEvent(e)
@@ -82,6 +86,53 @@ const runs = new RunManager((e) => {
   send('run:event', e)
 })
 const demands = new DemandManager(app.getPath('userData'), runs, (list, busy) => send('demands:update', { list, busy }))
+
+// ---------- Custos ----------
+costs.init(app.getPath('userData'), {
+  limit: () => store.get().costs.dailyLimitUsd,
+  onChange: (g) => send('costs:update', g),
+  onLimit: (g) => {
+    notify(
+      '💸 Limite diário de gastos atingido',
+      `Hoje: US$ ${g.todayUsd.toFixed(2)} (limite US$ ${g.limitUsd.toFixed(2)}). Fila, Vigia e regras automáticas ficam pausados até amanhã, ou libere no painel de custos.`,
+      'costs',
+      'custos',
+      'always',
+      true
+    )
+  }
+})
+/** Custo de uma execução do app (histórico sabe de onde veio) */
+function recordRunCost(e: Extract<RunEvent, { type: 'usage' }>): void {
+  const h = history.list().find((x) => x.id === e.runId)
+  const kind = h?.kind === 'gemini' || h?.kind === 'codex' ? h.kind : 'claude'
+  costs.record({
+    source: h?.origin ?? 'app',
+    ai: kind,
+    title: h?.title ?? 'Execução',
+    projectId: h?.projectId,
+    demandId: e.tab.startsWith('demand:') ? e.tab.slice('demand:'.length) : undefined,
+    runId: e.runId,
+    usd: e.costUsd,
+    tokens: e.tokens
+  })
+}
+
+// ---------- Fila de tarefas ----------
+const queueName = (t: { projectId: string; demandId?: string }) =>
+  (t.demandId && demands.get(t.demandId)?.key) || store.get().projects.find((p) => p.id === t.projectId)?.name || '?'
+const queue = new QueueManager(app.getPath('userData'), {
+  runs,
+  demands,
+  onChange: (q) => send('queue:update', q),
+  onDrained: (done) => {
+    const text = queueSummary(done, queueName)
+    notify('📋 Fila concluída', text.split('\n')[0], 'queue', 'fila', 'unfocused', false)
+    const cfg = store.get()
+    if (telegramReady()) void sendTelegramMessage(cfg.telegram.chatId, `📋 <b>Fila concluída</b>\n${escapeHtml(text)}`)
+  },
+  log: (text, kind = 'info') => appLog({ kind, text })
+})
 /** Avisa no sino quando a análise/desenho/resposta do Claude de uma demanda fica pronta */
 function demandsDoneNotice(e: RunEvent): void {
   if (e.type !== 'exit' || !e.tab.startsWith('demand:') || e.killed) return
@@ -229,6 +280,7 @@ async function telegramStatus(): Promise<string> {
 const tg = new TelegramControl({
   runs,
   demands,
+  queue,
   projects,
   remote,
   history,
@@ -373,7 +425,15 @@ function notify(
 /** Mudança de presença. Indo para Ausente, o que já roda continua; voltando, o renderer pergunta. */
 function setPresence(status: PresenceStatus, keepRemote = true): AppConfig {
   remote.presenceChanged(status === 'off' ? true : keepRemote)
-  return store.setStatus(status)
+  const cfg = store.setStatus(status)
+  if (status === 'off') void queue.tick()
+  else {
+    // Voltou: resumo do que a fila fez enquanto você estava fora
+    const done = queue.takeUnreported()
+    if (done.length) notify('📋 Enquanto você estava fora', queueSummary(done, queueName).split('\n')[0] + ' · clique para ver', 'queue', 'fila', 'always', false)
+    void queue.tick()
+  }
+  return cfg
 }
 
 const tray = new AppTray(trayIcon, {
@@ -554,7 +614,12 @@ function registerIpc(): void {
     for (const [k, v] of Object.entries(patch.secrets ?? {})) {
       if (SECRET_KEYS.includes(k as SecretKey) && v !== undefined) secrets.set(k as SecretKey, v)
     }
-    return store.saveSettings({ ...patch, secrets: undefined })
+    const out = store.saveSettings({ ...patch, secrets: undefined })
+    if (patch.queue || patch.costs) {
+      void queue.tick()
+      send('costs:update', costs.guard())
+    }
+    return out
   })
   ipcMain.handle('secrets:status', () => secrets.status())
   ipcMain.handle('mcp:apply', async (_e, id: IntegrationId) => {
@@ -621,6 +686,26 @@ function registerIpc(): void {
   )
   ipcMain.handle('demands:branch', (_e, id: string, base: string) => demands.branch(String(id), String(base ?? '')))
   ipcMain.handle('demands:stop', (_e, id: string) => demands.stop(String(id)))
+  ipcMain.handle('demands:review', (_e, id: string) => demands.review(String(id)))
+  ipcMain.handle('demands:saveReview', (_e, id: string, text: string) => demands.saveReview(String(id), String(text ?? '')))
+  ipcMain.handle('demands:publishReview', (_e, id: string) => demands.publishReview(String(id)))
+  ipcMain.handle('queue:state', () => queue.state())
+  ipcMain.handle('queue:add', (_e, t: { projectId: string; demandId?: string; prompt: string }) =>
+    queue.add({ projectId: String(t?.projectId ?? ''), demandId: t?.demandId ? String(t.demandId) : undefined, prompt: String(t?.prompt ?? '') })
+  )
+  ipcMain.handle('queue:cancel', (_e, id: string) => queue.cancel(String(id)))
+  ipcMain.handle('queue:remove', (_e, id: string) => queue.remove(String(id)))
+  ipcMain.handle('queue:retry', (_e, id: string) => queue.retry(String(id)))
+  ipcMain.handle('queue:move', (_e, id: string, dir: number) => queue.move(String(id), dir < 0 ? -1 : 1))
+  ipcMain.handle('queue:runNow', () => queue.runNow())
+  ipcMain.handle('queue:clearDone', () => queue.clearDone())
+  ipcMain.handle('costs:list', () => costs.list())
+  ipcMain.handle('costs:guard', () => costs.guard())
+  ipcMain.handle('costs:override', () => {
+    const g = costs.overrideToday()
+    void queue.tick()
+    return g
+  })
   ipcMain.handle('history:list', () => history.list())
   ipcMain.handle('history:log', (_e, id: string) => history.log(String(id)))
   ipcMain.handle('history:clear', () => history.clear())

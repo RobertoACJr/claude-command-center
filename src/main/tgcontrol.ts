@@ -4,6 +4,7 @@ import type { HistoryEntry, Project, RunEvent, Script } from '../shared/types'
 import { extractUserVariables, missingProjectKeys, projectValues } from '../shared/vars'
 import type { DemandManager } from './demands'
 import type { History } from './history'
+import type { QueueManager } from './queue'
 import type { ProjectProcesses } from './projects'
 import type { RemoteManager } from './remote'
 import type { RunManager } from './runner'
@@ -64,6 +65,7 @@ export class TelegramControl {
     private d: {
       runs: RunManager
       demands: DemandManager
+      queue: QueueManager
       projects: ProjectProcesses
       remote: RemoteManager
       history: History
@@ -143,6 +145,7 @@ export class TelegramControl {
     '/rodar · scripts e ações globais (pergunta as variáveis aqui)',
     '/claude · escolhe o projeto; depois é só mandar texto que vira ordem para o Claude',
     '/demandas · escolhe uma demanda; o texto vai para a conversa do Claude dela (ou /demanda WEB-482 texto)',
+    '/fila · tarefas na fila; /fila WEB-482 texto (ou /fila NomeDoProjeto texto) põe uma tarefa na fila',
     '/novo · começa uma conversa nova com o Claude',
     '/parar · interrompe o que o Telegram mandou rodar',
     '/log [nome] · últimas linhas de um projeto ou script',
@@ -173,6 +176,10 @@ export class TelegramControl {
       case 'demanda':
       case 'd':
         await this.chooseDemand(args)
+        return true
+      case 'fila':
+      case 'f':
+        await this.queueCmd(args)
         return true
       case 'novo':
         this.sessions.clear()
@@ -408,6 +415,36 @@ export class TelegramControl {
       ]
     ]
     await this.say(pending ? '🤖 Em qual projeto o Claude deve fazer isso?' : '🤖 Em qual projeto?', buttons)
+  }
+
+  // ------------------------------------------------------------ fila
+
+  private async queueCmd(args: string): Promise<void> {
+    const [first, ...rest] = args.trim().split(/\s+/)
+    if (first && rest.length) {
+      const dm = this.d.demands.findByKey(first)
+      const p = dm ? undefined : this.findProject(first)
+      if (!dm && !p) return void (await this.say(`Não achei a demanda ou o projeto "${escapeHtml(first)}".`))
+      const r = this.d.queue.add({ projectId: dm ? dm.projectId : p!.id, demandId: dm?.id, prompt: rest.join(' '), origin: 'telegram' })
+      return void (await this.say((r.ok ? '📋 ' : '⚠️ ') + escapeHtml(r.message)))
+    }
+    const q = this.d.queue.state()
+    const icon: Record<string, string> = { pendente: '⏸', rodando: '⏳', feita: '✅', falhou: '❌', cancelada: '⏹' }
+    const visible = q.tasks.filter((t) => t.status === 'pendente' || t.status === 'rodando' || (t.endedAt ?? 0) > Date.now() - 24 * 3600_000)
+    if (!visible.length) return void (await this.say('Fila vazia. Adicione com /fila WEB-482 o que fazer.'))
+    const name = (t: { projectId: string; demandId?: string }) =>
+      (t.demandId && this.d.demands.get(t.demandId)?.key) || this.projectsList().find((p) => p.id === t.projectId)?.name || '?'
+    const lines = visible.slice(-15).map((t) => `${icon[t.status]} <b>${escapeHtml(name(t))}</b>: ${escapeHtml(t.prompt.slice(0, 80))}`)
+    const buttons: Buttons = []
+    if (q.tasks.some((t) => t.status === 'pendente')) {
+      buttons.push([
+        this.btn('▶ Rodar agora', async () => this.d.queue.runNow().message)
+      ])
+    }
+    for (const t of visible.filter((x) => x.status === 'pendente' || x.status === 'rodando').slice(0, 10)) {
+      buttons.push([this.btn(`✖ Cancelar: ${name(t)} · ${t.prompt}`.slice(0, 45), async () => (this.d.queue.cancel(t.id), 'Cancelada.'))])
+    }
+    await this.say(`<b>Fila</b>${q.waiting ? `\n<i>${escapeHtml(q.waiting)}</i>` : ''}\n\n${lines.join('\n')}`, buttons)
   }
 
   // ------------------------------------------------------------ demandas

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Command, Eye, EyeOff, History, Loader2, Settings, TerminalSquare } from 'lucide-react'
-import type { NotificationTarget, PresenceStatus, WatcherState } from '@shared/types'
+import { Command, Eye, EyeOff, History, ListTodo, Loader2, Settings, TerminalSquare } from 'lucide-react'
+import type { CostGuard, NotificationTarget, PresenceStatus, WatcherState } from '@shared/types'
 import { NotificationBell } from './NotificationBell'
 import { cn } from '../lib/utils'
 
@@ -15,8 +15,18 @@ export function Header({
   onOpenSettings,
   onGo,
   onOpenHistory,
-  onOpenPalette
+  onOpenPalette,
+  onOpenQueue,
+  onOpenCosts,
+  queueCount,
+  queueRunning,
+  costGuard
 }: {
+  onOpenQueue: () => void
+  onOpenCosts: () => void
+  queueCount: number
+  queueRunning: boolean
+  costGuard: CostGuard | null
   status: PresenceStatus
   onToggle: () => void
   remoteCount: number
@@ -50,9 +60,38 @@ export function Header({
           title="Paleta de comandos: rodar scripts, executar projetos, ligar Remote… (Ctrl+K)"
           className="hidden h-9 cursor-pointer items-center gap-2 rounded-lg border border-line bg-card px-3 text-xs text-zinc-500 transition-colors hover:border-violet/60 hover:text-white md:inline-flex"
         >
-          <Command size={13} /> Comandos <kbd className="rounded border border-line px-1 text-[10px]">Ctrl K</kbd>
+          <Command size={13} /> <span className="hidden xl:inline">Comandos</span>{' '}
+          <kbd className="hidden rounded border border-line px-1 text-[10px] xl:inline">Ctrl K</kbd>
         </button>
         <WatcherPill state={watcher} enabled={watcherEnabled} onClick={onToggleWatcher} />
+        <button
+          type="button"
+          data-testid="costs-button"
+          onClick={onOpenCosts}
+          title={costGuard?.over ? 'Limite diário de gastos atingido: automações pausadas' : 'Gastos com IA hoje'}
+          className={cn(
+            'hidden h-9 cursor-pointer items-center rounded-lg border px-2.5 text-xs tabular-nums transition-colors md:inline-flex',
+            costGuard?.over && !costGuard.overridden
+              ? 'border-red-500/50 bg-red-500/10 text-red-300'
+              : 'border-line bg-card text-zinc-400 hover:border-violet/60 hover:text-white'
+          )}
+        >
+          US$ {(costGuard?.todayUsd ?? 0).toFixed(2)}
+        </button>
+        <button
+          type="button"
+          data-testid="queue-button"
+          onClick={onOpenQueue}
+          title="Fila de tarefas do Claude"
+          className="relative flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border border-line bg-card text-zinc-400 transition-colors hover:border-violet/60 hover:text-white"
+        >
+          {queueRunning ? <Loader2 size={16} className="animate-spin text-purple" /> : <ListTodo size={16} />}
+          {queueCount > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-violet px-1 text-[10px] font-bold text-white">
+              {queueCount}
+            </span>
+          )}
+        </button>
         <button
           type="button"
           data-testid="history-button"

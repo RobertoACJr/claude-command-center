@@ -1,7 +1,7 @@
 {
   "name": "claude-command-center",
   "productName": "Claude Command Center",
-  "version": "0.11.2",
+  "version": "0.12.0",
   "description": "Painel desktop para projetos, scripts e Claude Code",
   "main": "./out/main/index.js",
   "author": {
@@ -19,6 +19,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node scripts/run-tests.mjs",
     "build:linux": "electron-vite build && electron-builder --linux --publish never",
     "build:win": "electron-vite build && electron-builder --win --publish never",
     "build:unpack": "electron-vite build && electron-builder --dir --publish never"

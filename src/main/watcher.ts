@@ -4,6 +4,7 @@ import { MCP_NAMES, type AppConfig, type AppLog, type DeployAlert, type WatcherS
 import { findRule, matchProject } from '../shared/vars'
 import { GCHAT_OFFICIAL_READ_TOOLS, GCHAT_OFFICIAL_WRITE_TOOLS } from './mcp'
 import { runClaudeCapture, runGeminiCapture } from './proc'
+import { costs } from './costs'
 import { store } from './store'
 import { ensureWatcherPolicy, geminiReadTools, geminiWatcherArgs } from './gemini'
 
@@ -98,6 +99,13 @@ export class Watcher {
   private async cycle(): Promise<void> {
     const cfg = store.get()
     if (!this.active || this.running) return
+    // Limite diário de gastos: pula este ciclo (volta sozinho amanhã ou se você liberar)
+    if (!costs.allowsAutomation()) {
+      const g = costs.guard()
+      this.set({ lastResult: `${new Date().toLocaleTimeString()} · pausado: limite diário de US$ ${g.limitUsd.toFixed(2)} atingido` })
+      this.schedule(cfg.watcher.intervalMin * 60_000)
+      return
+    }
     this.running = true
     this.set({ phase: 'checking', nextAt: null })
     const startedAt = Date.now()
@@ -121,6 +129,8 @@ export class Watcher {
         }
         resultText = String(envelope.response ?? '')
         costLabel = ' · Gemini'
+        const tk = envelope.stats?.total_tokens ?? envelope.stats?.totalTokens
+        costs.record({ source: 'vigia', ai: 'gemini', title: 'Vigia', usd: null, tokens: typeof tk === 'number' ? tk : null })
       } else {
         const { allowed, disallowed } = toolList(cfg)
         const args = [
@@ -155,6 +165,7 @@ export class Watcher {
         }
         resultText = String(envelope.result ?? '')
         costLabel = typeof envelope.total_cost_usd === 'number' ? ` · US$ ${envelope.total_cost_usd.toFixed(4)}` : ''
+        costs.record({ source: 'vigia', ai: 'claude', title: 'Vigia', usd: envelope.total_cost_usd ?? null, tokens: null })
       }
 
       const payload = parseLastJson(resultText) as { requests?: unknown[] } | null

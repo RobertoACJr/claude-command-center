@@ -51,6 +51,9 @@ jobs:
       - name: Checagem de tipos
         run: npm run typecheck
 
+      - name: Testes dos módulos
+        run: npm test
+
       - name: Gerar instalador
         run: npm run ${{ matrix.script }}
 

@@ -58,7 +58,9 @@ function defaults(): AppConfig {
         autoOnDetect: false
       }
     ],
-    rules: []
+    rules: [],
+    queue: { onlyAway: true, paused: false },
+    costs: { dailyLimitUsd: 0 }
   }
 }
 
@@ -132,7 +134,9 @@ function normalize(raw: unknown): AppConfig {
     },
     claudeGlobal: normPerms(r.claudeGlobal),
     replies: Array.isArray(r.replies) ? (r.replies as ReplyTemplate[]).filter((x) => x && x.id).map(normReply) : d.replies,
-    rules: Array.isArray(r.rules) ? (r.rules as AutomationRule[]).filter((x) => x && x.id).map(normRule) : []
+    rules: Array.isArray(r.rules) ? (r.rules as AutomationRule[]).filter((x) => x && x.id).map(normRule) : [],
+    queue: { onlyAway: bool(r.queue?.onlyAway, true), paused: bool(r.queue?.paused, false) },
+    costs: { dailyLimitUsd: num(r.costs?.dailyLimitUsd, 0, 0, 10_000) }
   }
 }
 
@@ -377,6 +381,8 @@ class ConfigStore {
       if (patch.claudeGlobal) d.claudeGlobal = { ...d.claudeGlobal, ...patch.claudeGlobal }
       if (patch.replies) d.replies = patch.replies
       if (patch.rules) d.rules = patch.rules
+      if (patch.queue) d.queue = { ...d.queue, ...patch.queue }
+      if (patch.costs) d.costs = { ...d.costs, ...patch.costs }
     })
   }
 
