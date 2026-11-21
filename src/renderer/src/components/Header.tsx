@@ -50,7 +50,7 @@ export function Header({
         <HelixLogo size={36} away={!on} spin={busy} />
         <div className="leading-tight">
           <div className="text-[15px] font-semibold tracking-tight text-zinc-50">Hélice</div>
-          <div className="text-[11px] text-zinc-500">central de comando · projetos, demandas e IAs</div>
+          <div className="text-[11px] text-zinc-500">central de comando</div>
         </div>
       </div>
 
