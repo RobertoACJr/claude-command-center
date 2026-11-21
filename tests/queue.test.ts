@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { writeFileSync } from 'fs'
 import { join } from 'path'
-import { fakeRuns, makeRepo, sh, sleep, tempDir, useTempUserData } from './helpers'
+import { fakeRuns, makeRepo, sh, sleep, tempDir, until, useTempUserData } from './helpers'
 
 useTempUserData()
 const { store } = require('../src/main/store') as typeof import('../src/main/store')
@@ -43,8 +43,7 @@ test('só anda Ausente (por padrão), uma por vez, e "Rodar agora" fura a espera
   q.handleRunEvent({ runId: 'run1', tab: 'fila', type: 'usage', costUsd: 0.3, tokens: 10 })
   q.handleRunEvent({ runId: 'run1', tab: 'fila', type: 'lines', lines: [{ kind: 'claude', text: 'Fiz o filtro. Teste em /pedidos.' }] })
   exit(q, runs, 'run1')
-  await sleep(400)
-  assert.equal(runs.started.length, 2, 'emendou a próxima')
+  await until(() => runs.started.length === 2)
   const t1 = q.state().tasks[0]
   assert.equal(t1.status, 'feita')
   assert.equal(t1.costUsd, 0.3)
@@ -99,11 +98,10 @@ test('pausada, limite de gastos, cancelar, mover e tentar de novo', async () => 
   assert.equal(runs.started.length, 1)
   assert.equal(runs.started[0].req.content.startsWith('B'), true)
   exit(q, runs, 'run1', 0, true)
-  await sleep(400)
+  await until(() => q.state().tasks.find((t) => t.prompt === 'B')?.status === 'cancelada')
   assert.equal(q.state().tasks.find((t) => t.prompt === 'B')?.status, 'cancelada')
   q.retry(a.id)
-  await sleep(50)
-  assert.equal(runs.started.length, 2)
+  await until(() => runs.started.length === 2)
   assert.equal(runs.started[1].req.content.startsWith('A'), true)
   exit(q, runs, 'run2')
   assert.equal(q.add({ projectId: 'nao-existe', prompt: 'x' }).ok, false)
@@ -117,13 +115,13 @@ test('tarefa de demanda vai para a branch dela (e não troca com alterações pe
   demands.save(normDemand({ id: 'd1', projectId: 'web', key: 'WEB-9' }))
   writeFileSync(join(work, 'sujo.txt'), 'x')
   q.add({ projectId: 'web', demandId: 'd1', prompt: 'implementa' })
-  await sleep(300)
+  await until(() => q.state().tasks[0].status === 'falhou')
   const t = q.state().tasks[0]
   assert.equal(t.status, 'falhou')
   assert.match(t.error ?? '', /sem commit/)
   sh(work, 'clean', '-fdq')
   q.retry(t.id)
-  await sleep(300)
+  await until(() => runs.started.length === 1)
   assert.equal(sh(work, 'branch', '--show-current'), 'WEB-9', 'criou a branch do card')
   assert.equal(runs.started.length, 1)
   assert.equal(runs.started[0].req.tab, 'demand:d1')

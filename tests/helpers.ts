@@ -5,6 +5,23 @@ import { createServer, type IncomingMessage, type Server } from 'http'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
+// Identidade do git para os testes (as máquinas do CI não têm nome/e-mail configurados)
+Object.assign(process.env, {
+  GIT_AUTHOR_NAME: 'Teste',
+  GIT_AUTHOR_EMAIL: 'teste@example.com',
+  GIT_COMMITTER_NAME: 'Teste',
+  GIT_COMMITTER_EMAIL: 'teste@example.com'
+})
+
+/** Espera a condição ficar verdadeira (máquinas lentas do CI) */
+export async function until(fn: () => boolean, timeoutMs = 8000): Promise<void> {
+  const end = Date.now() + timeoutMs
+  while (!fn()) {
+    if (Date.now() > end) throw new Error('tempo esgotado esperando a condição')
+    await new Promise((r) => setTimeout(r, 25))
+  }
+}
+
 /** Chame ANTES de importar store/secrets: cada arquivo de teste tem a própria pasta de dados */
 export function useTempUserData(): string {
   const dir = mkdtempSync(join(tmpdir(), 'ccc-ud-'))

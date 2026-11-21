@@ -132,5 +132,8 @@ export async function updateWithBase(p: Project, expectBranch: string): Promise<
       message: `Conflito em ${conflicts.length} arquivo(s): ${conflicts.slice(0, 5).join(', ')}${conflicts.length > 5 ? '…' : ''}. O merge ficou aberto: resolva (ou peça ao Claude) e faça o commit, ou desfaça com git merge --abort.`
     }
   }
+  if (/empty ident|auto-detect email|tell me who you are/i.test(m.out)) {
+    return { ok: false, message: 'O git não sabe seu nome/e-mail. Rode no terminal: git config --global user.name "Seu Nome" e git config --global user.email voce@empresa.com' }
+  }
   return { ok: false, message: 'O merge falhou: ' + m.out.split('\n').slice(-2).join(' ') }
 }
