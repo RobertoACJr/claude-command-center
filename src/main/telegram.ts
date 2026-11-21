@@ -122,6 +122,8 @@ export interface BotHandlers {
   onCommand: (cmd: string, args: string) => Promise<void>
   /** Mensagem sem barra (resposta a uma pergunta ou ordem para o Claude) */
   onText: (text: string) => Promise<void>
+  /** Áudio (voz ou arquivo de áudio): id do arquivo no Telegram */
+  onVoice?: (fileId: string) => Promise<void>
   log: (text: string, kind?: 'info' | 'error') => void
 }
 
@@ -209,6 +211,8 @@ export class TelegramBot {
       return
     }
 
+    const voice = u.message?.voice ?? u.message?.audio
+    if (authorized && voice?.file_id && this.h.onVoice) return this.h.onVoice(String(voice.file_id))
     const text: string = u.message?.text ?? ''
     if (!authorized || !text.trim()) return
     if (!text.startsWith('/')) return this.h.onText(text.trim())
@@ -227,4 +231,32 @@ export function registerBot(b: TelegramBot): void {
 
 export function formatDecision(a: DeployAlert, approved: boolean): string {
   return `${approved ? '✅ Aprovado' : '🗑 Descartado'}: ${escapeHtml([a.card, a.environment].filter(Boolean).join(' → ') || a.summary)}`
+}
+
+/** Baixa um arquivo que chegou no Telegram (ex: áudio) */
+export async function downloadTelegramFile(fileId: string): Promise<{ data: Buffer; name: string } | null> {
+  const token = secrets.get('telegram.token')
+  if (!token) return null
+  const r = await call('getFile', { file_id: fileId })
+  const path = (r.result as { file_path?: string } | undefined)?.file_path
+  if (!r.ok || !path) return null
+  const res = await fetch(`${API()}/file/bot${token}/${path}`)
+  if (!res.ok) return null
+  return { data: Buffer.from(await res.arrayBuffer()), name: path.split('/').pop() || 'audio.ogg' }
+}
+
+/** Manda uma imagem (PNG) com legenda */
+export async function sendTelegramPhoto(chatId: string, png: Buffer, caption: string): Promise<boolean> {
+  const token = secrets.get('telegram.token')
+  if (!token || !chatId) return false
+  const form = new FormData()
+  form.append('chat_id', chatId)
+  form.append('caption', caption.slice(0, 1000))
+  form.append('photo', new Blob([new Uint8Array(png)], { type: 'image/png' }), 'tela.png')
+  try {
+    const res = await fetch(`${API()}/bot${token}/sendPhoto`, { method: 'POST', body: form })
+    return res.ok
+  } catch {
+    return false
+  }
 }

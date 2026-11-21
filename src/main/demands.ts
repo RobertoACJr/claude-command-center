@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto'
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import type { Demand, DemandAi, DemandBusy, DemandJira, DemandQueueCopy, DemandReview, DemandStatus, DemandTiming, OpResult, PrDraft, Project, ReviewAi, RunEvent } from '../shared/types'
+import type { Demand, DemandAi, DemandBusy, DemandJira, DemandQueueCopy, DemandReview, DemandStatus, DemandTiming, OpResult, PrComment, PrDraft, Project, ReviewAi, RunEvent } from '../shared/types'
 import { spawn } from 'child_process'
 import { baseBranch, bringQueueToBranch, git, gitInfo, queueAhead, removeWorktree, updateWithBase } from './git'
 import { readGuides } from './guides'
@@ -49,6 +49,9 @@ export function normDemand(r: Partial<Demand>): Demand {
     queueSessionId: str(r.queueSessionId) || null,
     prUrl: str(r.prUrl) || null,
     statusLog: Array.isArray(r.statusLog) ? r.statusLog.filter((x) => x && typeof x.at === 'number').slice(-100) : [],
+    type: r.type === 'bug' ? 'bug' : 'feature',
+    images: Array.isArray(r.images) ? r.images.filter((x) => typeof x === 'string').slice(0, 20) : [],
+    prCommentsDone: Array.isArray(r.prCommentsDone) ? r.prCommentsDone.filter((x) => typeof x === 'string').slice(-500) : [],
     timeline: Array.isArray(r.timeline) ? r.timeline.slice(-200) : [],
     createdAt: num(r.createdAt) ?? now,
     updatedAt: num(r.updatedAt) ?? now
@@ -100,9 +103,39 @@ export function demandContext(d: Demand, project?: Project, refs: Project[] = []
       )
     }
   }
-  if (d.context.trim()) parts.push('## Contexto extra (chat, anotações)\n' + d.context.trim())
+  if (d.images?.length) {
+    parts.push('## Prints anexados (abra e veja cada imagem)\n' + d.images.map((f) => `- ${f}`).join('\n'))
+  }
+  if (d.context.trim()) parts.push(`## ${d.type === 'bug' ? 'Como reproduzir / erro' : 'Contexto extra (chat, anotações)'}\n` + d.context.trim())
   if (d.transcript.trim()) parts.push('## Transcrição da call de apresentação\n' + d.transcript.trim())
   return parts.join('\n\n')
+}
+
+export function bugAnalysisPrompt(ctx: string): string {
+  return `${ctx}
+
+---
+Isto é um BUG. Você é um dev front-end sênior investigando. Leia o código (e os prints, se houver) para achar a causa.
+NÃO altere nenhum arquivo.
+
+Responda em português, em markdown, com o documento inteiro entre uma linha "${OPEN}" e uma linha "${CLOSE}":
+
+## Sintoma
+O que acontece e o que deveria acontecer.
+## Como reproduzir
+Passo a passo (confirme pelo código; diga se algo não bate com o relato).
+## Causa provável
+Com \`arquivo:linha\` e o porquê. Se houver mais de uma hipótese, ordene da mais provável.
+## Correção proposta
+O que mudar, em poucos passos.
+## Teste que garante
+Um teste que falha hoje e passa com a correção.
+## Dúvidas para o refinamento
+O que precisa ser confirmado com quem relatou.
+## Estimativa
+Horas para corrigir + testar.
+
+Na última linha antes de "${CLOSE}", escreva exatamente: ESTIMATIVA_HORAS: <número>`
 }
 
 export function analysisPrompt(ctx: string): string {
@@ -152,6 +185,17 @@ Dúvidas ainda em aberto ou fora do escopo.`
 }
 
 export function implementPrompt(ctx: string, d: Demand): string {
+  if (d.type === 'bug') {
+    return `${ctx}
+
+${d.analysis ? '## Investigação\n' + d.analysis + '\n' : ''}${d.design ? '## Plano aprovado\n' + d.design + '\n' : ''}
+---
+Corrija este bug no projeto da pasta atual (branch ${d.key}):
+1. Primeiro escreva um teste que reproduz o bug e confirme que ele falha.
+2. Corrija a causa (não só o sintoma), seguindo os padrões do projeto.
+3. Rode o teste de novo e mostre que passa; procure o mesmo problema em outros lugares parecidos.
+Diga em poucas linhas o que encontrou, o que mudou e como testar. Não faça commit nem push.`
+  }
   return `${ctx}
 
 ## Desenho aprovado
@@ -262,6 +306,63 @@ function ghRun(cwd: string, args: string[], input: string): Promise<{ ok: boolea
   })
 }
 
+/** Junta comentários gerais, revisões e comentários de linha do PR (tira os seus e os de robôs) */
+export function parsePrComments(view: any, inline: any[], me: string): PrComment[] {
+  const out: PrComment[] = []
+  const skip = (login?: string) => !login || login === me || /\[bot\]$|-bot$/i.test(login)
+  for (const c of view?.comments ?? []) {
+    if (skip(c.author?.login) || !String(c.body ?? '').trim()) continue
+    out.push({ id: `c:${c.id ?? c.url}`, author: c.author.login, body: String(c.body).trim(), at: String(c.createdAt ?? ''), url: c.url, kind: 'geral' })
+  }
+  for (const r of view?.reviews ?? []) {
+    if (skip(r.author?.login) || !String(r.body ?? '').trim()) continue
+    out.push({ id: `r:${r.id}`, author: r.author.login, body: String(r.body).trim(), at: String(r.submittedAt ?? ''), kind: 'revisao' })
+  }
+  for (const c of inline ?? []) {
+    if (skip(c.user?.login) || !String(c.body ?? '').trim()) continue
+    out.push({
+      id: `l:${c.id}`,
+      author: c.user.login,
+      body: String(c.body).trim(),
+      path: c.path,
+      line: c.line ?? c.original_line ?? null,
+      at: String(c.created_at ?? ''),
+      url: c.html_url,
+      kind: 'linha'
+    })
+  }
+  return out.sort((a, b) => a.at.localeCompare(b.at))
+}
+
+export function prCommentsPrompt(d: Demand, comments: PrComment[]): string {
+  const list = comments
+    .map((c, i) => `${i + 1}. ${c.author}${c.path ? ` em \`${c.path}${c.line ? `:${c.line}` : ''}\`` : c.kind === 'revisao' ? ' (revisão)' : ''}:\n${c.body.split('\n').map((l) => '   ' + l).join('\n')}`)
+    .join('\n\n')
+  return `O time comentou no PR da ${d.key}. Ajuste o código para atender cada comentário abaixo (na branch ${d.key}).
+Se discordar de algum ou ele estiver ambíguo, não mude: explique e sugira uma resposta para eu mandar.
+No fim, liste por número o que fez em cada comentário (para eu responder no PR). Não faça commit nem push.
+
+${list}`
+}
+
+/** Mensagem pronta com as dúvidas da análise, para mandar antes do refinamento */
+export function doubtsMessage(d: Demand): string {
+  const m = d.analysis.match(/##\s*Dúvidas[^\n]*\n([\s\S]*?)(?=\n##\s|$)/i)
+  const items = (m?.[1] ?? '')
+    .split('\n')
+    .map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim())
+    .filter(Boolean)
+  const title = d.title || d.jira?.summary || ''
+  if (!items.length) return ''
+  return [
+    `Oi, pessoal! Sobre a ${d.key}${title ? ` (${title})` : ''}, ficaram algumas dúvidas antes de começar:`,
+    '',
+    ...items.map((x, i) => `${i + 1}. ${x}`),
+    '',
+    'Podemos alinhar na apresentação ou por aqui. Obrigado!'
+  ].join('\n')
+}
+
 // ---------------------------------------------------------------- Jira
 
 /** Texto puro a partir do formato de texto do Jira (wiki markup) */
@@ -274,6 +375,28 @@ function cleanJira(s: string): string {
     .replace(/^h([1-6])\.\s*/gm, (_m, n) => '#'.repeat(Number(n)) + ' ')
     .replace(/\r/g, '')
     .trim()
+}
+
+export async function postJiraComment(key: string, body: string): Promise<OpResult> {
+  const j = store.get().integrations.jira
+  const token = secrets.get('jira.token')
+  if (!j.url || !j.email || !token) return { ok: false, message: 'Configure o Jira (Configurações → Integrações).' }
+  try {
+    const res = await fetch(`${j.url.replace(/\/+$/, '')}/rest/api/2/issue/${encodeURIComponent(key)}/comment`, {
+      method: 'POST',
+      headers: {
+        Authorization: 'Basic ' + Buffer.from(`${j.email}:${token}`).toString('base64'),
+        'Content-Type': 'application/json',
+        Accept: 'application/json'
+      },
+      body: JSON.stringify({ body })
+    })
+    if (res.status === 201 || res.ok) return { ok: true, message: `Comentado no card ${key}.` }
+    if (res.status === 401 || res.status === 403) return { ok: false, message: 'O Jira recusou: sem permissão para comentar neste card.' }
+    return { ok: false, message: `O Jira respondeu HTTP ${res.status}.` }
+  } catch {
+    return { ok: false, message: 'Falha de rede ao falar com o Jira.' }
+  }
 }
 
 export async function fetchJiraIssue(key: string): Promise<{ ok: true; jira: DemandJira } | { ok: false; message: string }> {
@@ -417,6 +540,8 @@ export class DemandManager {
       if (this.busy.get(d.id)?.what === 'design') d.design = old.design
       d.review = old.review
       d.queueSessionId = old.queueSessionId
+      d.images = old.images
+      d.prCommentsDone = old.prCommentsDone
       d.prUrl = old.prUrl
       d.statusLog = old.statusLog
       if (old.status !== d.status) {
@@ -469,6 +594,13 @@ export class DemandManager {
     return { ok: true, message: `Card ${d.key} carregado do Jira.` }
   }
 
+  /** Pastas extras que o Claude pode ler: projetos de consulta + prints da demanda */
+  private extraDirs(d: Demand): string[] {
+    const dirs = this.refs(d).map((r) => r.path)
+    if (d.images.length) dirs.push(this.imagesDir(d.id))
+    return dirs
+  }
+
   private refs(d: Demand): Project[] {
     const ps = store.get().projects
     return d.refProjectIds.filter((x) => x !== d.projectId).map((x) => ps.find((p) => p.id === x)).filter((p): p is Project => !!p)
@@ -486,7 +618,7 @@ export class DemandManager {
     }
     const refs = this.refs(d)
     const ctx = demandContext(d, p, refs)
-    const content = what === 'analysis' ? analysisPrompt(ctx) : designPrompt(ctx, d)
+    const content = what === 'analysis' ? (d.type === 'bug' ? bugAnalysisPrompt(ctx) : analysisPrompt(ctx)) : designPrompt(ctx, d)
     const runId = this.runs.start({
       kind: d.ai,
       tab: `demand:${d.id}`,
@@ -496,7 +628,7 @@ export class DemandManager {
       projectId: p.id,
       origin: 'demanda',
       readOnly: true,
-      addDirs: refs.map((r) => r.path)
+      addDirs: this.extraDirs(d)
     })
     this.running.set(runId, { demandId: id, what, text: [] })
     this.setBusy(id, { demandId: id, what, runId })
@@ -535,7 +667,7 @@ export class DemandManager {
       projectId: p.id,
       origin: origin === 'app' ? 'demanda' : origin,
       resumeSessionId: session ?? undefined,
-      addDirs: refs.map((r) => r.path)
+      addDirs: this.extraDirs(d)
     })
     this.running.set(runId, { demandId: id, what: 'dev', text: [], sessionField: field })
     this.setBusy(id, { demandId: id, what: 'dev', runId })
@@ -633,7 +765,7 @@ export class DemandManager {
       projectId: p.id,
       origin: 'demanda',
       readOnly: true,
-      addDirs: this.refs(d).map((r) => r.path)
+      addDirs: this.extraDirs(d)
     })
     this.running.set(runId, {
       demandId: id,
@@ -762,6 +894,99 @@ export class DemandManager {
     return { ok: true, message: `PR aberto: ${url}` }
   }
 
+  // ---------------------------------------------------------------- comentários do PR
+
+  async prComments(id: string): Promise<OpResult & { comments?: PrComment[] }> {
+    const d = this.get(id)
+    const p = d && this.projectOf(d)
+    if (!d || !p) return { ok: false, message: 'Demanda não encontrada.' }
+    const view = await ghRun(p.path, ['pr', 'view', d.key, '--json', 'number,url,comments,reviews'], '')
+    if (view.missing) return { ok: false, message: 'O GitHub CLI (gh) não está instalado. Veja em Configurações → Começar.' }
+    if (!view.ok) {
+      if (/no pull requests found|no open pull/i.test(view.out)) return { ok: false, message: `Não achei PR da branch ${d.key}.` }
+      if (/auth|login/i.test(view.out)) return { ok: false, message: 'O gh não está logado: rode "gh auth login".' }
+      return { ok: false, message: 'O gh recusou: ' + view.out.split('\n').slice(-1)[0] }
+    }
+    let data: any
+    try {
+      data = JSON.parse(view.out)
+    } catch {
+      return { ok: false, message: 'Resposta estranha do gh.' }
+    }
+    if (data.url) d.prUrl = data.url
+    const inline = await ghRun(p.path, ['api', `repos/{owner}/{repo}/pulls/${data.number}/comments`, '--paginate'], '')
+    const me = (await ghRun(p.path, ['api', 'user', '--jq', '.login'], '')).out.trim()
+    let lines: any[] = []
+    try {
+      lines = inline.ok ? JSON.parse(inline.out.replace(/\]\s*\[/g, ',')) : []
+    } catch {
+      lines = []
+    }
+    const comments = parsePrComments(data, lines, me)
+    const fresh = comments.filter((c) => !d.prCommentsDone.includes(c.id)).length
+    this.persist()
+    return { ok: true, message: comments.length ? `${comments.length} comentário(s), ${fresh} ainda não mandado(s) ao Claude.` : 'Nenhum comentário do time no PR.', comments }
+  }
+
+  /** Texto para o Claude e marca os comentários como tratados */
+  prCommentsMessage(id: string, comments: PrComment[]): string | null {
+    const d = this.get(id)
+    if (!d || !comments.length) return null
+    d.prCommentsDone = [...new Set([...d.prCommentsDone, ...comments.map((c) => c.id)])]
+    this.note(d, `${comments.length} comentário(s) do PR mandados ao Claude`)
+    this.persist()
+    return prCommentsPrompt(d, comments)
+  }
+
+  // ---------------------------------------------------------------- dúvidas e Jira
+
+  doubts(id: string): string {
+    const d = this.get(id)
+    return d ? doubtsMessage(d) : ''
+  }
+
+  async commentJira(id: string, text: string): Promise<OpResult> {
+    const d = this.get(id)
+    if (!d) return { ok: false, message: 'Demanda não encontrada.' }
+    const r = await postJiraComment(d.key, text)
+    if (r.ok) {
+      this.note(d, 'Dúvidas comentadas no card do Jira')
+      this.persist()
+    }
+    return r
+  }
+
+  // ---------------------------------------------------------------- prints colados
+
+  imagesDir(id: string): string {
+    return join(this.base, 'demand-images', id.replace(/[^\w-]/g, ''))
+  }
+
+  addImage(id: string, dataUrl: string): OpResult & { file?: string } {
+    const d = this.get(id)
+    if (!d) return { ok: false, message: 'Demanda não encontrada.' }
+    const m = dataUrl.match(/^data:image\/(png|jpe?g|webp|gif);base64,(.+)$/)
+    if (!m) return { ok: false, message: 'Só imagens (PNG, JPG, WEBP, GIF).' }
+    const buf = Buffer.from(m[2], 'base64')
+    if (buf.length > 8_000_000) return { ok: false, message: 'Imagem grande demais (máx. 8 MB).' }
+    if (d.images.length >= 20) return { ok: false, message: 'Máximo de 20 imagens por demanda.' }
+    const dir = this.imagesDir(id)
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, `${Date.now()}.${m[1] === 'jpeg' ? 'jpg' : m[1]}`)
+    writeFileSync(file, buf)
+    d.images = [...d.images, file]
+    this.persist()
+    return { ok: true, message: 'Imagem anexada.', file }
+  }
+
+  removeImage(id: string, file: string): void {
+    const d = this.get(id)
+    if (!d || !d.images.includes(file)) return
+    d.images = d.images.filter((f) => f !== file)
+    rmSync(file, { force: true })
+    this.persist()
+  }
+
   // ---------------------------------------------------------------- estimado × real
 
   timings(now = Date.now()): DemandTiming[] {
@@ -800,7 +1025,7 @@ export class DemandManager {
           projectId: p.id,
           origin: 'demanda',
           readOnly: true,
-          addDirs: this.refs(d).map((x) => x.path)
+          addDirs: this.extraDirs(d)
         })
         this.running.set(runId, { demandId: d.id, what: 'review', text: [], review: r.review })
         this.setBusy(d.id, { demandId: d.id, what: 'review', runId })

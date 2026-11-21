@@ -144,6 +144,23 @@ O usuário não conseguiu configurar Git, Jira, Google Chat nem Telegram sozinho
 - [x] Estimado × real por demanda.
 - [x] Sincronizar entre PCs por repositório git privado (mescla de três vias; segredos ficam em cada PC).
 
+### Rodada 6 ✅ (v0.14.0)
+- [x] Tipo do projeto (front/back/os dois/outro) com recursos próprios.
+- [x] Front: prints das telas (desktop e celular) numa janela invisível + erros do console e requisições que falharam.
+- [x] Back: checagem das rotas da API (método, caminho, status esperado).
+- [x] Antes/depois nas tarefas da fila e ao trazer o trabalho da fila; prints no Telegram.
+- [x] Comentários do PR → Claude (agora ou pela fila).
+- [x] Dúvidas do refinamento → mensagem pronta / comentário no Jira.
+- [x] Fluxo de bug com prints colados e correção começando pelo teste.
+- [x] Áudio no Telegram com transcrição configurável.
+- [x] Memória do projeto (CLAUDE.md) com sugestão automática.
+
+### Para depois (sugeridos)
+- [ ] Critérios de aceite como checklist conferido antes do PR.
+- [ ] Atualizar o Jira (comentar PR aberto / mover etapa) com confirmação.
+- [ ] Relatório da semana (demandas, horas, PRs, gastos).
+- [ ] Comparar prints antes/depois lado a lado com destaque do que mudou.
+
 ### Fase 14: Modelos de projeto (sem prioridade por enquanto)
 - [ ] "Projeto Node", "Laravel", etc. com comando de execução, variáveis e scripts comuns já prontos.
 

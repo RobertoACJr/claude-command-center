@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FolderGit2, FolderOpen, Plus, X } from 'lucide-react'
-import type { ClaudePerms, Project, ProjectVar } from '@shared/types'
+import type { ClaudePerms, Project, ProjectKind, ProjectVar } from '@shared/types'
+import { cn } from '../lib/utils'
 import { ClaudePermsEditor } from './ClaudePermsEditor'
 import { Button, Field, IconButton, Modal, Toggle, inputCls } from './ui'
 import { uid } from '../lib/utils'
@@ -34,6 +35,11 @@ export function ProjectModal({
   const [branch, setBranch] = useState<string | null>(null)
   const [guides, setGuides] = useState('')
   const [checkCommand, setCheckCommand] = useState('')
+  const [kind, setKind] = useState<ProjectKind>('outro')
+  const [localUrl, setLocalUrl] = useState('')
+  const [routes, setRoutes] = useState('')
+  const [mobileShots, setMobileShots] = useState(false)
+  const [memoryFile, setMemoryFile] = useState('CLAUDE.md')
   const [guideOk, setGuideOk] = useState<boolean[]>([])
 
   useEffect(() => {
@@ -47,6 +53,11 @@ export function ProjectModal({
     setPerms({ claudeMode: initial?.claudeMode ?? 'ask', allowedTools: initial?.allowedTools ?? [] })
     setGuides((initial?.guides ?? []).join('\n'))
     setCheckCommand(initial?.checkCommand ?? '')
+    setKind(initial?.kind ?? 'outro')
+    setLocalUrl(initial?.localUrl ?? '')
+    setRoutes((initial?.routes ?? []).join('\n'))
+    setMobileShots(initial?.mobileShots ?? false)
+    setMemoryFile(initial?.memoryFile || 'CLAUDE.md')
   }, [open, initial])
 
   const guideList = guides
@@ -103,7 +114,15 @@ export function ProjectModal({
       claudeMode: perms.claudeMode,
       allowedTools: perms.allowedTools,
       guides: guideList,
-      checkCommand: checkCommand.trim()
+      checkCommand: checkCommand.trim(),
+      kind,
+      localUrl: localUrl.trim().replace(/\/+$/, ''),
+      routes: routes
+        .split('\n')
+        .map((r) => r.trim())
+        .filter(Boolean),
+      mobileShots,
+      memoryFile: memoryFile.trim() || 'CLAUDE.md'
     })
     onClose()
   }
@@ -249,6 +268,67 @@ export function ProjectModal({
       </Field>
 
       <Field
+        label="Tipo do projeto"
+        hint="Libera recursos próprios: front-end tira prints das telas e pega erros do navegador; back-end checa as rotas da API. Rodam quando você pede, antes/depois das tarefas da fila e ao trazer o trabalho da fila."
+      >
+        <div className="flex overflow-hidden rounded-lg border border-line" data-testid="project-kind">
+          {(
+            [
+              ['front', 'Front-end'],
+              ['back', 'Back-end / API'],
+              ['fullstack', 'Os dois'],
+              ['outro', 'Outro']
+            ] as const
+          ).map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setKind(k)}
+              className={cn('flex-1 cursor-pointer px-3 py-1.5 text-xs', kind === k ? 'bg-violet/20 text-purple' : 'text-zinc-400 hover:text-zinc-200')}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </Field>
+
+      {kind !== 'outro' && (
+        <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3">
+          <Field label="Endereço local (com o projeto rodando)" hint={kind === 'back' ? 'Ex: http://localhost:3000' : 'Ex: http://localhost:5173'}>
+            <input
+              data-testid="project-url"
+              className={inputCls + ' font-mono text-xs'}
+              value={localUrl}
+              onChange={(e) => setLocalUrl(e.target.value)}
+              placeholder={kind === 'back' ? 'http://localhost:3000' : 'http://localhost:5173'}
+            />
+          </Field>
+          <Field
+            label={kind === 'back' ? 'Rotas para checar' : kind === 'front' ? 'Telas para fotografar' : 'Telas / rotas'}
+            hint={
+              kind === 'back'
+                ? 'Uma por linha: método, caminho e status esperado. Ex: GET /health 200'
+                : kind === 'front'
+                  ? 'Um caminho por linha. Ex: /pedidos'
+                  : 'Front usa os caminhos (/pedidos); a API usa "GET /api/health 200".'
+            }
+          >
+            <textarea
+              data-testid="project-routes"
+              rows={3}
+              className={inputCls + ' h-auto py-2 font-mono text-xs'}
+              value={routes}
+              onChange={(e) => setRoutes(e.target.value)}
+              placeholder={kind === 'back' ? 'GET /health 200\nGET /api/pedidos 200' : '/\n/pedidos'}
+            />
+          </Field>
+        </div>
+      )}
+      {(kind === 'front' || kind === 'fullstack') && (
+        <Toggle checked={mobileShots} onChange={setMobileShots} label="Tirar também o print em largura de celular (390px)" />
+      )}
+
+      <Field
         label="Comando de verificação (opcional)"
         hint="Roda no fim de cada tarefa da fila, na pasta onde o Claude trabalhou. O resultado entra no resumo (ex: npm run lint && npm test)."
       >
@@ -259,6 +339,13 @@ export function ProjectModal({
           onChange={(e) => setCheckCommand(e.target.value)}
           placeholder="npm run lint && npm test"
         />
+      </Field>
+
+      <Field
+        label="Arquivo de memória"
+        hint="Onde ficam os aprendizados (botão 'Ensinar ao projeto' na demanda). O padrão CLAUDE.md o Claude Code lê sozinho; os outros IAs recebem o conteúdo nas demandas."
+      >
+        <input className={inputCls + ' font-mono text-xs'} value={memoryFile} onChange={(e) => setMemoryFile(e.target.value)} placeholder="CLAUDE.md" />
       </Field>
 
       <Field

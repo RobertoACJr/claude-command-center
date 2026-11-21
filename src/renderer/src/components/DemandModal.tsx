@@ -6,6 +6,9 @@ import {
   ExternalLink,
   GitBranch,
   GitMerge,
+  Copy,
+  Lightbulb,
+  MessageSquare,
   GitPullRequest,
   ListTodo,
   Loader2,
@@ -19,7 +22,9 @@ import {
   SquareTerminal,
   Trash2
 } from 'lucide-react'
-import type { Demand, DemandAi, DemandBusy, DemandQueueCopy, DemandStatus, GitInfo, OpResult, PrDraft, Project, ReviewAi } from '@shared/types'
+import type { Demand, DemandAi, DemandBusy, DemandQueueCopy, DemandStatus, GitInfo, OpResult, PrComment, PrDraft, Project, ReviewAi } from '@shared/types'
+import { looksLikeRule } from '@shared/text'
+import { ShotsView } from './ShotsView'
 import { cn, uid } from '../lib/utils'
 import { Button, Modal } from './ui'
 
@@ -63,6 +68,9 @@ export function newDemand(projectId: string): Demand {
     queueSessionId: null,
     prUrl: null,
     statusLog: [],
+    type: 'feature',
+    images: [],
+    prCommentsDone: [],
     timeline: [],
     createdAt: now,
     updatedAt: now
@@ -121,7 +129,7 @@ function Md({ text }: { text: string }) {
   return <div className="selectable [overflow-wrap:anywhere]">{out}</div>
 }
 
-type Tab = 'contexto' | 'analise' | 'desenho' | 'dev' | 'revisao' | 'linha'
+type Tab = 'contexto' | 'analise' | 'desenho' | 'dev' | 'revisao' | 'telas' | 'linha'
 
 const areaCls =
   'w-full rounded-lg border border-line bg-bg px-3 py-2 text-xs text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-violet/60'
@@ -168,6 +176,8 @@ export function DemandModal({
   const [base, setBase] = useState('')
   const [editDesign, setEditDesign] = useState(false)
   const [conflicts, setConflicts] = useState<string[]>([])
+  /** Última mensagem que você mandou ao Claude (para sugerir "ensinar ao projeto") */
+  const [lastSent, setLastSent] = useState('')
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastId = useRef<string | null>(null)
 
@@ -245,6 +255,9 @@ export function DemandModal({
     ['desenho', 'Desenho'],
     ['dev', 'Implementação'],
     ['revisao', 'Revisão'],
+    ...(project && project.kind !== 'outro'
+      ? [['telas', project.kind === 'back' ? 'API' : project.kind === 'front' ? 'Telas' : 'Telas e API'] as [Tab, string]]
+      : []),
     ['linha', 'Linha do tempo']
   ]
 
@@ -420,18 +433,59 @@ export function DemandModal({
             </div>
           )}
 
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-medium text-zinc-300">Tipo</span>
+            <div className="flex overflow-hidden rounded-lg border border-line" data-testid="demand-type">
+              {(
+                [
+                  ['feature', 'Funcionalidade'],
+                  ['bug', 'Bug']
+                ] as const
+              ).map(([t, label]) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => change({ type: t })}
+                  className={cn('cursor-pointer px-3 py-1 text-xs', d.type === t ? (t === 'bug' ? 'bg-red-500/15 text-red-300' : 'bg-violet/20 text-purple') : 'text-zinc-400 hover:text-zinc-200')}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {d.type === 'bug' && (
+              <span className="text-[11px] text-zinc-500">A análise procura a causa; a correção começa por um teste que reproduz o bug.</span>
+            )}
+          </div>
           <label className="block space-y-1">
-            <span className="text-xs font-medium text-zinc-300">Contexto extra</span>
-            <span className="block text-[11px] text-zinc-500">Mensagens do chat, anotações suas, links, o que mais ajudar.</span>
+            <span className="text-xs font-medium text-zinc-300">{d.type === 'bug' ? 'Como reproduzir / erro' : 'Contexto extra'}</span>
+            <span className="block text-[11px] text-zinc-500">
+              {d.type === 'bug'
+                ? 'Passo a passo, mensagem de erro, onde acontece. Cole prints aqui mesmo (Ctrl+V).'
+                : 'Mensagens do chat, anotações suas, links, o que mais ajudar. Prints: cole aqui (Ctrl+V).'}
+            </span>
             <textarea
               data-testid="demand-context"
               rows={5}
               className={areaCls}
               value={d.context}
               onChange={(e) => change({ context: e.target.value })}
-              placeholder="Cole aqui o que chegou pelo chat…"
+              onPaste={async (e) => {
+                const img = [...e.clipboardData.items].find((i) => i.type.startsWith('image/'))
+                if (!img || isNew) return
+                e.preventDefault()
+                const file = img.getAsFile()
+                if (!file) return
+                const dataUrl = await new Promise<string>((res) => {
+                  const r = new FileReader()
+                  r.onload = () => res(String(r.result))
+                  r.readAsDataURL(file)
+                })
+                setResult(await window.api.demandAddImage(d.id, dataUrl))
+              }}
+              placeholder={d.type === 'bug' ? 'Ex: ao filtrar por data, a lista fica vazia… (cole prints com Ctrl+V)' : 'Cole aqui o que chegou pelo chat…'}
             />
           </label>
+          {d.images.length > 0 && <DemandImages d={d} />}
           <label className="block space-y-1">
             <span className="text-xs font-medium text-zinc-300">Transcrição da apresentação</span>
             <span className="block text-[11px] text-zinc-500">Quando teve call: cole a transcrição que chegou no e-mail.</span>
@@ -501,6 +555,7 @@ export function DemandModal({
           ) : (
             !working && <p className="text-xs text-zinc-500">Ainda sem análise.</p>
           )}
+          {d.analysis && !working && <DoubtsBox d={d} jira={!!d.jira} onResult={setResult} />}
           <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line bg-bg/50 p-3">
             <span className="text-xs text-zinc-300">Sua estimativa</span>
             <input
@@ -710,6 +765,7 @@ export function DemandModal({
                   e.preventDefault()
                   if (!working && (msg.trim() || !d.sessionId)) {
                     act(() => window.api.demandImplement(d.id, msg))
+                    setLastSent(msg)
                     setMsg('')
                   }
                 }
@@ -732,6 +788,7 @@ export function DemandModal({
                 data-testid="demand-send"
                 onClick={() => {
                   act(() => window.api.demandImplement(d.id, msg))
+                  setLastSent(msg)
                   setMsg('')
                 }}
               >
@@ -750,13 +807,18 @@ export function DemandModal({
         </div>
       )}
 
+      {!isNew && tab === 'dev' && project && <LearnBox projectId={project.id} memoryFile={project.memoryFile} suggestion={looksLikeRule(lastSent) ? lastSent : ''} onResult={setResult} />}
+
       {/* ---------------- Revisão ---------------- */}
       {!isNew && tab === 'revisao' && (
         <>
           <ReviewTab d={d} working={working} reviewing={busy?.what === 'review'} onAi={(reviewAi) => change({ reviewAi })} onResult={setResult} flush={() => flush(d)} />
           <PrBox d={d} onResult={setResult} />
+          <PrCommentsBox d={d} working={working} onResult={setResult} />
         </>
       )}
+
+      {!isNew && tab === 'telas' && project && <ShotsView project={project} demandId={d.id} />}
 
       {/* ---------------- Linha do tempo ---------------- */}
       {!isNew && tab === 'linha' && (
@@ -774,6 +836,187 @@ export function DemandModal({
         </div>
       )}
     </Modal>
+  )
+}
+
+/** Prints colados na demanda */
+function DemandImages({ d }: { d: Demand }) {
+  const [srcs, setSrcs] = useState<Record<string, string>>({})
+  useEffect(() => {
+    for (const f of d.images) if (!srcs[f]) window.api.shotImage(f).then((s) => s && setSrcs((x) => ({ ...x, [f]: s })))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d.images])
+  return (
+    <div className="flex flex-wrap gap-2" data-testid="demand-images">
+      {d.images.map((f) => (
+        <div key={f} className="relative">
+          {srcs[f] ? <img src={srcs[f]} alt="" className="h-20 w-28 rounded-lg border border-line object-cover" /> : <div className="h-20 w-28 rounded-lg border border-line" />}
+          <button
+            type="button"
+            title="Remover"
+            onClick={() => window.api.demandRemoveImage(d.id, f)}
+            className="absolute top-1 right-1 cursor-pointer rounded-full bg-black/70 p-0.5 text-zinc-300 hover:text-white"
+          >
+            <Trash2 size={11} />
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** Dúvidas da análise → mensagem pronta (copiar) ou comentário no card do Jira */
+function DoubtsBox({ d, jira, onResult }: { d: Demand; jira: boolean; onResult: (r: OpResult) => void }) {
+  const [text, setText] = useState('')
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    window.api.demandDoubts(d.id).then(setText)
+  }, [d.id, d.analysis])
+  if (!text) return null
+  return (
+    <div data-testid="doubts" className="space-y-2 rounded-xl border border-line bg-bg/50 p-3">
+      <div className="text-xs font-semibold text-zinc-200">Dúvidas para levar ao refinamento</div>
+      <textarea rows={7} className={areaCls} value={text} onChange={(e) => setText(e.target.value)} />
+      <div className="flex justify-end gap-2">
+        <Button
+          size="sm"
+          onClick={async () => {
+            await window.api.copyText(text)
+            setCopied(true)
+          }}
+        >
+          <Copy size={12} /> {copied ? 'Copiado' : 'Copiar para o chat'}
+        </Button>
+        {jira && (
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={async () => {
+              if (!confirm(`Comentar estas dúvidas no card ${d.key} do Jira?`)) return
+              onResult(await window.api.demandCommentJira(d.id, text))
+            }}
+          >
+            <Send size={12} /> Comentar no card
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** Comentários do time no PR → Claude ajusta */
+function PrCommentsBox({ d, working, onResult }: { d: Demand; working: boolean; onResult: (r: OpResult) => void }) {
+  const [list, setList] = useState<PrComment[] | null>(null)
+  const [sel, setSel] = useState<string[]>([])
+  const [loading, setLoading] = useState(false)
+  const load = async () => {
+    setLoading(true)
+    const r = await window.api.demandPrComments(d.id)
+    setLoading(false)
+    onResult(r)
+    setList(r.comments ?? null)
+    setSel((r.comments ?? []).filter((c) => !d.prCommentsDone.includes(c.id)).map((c) => c.id))
+  }
+  const send = async (toQueue: boolean) => {
+    if (!list) return
+    onResult(await window.api.demandSendPrComments(d.id, sel, list, toQueue))
+    setList(null)
+  }
+  return (
+    <div className="space-y-2 rounded-xl border border-line bg-bg/50 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-semibold text-zinc-200">Comentários do time no PR</span>
+        <Button size="sm" disabled={loading} onClick={load} data-testid="pr-comments">
+          {loading ? <Loader2 size={12} className="animate-spin" /> : <MessageSquare size={12} />} Buscar comentários
+        </Button>
+      </div>
+      {list && list.length > 0 && (
+        <>
+          <div className="max-h-72 space-y-1.5 overflow-y-auto">
+            {list.map((c) => {
+              const done = d.prCommentsDone.includes(c.id)
+              return (
+                <label key={c.id} className={cn('flex cursor-pointer gap-2 rounded-lg border border-line px-2.5 py-2 text-xs', done && 'opacity-60')}>
+                  <input type="checkbox" checked={sel.includes(c.id)} onChange={(e) => setSel((s) => (e.target.checked ? [...s, c.id] : s.filter((x) => x !== c.id)))} />
+                  <span className="min-w-0 flex-1">
+                    <span className="text-[11px] text-zinc-500">
+                      <b className="text-zinc-300">{c.author}</b>
+                      {c.path ? ` · ${c.path}${c.line ? `:${c.line}` : ''}` : c.kind === 'revisao' ? ' · revisão' : ''}
+                      {done && ' · já mandado'}
+                    </span>
+                    <span className="block whitespace-pre-wrap text-zinc-200 [overflow-wrap:anywhere]">{c.body}</span>
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button size="sm" disabled={!sel.length} onClick={() => send(true)}>
+              <ListTodo size={12} /> Pôr na fila
+            </Button>
+            <Button size="sm" variant="primary" disabled={!sel.length || working} onClick={() => send(false)}>
+              <Send size={12} /> Mandar para o Claude ajustar ({sel.length})
+            </Button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** Ensinar ao projeto: guarda uma regra no arquivo de memória (CLAUDE.md) */
+function LearnBox({ projectId, memoryFile, suggestion, onResult }: { projectId: string; memoryFile: string; suggestion: string; onResult: (r: OpResult) => void }) {
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState('')
+  useEffect(() => {
+    if (suggestion) setText(suggestion)
+  }, [suggestion])
+  if (!open && !suggestion) {
+    return (
+      <div className="flex justify-end">
+        <button type="button" className="cursor-pointer text-[11px] text-purple hover:underline" onClick={() => setOpen(true)} data-testid="learn-open">
+          <Lightbulb size={11} className="inline" /> Ensinar ao projeto (guardar uma regra em {memoryFile || 'CLAUDE.md'})
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div data-testid="learn" className="space-y-2 rounded-xl border border-amber-400/30 bg-amber-400/[0.04] p-3">
+      <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-200">
+        <Lightbulb size={13} className="text-amber-300" />
+        {suggestion && !open ? 'Isso parece uma regra do projeto. Guardar para as próximas vezes?' : 'Ensinar ao projeto'}
+      </div>
+      <textarea rows={2} className={areaCls} value={text} onChange={(e) => setText(e.target.value)} placeholder="Ex: aqui não usamos axios; use o cliente http de src/lib/api.ts" />
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] text-zinc-500">Vai para {memoryFile || 'CLAUDE.md'}, que o Claude lê em toda tarefa neste projeto.</span>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            onClick={() => {
+              setOpen(false)
+              setText('')
+            }}
+          >
+            Agora não
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            disabled={!text.trim()}
+            onClick={async () => {
+              const r = await window.api.projectLearn(projectId, text)
+              onResult(r)
+              if (r.ok) {
+                setOpen(false)
+                setText('')
+              }
+            }}
+          >
+            Guardar
+          </Button>
+        </div>
+      </div>
+    </div>
   )
 }
 

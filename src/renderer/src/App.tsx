@@ -43,10 +43,12 @@ import { DemandModal, newDemand } from './components/DemandModal'
 import { QueueModal } from './components/QueueModal'
 import { CostsModal } from './components/CostsModal'
 import { DailyModal } from './components/DailyModal'
+import { ShotsModal } from './components/ShotsView'
 import {
   Bell,
   Bot,
   ClipboardList,
+  Camera,
   DollarSign,
   ListTodo,
   MessageSquareText,
@@ -113,6 +115,7 @@ export default function App() {
   const [costGuard, setCostGuard] = useState<CostGuard | null>(null)
   const [costsOpen, setCostsOpen] = useState(false)
   const [dailyOpen, setDailyOpen] = useState(false)
+  const [shotsProject, setShotsProject] = useState<Project | null>(null)
   useEffect(() => {
     window.api.queue().then(setQueueState)
     window.api.costGuard().then(setCostGuard)
@@ -672,6 +675,18 @@ export default function App() {
           icon: <SquareTerminal size={14} />,
           run: () => openProjectTerminal(p.id)
         },
+        ...(p.kind !== 'outro'
+          ? [
+              {
+                id: `shots:${p.id}`,
+                group: 'Projetos',
+                label: `${p.kind === 'back' ? 'Checar a API' : 'Telas e erros'}: ${p.name}`,
+                icon: <Camera size={14} />,
+                keywords: 'prints screenshot api',
+                run: () => setShotsProject(p)
+              }
+            ]
+          : []),
         {
           id: `edit:${p.id}`,
           group: 'Projetos',
@@ -836,6 +851,7 @@ export default function App() {
           demandsBusy={demandsBusy}
           onOpenDemand={(d) => setDemandOpen({ id: d.id })}
           gitInfos={gitInfos}
+          onOpenShots={setShotsProject}
           onGitDiff={(p) =>
             execute('terminal', 'git status -sb; git diff --stat', undefined, p.path, { tab: `git:${p.id}`, title: `git · ${p.name}` })
           }
@@ -946,6 +962,7 @@ export default function App() {
         )
       })()}
       <DailyModal open={dailyOpen} onClose={() => setDailyOpen(false)} />
+      <ShotsModal project={shotsProject} onClose={() => setShotsProject(null)} />
       <QueueModal
         open={!!queueOpen}
         onClose={() => setQueueOpen(null)}

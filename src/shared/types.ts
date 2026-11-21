@@ -26,6 +26,63 @@ export interface Project {
   guides: string[]
   /** Comando de verificação (ex: npm run lint && npm test): roda no fim de cada tarefa da fila */
   checkCommand: string
+  /** Tipo do projeto: libera recursos próprios (front: prints e erros do navegador; back: checagem da API) */
+  kind: ProjectKind
+  /** Endereço local do projeto rodando (ex: http://localhost:5173) */
+  localUrl: string
+  /** Front: caminhos das telas (ex: /pedidos). Back: "GET /health 200" (método, caminho, status esperado) */
+  routes: string[]
+  /** Front: tirar também o print em largura de celular (390px) */
+  mobileShots: boolean
+  /** Arquivo de memória do projeto, onde ficam os aprendizados (o Claude lê sozinho). Padrão: CLAUDE.md */
+  memoryFile: string
+}
+
+export type ProjectKind = 'front' | 'back' | 'fullstack' | 'outro'
+
+// ---------------------------------------------------------------- Telas e checagem da API
+
+export interface ShotItem {
+  route: string
+  /** Largura usada (1280 = desktop, 390 = celular) */
+  width: number
+  /** Arquivo PNG (front) */
+  file?: string
+  /** Erros no console e requisições que falharam (front) */
+  errors: string[]
+  /** Back: status recebido e esperado */
+  status?: number | null
+  expected?: number
+  ms?: number
+  ok: boolean
+}
+
+/** Um conjunto de prints (front) e/ou checagens da API (back) */
+export interface ShotSet {
+  id: string
+  at: number
+  label: string
+  projectId: string
+  demandId?: string
+  taskId?: string
+  kind: 'telas' | 'api'
+  items: ShotItem[]
+  /** Por que não rodou (ex: projeto fora do ar) */
+  error?: string
+}
+
+// ---------------------------------------------------------------- Comentários do PR
+
+export interface PrComment {
+  id: string
+  author: string
+  body: string
+  /** Comentário numa linha do código */
+  path?: string
+  line?: number | null
+  at: string
+  url?: string
+  kind: 'geral' | 'revisao' | 'linha'
 }
 
 /**
@@ -157,6 +214,8 @@ export interface TelegramConfig {
   chatId: string
   /** Botões (Aprovar/Descartar/Rodar) e comandos (/status, /ausente…) no Telegram */
   interactive: boolean
+  /** Comando que transcreve áudio para texto ({{arquivo}} = caminho do áudio). Vazio = áudio desligado */
+  transcribeCommand: string
   /** No modo Ausente, manda também os avisos do sino (projeto caiu, script terminou, Vigia, atualização) */
   forwardNotifications: boolean
 }
@@ -467,6 +526,12 @@ export interface Demand {
   prUrl: string | null
   /** Quando a etapa mudou (para estimado × real) */
   statusLog: Array<{ at: number; status: DemandStatus }>
+  /** Funcionalidade ou correção de bug (muda a análise e a implementação) */
+  type: 'feature' | 'bug'
+  /** Prints e imagens colados na demanda (arquivos na pasta de dados do app) */
+  images: string[]
+  /** Comentários do PR já mandados para o Claude */
+  prCommentsDone: string[]
   timeline: Array<{ at: number; text: string }>
   createdAt: number
   updatedAt: number
@@ -558,6 +623,11 @@ export interface QueueTask {
   committed?: boolean
   /** Resultado do comando de verificação do projeto */
   check?: { command: string; ok: boolean; output: string }
+  /** Prints/checagem da API depois da tarefa (resumo de cada conjunto) */
+  shots?: string[]
+  shotSetIds?: string[]
+  /** Algum conjunto depois da tarefa teve erro */
+  shotsFailed?: boolean
 }
 
 /** Situação da cópia da fila de uma demanda */
@@ -728,6 +798,22 @@ export interface CommandCenterApi {
   demandTimings(): Promise<DemandTiming[]>
   /** Resumo para a daily (texto pronto para colar) */
   daily(): Promise<string>
+
+  // Telas (front) e checagem da API (back)
+  shots(scope: { projectId?: string; demandId?: string }): Promise<ShotSet[]>
+  takeShots(req: { projectId: string; demandId?: string; label: string }): Promise<OpResult & { sets?: ShotSet[] }>
+  shotImage(file: string): Promise<string | null>
+  deleteShots(id: string): Promise<void>
+  onShots(cb: (set: ShotSet) => void): () => void
+
+  // Comentários do PR, dúvidas, bug e memória
+  demandPrComments(id: string): Promise<OpResult & { comments?: PrComment[] }>
+  demandSendPrComments(id: string, commentIds: string[], comments: PrComment[], toQueue: boolean): Promise<OpResult>
+  demandDoubts(id: string): Promise<string>
+  demandCommentJira(id: string, text: string): Promise<OpResult>
+  demandAddImage(id: string, dataUrl: string): Promise<OpResult & { file?: string }>
+  demandRemoveImage(id: string, file: string): Promise<void>
+  projectLearn(projectId: string, lesson: string): Promise<OpResult>
 
   // Sincronizar entre PCs
   syncStatus(): Promise<SyncStatus>

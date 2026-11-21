@@ -1,7 +1,8 @@
 import { randomUUID } from 'crypto'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
-import type { OpResult, QueueState, QueueTask, RunEvent } from '../shared/types'
+import type { OpResult, QueueState, QueueTask, RunEvent, ShotSet } from '../shared/types'
+import { shotSummary } from './shots'
 import { costs } from './costs'
 import type { DemandManager } from './demands'
 import { commitAll, ensureWorktree, git, gitCheckout, gitInfo, queueBranch } from './git'
@@ -49,6 +50,8 @@ export class QueueManager {
       /** Fila esvaziou com você Ausente: manda o resumo (Telegram) */
       onDrained: (done: QueueTask[]) => void
       log: (text: string, kind?: 'info' | 'error' | 'success') => void
+      /** Front/back: prints e checagem da API antes/depois (só na pasta do projeto, não na cópia) */
+      shots?: (t: QueueTask, label: 'antes' | 'depois') => Promise<ShotSet[] | null>
     }
   ) {
     this.file = join(base, 'queue.json')
@@ -222,10 +225,12 @@ export class QueueManager {
         const r = has ? await gitCheckout(p, dm.key) : await this.d.demands.branch(dm.id, '')
         if (!r.ok) return this.fail(t, r.message)
       }
+      await this.d.shots?.(t, 'antes').catch(() => null)
       const r = this.d.demands.implement(dm.id, t.prompt + QUEUE_SUFFIX, false, 'fila')
       if (!r.ok || !r.runId) return this.fail(t, r.message)
       runId = r.runId
     } else {
+      await this.d.shots?.(t, 'antes').catch(() => null)
       runId = this.d.runs.start({
         kind: 'claude',
         tab: 'fila',
@@ -266,7 +271,7 @@ export class QueueManager {
       return
     }
     if (e.type !== 'exit') return
-    if (t.phase === 'verificando') return this.finishCheck(t, e)
+    if (t.phase === 'verificando') return void this.finishCheck(t, e)
     t.summary = tail(this.text.get(e.runId) ?? []) || undefined
     this.text.delete(e.runId)
     if (!e.killed && e.code === 0) {
@@ -303,16 +308,28 @@ export class QueueManager {
       this.persist()
       return
     }
+    if (!copy) await this.afterShots(t)
     t.status = 'feita'
     t.endedAt = Date.now()
     if (copy) t.summary = (t.summary ? t.summary + '\n\n' : '') + (t.committed ? `(guardado num commit em ${queueBranch(dm!.key)})` : '(nada mudou nos arquivos)')
     this.finish(t)
   }
 
-  private finishCheck(t: QueueTask, e: Extract<RunEvent, { type: 'exit' }>): void {
+  /** Prints/checagem da API depois da tarefa (quando roda na pasta do projeto) */
+  private async afterShots(t: QueueTask): Promise<void> {
+    const sets = await this.d.shots?.(t, 'depois').catch(() => null)
+    if (!sets?.length) return
+    t.shots = sets.map(shotSummary)
+    t.shotSetIds = sets.map((s) => s.id)
+    t.shotsFailed = sets.some((s) => s.error || s.items.some((i) => !i.ok))
+  }
+
+  private async finishCheck(t: QueueTask, e: Extract<RunEvent, { type: 'exit' }>): Promise<void> {
     const out = tail(this.out.get(e.runId) ?? [], 1200)
     this.out.delete(e.runId)
     t.check = { command: t.check?.command ?? '', ok: !e.killed && e.code === 0, output: out }
+    const dmx = t.demandId ? this.d.demands.get(t.demandId) : undefined
+    if (!e.killed && !(dmx && t.cwd === this.d.demands.queueCopyDir(dmx))) await this.afterShots(t)
     t.status = e.killed ? 'cancelada' : 'feita'
     t.endedAt = Date.now()
     const dm = t.demandId ? this.d.demands.get(t.demandId) : undefined
@@ -335,16 +352,17 @@ export class QueueManager {
 
 /** Texto do resumo (Telegram e sino) */
 export function queueSummary(done: QueueTask[], names: (t: QueueTask) => string): string {
-  const ok = done.filter((t) => t.status === 'feita' && (!t.check || t.check.ok)).length
+  const ok = done.filter((t) => t.status === 'feita' && (!t.check || t.check.ok) && !t.shotsFailed).length
   const bad = done.length - ok
   const cost = done.reduce((s, t) => s + (t.costUsd ?? 0), 0)
   const head = `${ok} feita(s)${bad ? `, ${bad} com problema` : ''}${cost ? ` · US$ ${cost.toFixed(2)}` : ''}`
   const lines = done.map((t) => {
-    const icon = t.status !== 'feita' ? '❌' : t.check && !t.check.ok ? '⚠️' : '✅'
+    const icon = t.status !== 'feita' ? '❌' : (t.check && !t.check.ok) || t.shotsFailed ? '⚠️' : '✅'
     const what = t.prompt.replace(/\s+/g, ' ').slice(0, 90)
     const note = t.status === 'feita' ? (t.summary ?? '').replace(/\s+/g, ' ').slice(-220) : (t.error ?? '')
     const check = t.check ? `\n   ${t.check.ok ? '✔ verificação ok' : '✖ verificação falhou'} (${t.check.command})` : ''
-    return `${icon} ${names(t)}: ${what}${note ? `\n   ↳ ${note}` : ''}${check}`
+    const shots = t.shots?.length ? '\n   ' + t.shots.join('\n   ') : ''
+    return `${icon} ${names(t)}: ${what}${note ? `\n   ↳ ${note}` : ''}${check}${shots}`
   })
   return `${head}\n\n${lines.join('\n')}`
 }

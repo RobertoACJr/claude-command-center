@@ -244,6 +244,19 @@ Engrenagem no header → **Configurações & Integrações**.
 - **Estimado × real** (painel de gastos e cabeçalho da demanda): dias úteis de "Em dev" até "Feita" contra a estimativa.
 - **Sincronizar entre PCs** (Configurações → Geral): um repositório git privado seu mantém projetos, scripts, regras,
   preferências e demandas iguais no Ubuntu e no Windows. Segredos não vão; a pasta de cada projeto é por PC.
+- **Tipo do projeto** (no formulário): **front-end** tira prints das telas numa janela invisível e pega erros do
+  console e requisições que falharam; **back-end** chama as rotas cadastradas (`GET /health 200`) e compara o status.
+  Roda quando você pede (câmera no card ou aba Telas/API da demanda), antes/depois das tarefas da fila e ao trazer o
+  trabalho da fila. Os prints vão junto do resumo da fila no Telegram.
+- **Bug**: demanda do tipo bug com passo a passo, prints colados (Ctrl+V); a análise procura a causa e a correção começa
+  por um teste que reproduz o problema.
+- **Dúvidas do refinamento**: viram mensagem pronta (copiar para o chat) ou comentário no card do Jira.
+- **Comentários do PR**: o app busca os comentários do time no PR (gerais, revisões e de linha) e você manda para o
+  Claude ajustar agora ou pela fila.
+- **Ensinar ao projeto**: guarda uma regra no `CLAUDE.md` (o Claude lê sozinho em toda tarefa). Quando sua mensagem
+  parece uma regra ("aqui não usamos axios…"), o app sugere guardar.
+- **Áudio no Telegram**: mande um áudio; o app transcreve (Whisper no seu PC ou outro comando), mostra o texto e você
+  confirma antes de virar ordem.
 - **Histórico** (ícone de relógio no topo): as últimas 300 execuções com quem disparou (app, Telegram, pedido),
   resultado, duração e a saída completa. Fica só no PC (`history.json` + `history/` na pasta de dados do app).
 - **Paleta de comandos** (`Ctrl+K`): rodar qualquer script, executar/parar projeto, ligar Remote, falar com o Claude

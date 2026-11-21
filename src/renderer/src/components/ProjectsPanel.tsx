@@ -1,6 +1,7 @@
 import {
   AlertTriangle,
   AppWindow,
+  Camera,
   Braces,
   ChevronDown,
   ChevronRight,
@@ -48,8 +49,10 @@ export function ProjectsPanel({
   onNewDemand,
   gitInfos,
   onGitDiff,
-  onGitResult
+  onGitResult,
+  onOpenShots
 }: {
+  onOpenShots: (p: Project) => void
   demands: Demand[]
   demandsBusy: DemandBusy[]
   onOpenDemand: (d: Demand) => void
@@ -123,6 +126,7 @@ export function ProjectsPanel({
             git={gitInfos[p.id]}
             onGitDiff={onGitDiff}
             onGitResult={onGitResult}
+            onOpenShots={onOpenShots}
           />
         ))}
       </div>
@@ -191,7 +195,8 @@ function ProjectCard({
   onNewDemand,
   git,
   onGitDiff,
-  onGitResult
+  onGitResult,
+  onOpenShots
 }: {
   demands: Demand[]
   demandsBusy: DemandBusy[]
@@ -200,6 +205,7 @@ function ProjectCard({
   git: GitInfo | null | undefined
   onGitDiff: (p: Project) => void
   onGitResult: (r: OpResult) => void
+  onOpenShots: (p: Project) => void
   p: Project
   branch: string | null | undefined
   session: RemoteSession | undefined
@@ -264,6 +270,16 @@ function ProjectCard({
           </div>
         </div>
         <div className="flex shrink-0 items-center">
+          {p.kind !== 'outro' && (
+            <IconButton
+              title={p.kind === 'back' ? 'Checar a API (rotas do projeto)' : 'Telas: prints e erros do navegador'}
+              tone="accent"
+              data-testid="project-shots"
+              onClick={() => onOpenShots(p)}
+            >
+              <Camera size={13} />
+            </IconButton>
+          )}
           <IconButton title="Abrir o terminal do sistema nesta pasta" tone="accent" onClick={() => window.api.openSystemTerminal(p.path).then((r) => !r.ok && onError(r.message))}>
             <AppWindow size={13} />
           </IconButton>

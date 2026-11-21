@@ -9,7 +9,11 @@ import type { ProjectProcesses } from './projects'
 import type { RemoteManager } from './remote'
 import type { RunManager } from './runner'
 import { store } from './store'
-import { call, escapeHtml, sendTelegramMessage, type InlineButton } from './telegram'
+import { call, downloadTelegramFile, escapeHtml, sendTelegramMessage, type InlineButton } from './telegram'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { spawnShell } from './proc'
 
 type Buttons = InlineButton[][]
 type Action = () => Promise<string | void>
@@ -182,6 +186,14 @@ export class TelegramControl {
       case 'fila':
       case 'f':
         await this.queueCmd(args)
+        return true
+      case 'audio':
+      case 'áudio':
+        await this.say(
+          store.get().telegram.transcribeCommand
+            ? '🎤 Pode mandar áudio: eu transcrevo, mostro o texto e você confirma antes de virar ordem.'
+            : '🎤 Áudio desligado: configure o "Comando de transcrição" em Configurações → Telegram.'
+        )
         return true
       case 'daily':
         await this.say(`<pre>${escapeHtml(this.d.daily())}</pre>`)
@@ -422,6 +434,38 @@ export class TelegramControl {
     await this.say(pending ? '🤖 Em qual projeto o Claude deve fazer isso?' : '🤖 Em qual projeto?', buttons)
   }
 
+  // ------------------------------------------------------------ áudio
+
+  /** Áudio no Telegram: transcreve com o comando configurado e confirma antes de usar como texto */
+  async voice(fileId: string): Promise<void> {
+    const cmd = store.get().telegram.transcribeCommand.trim()
+    if (!cmd) {
+      await this.say(
+        '🎤 Para usar áudio, configure a transcrição no app: Configurações → Telegram → "Comando de transcrição".'
+      )
+      return
+    }
+    await call('sendChatAction', { chat_id: this.chat(), action: 'typing' })
+    const file = await downloadTelegramFile(fileId)
+    if (!file) return void (await this.say('⚠️ Não consegui baixar o áudio.'))
+    const dir = mkdtempSync(join(tmpdir(), 'helice-audio-'))
+    const audio = join(dir, file.name.replace(/[^\w.-]/g, '_'))
+    writeFileSync(audio, file.data)
+    try {
+      const text = await transcribe(cmd, audio, dir)
+      if (!text) return void (await this.say('⚠️ A transcrição voltou vazia. Confira o comando nas configurações.'))
+      const go = this.btn('✅ Mandar', async () => {
+        void this.text(text)
+        return 'Mandado.'
+      })
+      await this.say(`🎤 Entendi:\n<i>${escapeHtml(text)}</i>\n\nMando assim? (ou escreva a versão certa)`, [[go, this.btn('✖ Descartar', async () => 'Descartado.')]])
+    } catch (e) {
+      await this.say('⚠️ A transcrição falhou: ' + escapeHtml((e as Error).message).slice(0, 300))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
   // ------------------------------------------------------------ fila
 
   private async queueCmd(args: string): Promise<void> {
@@ -599,4 +643,48 @@ export class TelegramControl {
     const tail = r.lines.slice(-15)
     void this.say(head + (tail.length ? `\n<pre>${escapeHtml(tailText(tail, 3000))}</pre>` : ''))
   }
+}
+
+/**
+ * Roda o comando de transcrição. {{arquivo}} vira o caminho do áudio (entre aspas).
+ * Usa o que o comando imprimir; se não imprimir nada, lê o .txt que ele tiver gravado na pasta (ex: whisper).
+ */
+export function transcribe(command: string, audio: string, dir: string, timeoutMs = 300_000): Promise<string> {
+  const full = command.includes('{{arquivo}}') ? command.split('{{arquivo}}').join(`"${audio}"`) : `${command} "${audio}"`
+  return new Promise((resolve, reject) => {
+    const child = spawnShell(full, dir)
+    let out = ''
+    let err = ''
+    child.stdout?.on('data', (b) => (out += b))
+    child.stderr?.on('data', (b) => (err += b))
+    const timer = setTimeout(() => {
+      child.kill()
+      reject(new Error('demorou mais de 5 minutos'))
+    }, timeoutMs)
+    child.on('error', (e) => {
+      clearTimeout(timer)
+      reject(e)
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (code !== 0 && !out.trim()) return reject(new Error(err.trim().split('\n').slice(-2).join(' ') || `saiu com código ${code}`))
+      let text = cleanTranscript(out)
+      if (!text) {
+        const txt = readdirSync(dir).find((f) => f.endsWith('.txt'))
+        if (txt) text = cleanTranscript(readFileSync(join(dir, txt), 'utf8'))
+      }
+      resolve(text)
+    })
+  })
+}
+
+/** Tira marcas de tempo do whisper ("[00:00.000 --> 00:03.000]") e espaços sobrando */
+export function cleanTranscript(s: string): string {
+  return s
+    .split('\n')
+    .map((l) => l.replace(/^\s*\[[\d:.]+\s*-->\s*[\d:.]+\]\s*/, '').trim())
+    .filter((l) => l && !/^(Detecting language|Detected language)/i.test(l))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }

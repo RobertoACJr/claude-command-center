@@ -105,6 +105,43 @@ export function SettingsModal({
 
 // ---------------------------------------------------------------- helpers
 
+/** Áudio no Telegram: comando que transcreve ({{arquivo}} = caminho do áudio) */
+function TranscribeField({ config, save }: { config: AppConfig; save: SaveFn }) {
+  const [cmd, setCmd] = useState(config.telegram.transcribeCommand)
+  useEffect(() => setCmd(config.telegram.transcribeCommand), [config.telegram.transcribeCommand])
+  const presets: Array<[string, string]> = [
+    ['Whisper (local, grátis)', 'whisper {{arquivo}} --language pt --model small --output_format txt --output_dir .'],
+    ['faster-whisper (mais rápido)', 'whisper-ctranslate2 {{arquivo}} --language pt --model small --output_format txt --output_dir .'],
+    ['Gemini CLI', 'gemini -p "Transcreva este áudio em português. Responda só com o texto falado." @{{arquivo}}']
+  ]
+  return (
+    <Field
+      label="Áudio: comando de transcrição"
+      hint={
+        <>
+          Mande áudio para o bot: ele transcreve com este comando, mostra o texto e você confirma antes de virar ordem.{' '}
+          <code>{'{{arquivo}}'}</code> vira o caminho do áudio. O Whisper roda no seu PC (instale com{' '}
+          <code>pip install openai-whisper</code> e tenha o ffmpeg). Vazio = áudio desligado.
+        </>
+      }
+    >
+      <div className="flex gap-2">
+        <input data-testid="transcribe-cmd" className={inputCls + ' font-mono text-xs'} value={cmd} onChange={(e) => setCmd(e.target.value)} placeholder="whisper {{arquivo}} --language pt …" />
+        <Button size="sm" disabled={cmd.trim() === config.telegram.transcribeCommand} onClick={() => save({ telegram: { transcribeCommand: cmd.trim() } })}>
+          Salvar
+        </Button>
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        {presets.map(([label, c]) => (
+          <button key={label} type="button" onClick={() => setCmd(c)} className="cursor-pointer rounded-md border border-line px-2 py-0.5 text-[11px] text-zinc-400 hover:border-violet/50 hover:text-zinc-200">
+            {label}
+          </button>
+        ))}
+      </div>
+    </Field>
+  )
+}
+
 /** Sincronizar configuração e demandas entre PCs por um repositório git privado */
 function SyncSection({ config, save }: { config: AppConfig; save: SaveFn }) {
   const [st, setSt] = useState<SyncStatus | null>(null)
@@ -816,6 +853,7 @@ function TelegramTab({ config, sec, save }: { config: AppConfig; sec: SecretsSta
         label="No modo Ausente, mandar também os avisos do sino"
         hint="Projeto que caiu, script que terminou, Vigia com problema e versão nova. Pedidos e permissões já chegam sempre."
       />
+      <TranscribeField config={config} save={save} />
       <Result r={result} />
     </Section>
   )

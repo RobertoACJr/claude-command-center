@@ -13,7 +13,7 @@ import { RunManager } from './runner'
 import { RemoteManager } from './remote'
 import { secrets } from './secrets'
 import { applyIntegration, integrationCheck, integrationLogin, integrationStatus } from './mcp'
-import { detectChatId, editTelegramMessage, escapeHtml, formatAlert, registerBot, sendTelegram, sendTelegramMessage, TelegramBot } from './telegram'
+import { detectChatId, editTelegramMessage, escapeHtml, formatAlert, registerBot, sendTelegram, sendTelegramMessage, sendTelegramPhoto, TelegramBot } from './telegram'
 import { Automation } from './automation'
 import { geminiCheck, geminiSetup } from './gemini'
 import { setCodexCommand, setGeminiCommand } from './proc'
@@ -32,10 +32,16 @@ import { costs } from './costs'
 import { QueueManager, queueSummary } from './queue'
 import { buildDaily } from './daily'
 import { SyncManager } from './sync'
+import { isUp, ShotManager } from './shots'
+import { captureWithElectron } from './capture'
+import { learn } from './guides'
 import type {
   AlertStatus,
   AppNotification,
   Demand,
+  PrComment,
+  QueueTask,
+  ShotSet,
   RunEvent,
   NotificationKind,
   NotificationTarget,
@@ -159,6 +165,38 @@ function scheduleSync(): void {
   syncTimer = setInterval(() => void sync.sync().then((r) => !r.ok && appLog({ kind: 'error', text: `[Sincronizar] ${r.message}` })), 15 * 60_000)
 }
 
+// ---------- Telas (front) e checagem da API (back) ----------
+const shots = new ShotManager(app.getPath('userData'), captureWithElectron, (s) => send('shots:new', s))
+/** Prints antes/depois de uma tarefa da fila, se o projeto for front/back e estiver no ar */
+async function queueShots(t: QueueTask, label: 'antes' | 'depois'): Promise<ShotSet[] | null> {
+  const p = store.get().projects.find((x) => x.id === t.projectId)
+  if (!p) return null
+  const w = ShotManager.wants(p)
+  if (!w.telas && !w.api) return null
+  if (label === 'antes' && !(await isUp(p.localUrl))) return null
+  if (label === 'depois') await new Promise((r) => setTimeout(r, 3000)) // recarregamento do servidor de dev
+  const r = await shots.take(p, { demandId: t.demandId, taskId: t.id, label: `${label} · fila` })
+  return r.sets ?? null
+}
+
+/** Manda os prints "depois" das tarefas da fila no Telegram */
+async function sendQueueShots(done: QueueTask[]): Promise<void> {
+  const chat = store.get().telegram.chatId
+  let sent = 0
+  for (const t of done) {
+    for (const id of t.shotSetIds ?? []) {
+      const set = shots.get(id)
+      for (const item of set?.items ?? []) {
+        if (!item.file || sent >= 4) continue
+        const png = shots.image(item.file)
+        if (!png) continue
+        await sendTelegramPhoto(chat, Buffer.from(png.split(',')[1], 'base64'), `${queueName(t)} · ${item.route}${item.width < 800 ? ' (celular)' : ''}${item.errors.length ? ` · ⚠ ${item.errors[0]}` : ''}`)
+        sent++
+      }
+    }
+  }
+}
+
 // ---------- Fila de tarefas ----------
 const queueName = (t: { projectId: string; demandId?: string }) =>
   (t.demandId && demands.get(t.demandId)?.key) || store.get().projects.find((p) => p.id === t.projectId)?.name || '?'
@@ -173,9 +211,12 @@ const queue = new QueueManager(app.getPath('userData'), {
     const text = queueSummary(done, queueName)
     notify('📋 Fila concluída', text.split('\n')[0], 'queue', 'fila', 'unfocused', false)
     const cfg = store.get()
-    if (telegramReady()) void sendTelegramMessage(cfg.telegram.chatId, `📋 <b>Fila concluída</b>\n${escapeHtml(text)}`)
+    if (telegramReady()) {
+      void sendTelegramMessage(cfg.telegram.chatId, `📋 <b>Fila concluída</b>\n${escapeHtml(text)}`).then(() => sendQueueShots(done))
+    }
   },
-  log: (text, kind = 'info') => appLog({ kind, text })
+  log: (text, kind = 'info') => appLog({ kind, text }),
+  shots: queueShots
 })
 /** Avisa no sino quando a análise/desenho/resposta do Claude de uma demanda fica pronta */
 function demandsDoneNotice(e: RunEvent): void {
@@ -357,6 +398,7 @@ const bot = new TelegramBot({
     return 'Ação desconhecida.'
   },
   onText: (text) => tg.text(text),
+  onVoice: (fileId) => tg.voice(fileId),
   onCommand: async (cmd, args) => {
     if (await tg.command(cmd, args)) return
     const cfg = store.get()
@@ -757,7 +799,20 @@ function registerIpc(): void {
     return g
   })
   ipcMain.handle('demands:queueCopy', (_e, id: string) => demands.queueCopy(String(id)))
-  ipcMain.handle('demands:bringQueue', (_e, id: string) => demands.bringQueue(String(id)))
+  ipcMain.handle('demands:bringQueue', async (_e, id: string) => {
+    const r = await demands.bringQueue(String(id))
+    // Trouxe para a branch aberta: o servidor de dev recarrega → prints "depois"
+    const d = demands.get(String(id))
+    const p = d && store.get().projects.find((x) => x.id === d.projectId)
+    if (r.ok && d && p && !/Nada novo/.test(r.message)) {
+      const w = ShotManager.wants(p)
+      const info = await gitInfo(p)
+      if ((w.telas || w.api) && info?.branch === d.key && (await isUp(p.localUrl))) {
+        setTimeout(() => void shots.take(p, { demandId: d.id, label: 'depois · trouxe da fila' }), 4000)
+      }
+    }
+    return r
+  })
   ipcMain.handle('demands:removeQueueCopy', (_e, id: string) => demands.removeQueueCopy(String(id)))
   ipcMain.handle('demands:prDraft', (_e, id: string) => demands.prDraft(String(id)))
   ipcMain.handle('demands:createPr', (_e, id: string, pr: { title: string; body: string; draft: boolean }) =>
@@ -769,6 +824,33 @@ function registerIpc(): void {
   ipcMain.handle('sync:now', async () => {
     const r = await sync.sync()
     return r
+  })
+  ipcMain.handle('shots:list', (_e, scope: { projectId?: string; demandId?: string }) => shots.list(scope ?? {}))
+  ipcMain.handle('shots:take', async (_e, req: { projectId: string; demandId?: string; label: string }) => {
+    const p = store.get().projects.find((x) => x.id === req?.projectId)
+    if (!p) return { ok: false, message: 'Projeto não encontrado.' }
+    return shots.take(p, { demandId: req.demandId, label: String(req.label || 'manual') })
+  })
+  ipcMain.handle('shots:image', (_e, file: string) => shots.image(String(file)))
+  ipcMain.handle('shots:delete', (_e, id: string) => shots.delete(String(id)))
+  ipcMain.handle('demands:prComments', (_e, id: string) => demands.prComments(String(id)))
+  ipcMain.handle('demands:sendPrComments', (_e, id: string, ids: string[], list: PrComment[], toQueue: boolean) => {
+    const chosen = (Array.isArray(list) ? list : []).filter((c) => Array.isArray(ids) && ids.includes(c.id))
+    const d = demands.get(String(id))
+    if (!d) return { ok: false, message: 'Demanda não encontrada.' }
+    const msg = demands.prCommentsMessage(d.id, chosen)
+    if (!msg) return { ok: false, message: 'Escolha ao menos um comentário.' }
+    if (toQueue) return queue.add({ projectId: d.projectId, demandId: d.id, prompt: msg })
+    return demands.implement(d.id, msg)
+  })
+  ipcMain.handle('demands:doubts', (_e, id: string) => demands.doubts(String(id)))
+  ipcMain.handle('demands:commentJira', (_e, id: string, text: string) => demands.commentJira(String(id), String(text ?? '')))
+  ipcMain.handle('demands:addImage', (_e, id: string, dataUrl: string) => demands.addImage(String(id), String(dataUrl ?? '')))
+  ipcMain.handle('demands:removeImage', (_e, id: string, file: string) => demands.removeImage(String(id), String(file)))
+  ipcMain.handle('project:learn', (_e, projectId: string, lesson: string) => {
+    const p = store.get().projects.find((x) => x.id === projectId)
+    if (!p) return { ok: false, message: 'Projeto não encontrado.' }
+    return learn(p, String(lesson ?? ''))
   })
   ipcMain.handle('history:list', () => history.list())
   ipcMain.handle('history:log', (_e, id: string) => history.log(String(id)))

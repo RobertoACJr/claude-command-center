@@ -2,6 +2,7 @@
 // e se as telas principais abrem. Roda no GitHub Actions depois do build.
 // Uso: node scripts/smoke-test.mjs   (no Linux: xvfb-run -a node scripts/smoke-test.mjs)
 import { spawn } from 'node:child_process'
+import { createServer } from 'node:http'
 import { chmodSync, existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -315,6 +316,7 @@ try {
   if (!analysis.includes('Teste smoke modo leitura')) fail('Análise da demanda não chegou (ou não foi só leitura): ' + analysis.slice(0, 200))
   else if (hoursPh !== '6') fail('Sugestão de horas da IA não apareceu: ' + hoursPh)
   else console.log('✓ Demanda criada, analisada em modo só leitura, com sugestão de 6h')
+  let shotDemand2 = null
   const shotDemand = await cdp('Page.captureScreenshot', { format: 'jpeg', quality: 55 })
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
   await sleep(500)
@@ -358,6 +360,43 @@ try {
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
   await sleep(300)
 
+  // 4k) Front-end: prints de verdade numa janela invisível + erros do navegador
+  const site = createServer((req, res) => {
+    if (req.url === '/api/falha') {
+      res.statusCode = 404
+      return res.end('nao existe')
+    }
+    res.setHeader('content-type', 'text/html; charset=utf-8')
+    res.end(`<!doctype html><html><body style="background:#123;color:#fff;font:32px sans-serif">
+      <h1>Tela de pedidos</h1><script>console.error('erro de teste no console'); fetch('/api/falha')</script></body></html>`)
+  })
+  await new Promise((r) => site.listen(0, '127.0.0.1', r))
+  const siteUrl = `http://127.0.0.1:${site.address().port}`
+  await evaluate(`(async () => {
+    const c = await window.api.getConfig()
+    const p = c.projects.find((x) => x.id === 'smoke')
+    await window.api.saveProject({ ...p, kind: 'front', localUrl: ${JSON.stringify(siteUrl)}, routes: ['/pedidos'] })
+  })()`)
+  await sleep(800)
+  await evaluate(`document.querySelector('[data-testid="project-shots"]').click()`)
+  await sleep(500)
+  await evaluate(`document.querySelector('[data-testid="take-shots"]').click()`)
+  let shotsText = ''
+  for (let i = 0; i < 40 && !shotsText.includes('/pedidos'); i++) {
+    await sleep(500)
+    shotsText = await evaluate(`document.querySelector('[data-testid="shot-sets"]')?.textContent ?? ''`)
+  }
+  await sleep(800)
+  const hasImg = await evaluate(`!!document.querySelector('[data-testid="shot-sets"] img[src^="data:image/png"]')`)
+  if (!shotsText.includes('erro de teste no console')) fail('Print não pegou o erro do console: ' + shotsText.slice(0, 200))
+  else if (!shotsText.includes('HTTP 404')) fail('Print não pegou a requisição que falhou: ' + shotsText.slice(0, 200))
+  else if (!hasImg) fail('Print da tela não apareceu')
+  else console.log('✓ Print de verdade da tela, com o erro do console e o HTTP 404')
+  shotDemand2 = await cdp('Page.captureScreenshot', { format: 'jpeg', quality: 55 })
+  await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
+  await sleep(300)
+  site.close()
+
   // 4f) Paleta de comandos (Ctrl+K) → Histórico com as execuções de antes
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true }))`)
   await sleep(400)
@@ -397,8 +436,8 @@ try {
 
   // Print da tela (vai no log, entre marcadores, para poder ser visto sem baixar artefatos)
   const shotOnline = await cdp('Page.captureScreenshot', { format: 'jpeg', quality: 55 })
-  for (const [name, s] of [['online', shotOnline], ['ausente', shot], ['demanda', shotDemand]]) {
-    const b64 = s.result?.data ?? ''
+  for (const [name, s] of [['online', shotOnline], ['ausente', shot], ['demanda', shotDemand], ['telas', shotDemand2]]) {
+    const b64 = s?.result?.data ?? ''
     writeFileSync(`smoke-${name}.jpg`, Buffer.from(b64, 'base64'))
     console.log(`::group::screenshot-${name}`)
     console.log(`SCREENSHOT-${name}-BEGIN`)

@@ -189,3 +189,33 @@ test('cópia separada: trabalha fora da sua pasta, guarda em commit, verifica e 
   assert.equal(existsSync(copy), false)
   assert.doesNotMatch(sh(work, 'branch'), /fila\/WEB-10/)
 })
+
+test('front: prints antes e depois da tarefa (na pasta do projeto) entram no resumo', async () => {
+  costs.init(tempDir(), { limit: () => 0 })
+  store.saveSettings({ queue: { onlyAway: false, paused: false, useWorktree: false } })
+  const { work } = makeRepo()
+  store.saveProject({ id: 'f', name: 'front', path: work, vars: [], guides: [], checkCommand: '' } as any)
+  const runs = fakeRuns()
+  const demands = new DemandManager(tempDir(), runs as any, () => {})
+  const calls: string[] = []
+  const q = new QueueManager(tempDir(), {
+    runs: runs as any,
+    demands,
+    onChange: () => {},
+    onDrained: () => {},
+    log: () => {},
+    shots: async (_t, label) => {
+      calls.push(label)
+      return [{ id: label, at: 0, label, projectId: 'f', kind: 'telas', items: [{ route: '/pedidos', width: 1280, errors: label === 'depois' ? ['console: boom'] : [], ok: label !== 'depois' }] }]
+    }
+  })
+  q.add({ projectId: 'f', prompt: 'ajusta a tela' })
+  await until(() => runs.started.length === 1)
+  assert.deepEqual(calls, ['antes'])
+  exit(q, runs, runs.started[0].id)
+  await until(() => q.state().tasks[0].status === 'feita')
+  assert.deepEqual(calls, ['antes', 'depois'])
+  const t = q.state().tasks[0]
+  assert.equal(t.shotsFailed, true)
+  assert.match(queueSummary([t], () => 'front'), /⚠️ front: ajusta a tela[\s\S]*erros no navegador: \/pedidos: console: boom/)
+})

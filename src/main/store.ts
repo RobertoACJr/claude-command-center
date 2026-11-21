@@ -30,7 +30,7 @@ function defaults(): AppConfig {
       gchat: { enabled: false, mode: 'official', clientId: '', callbackPort: 8765, readTools: '', sendTool: '' },
       lastApplied: {}
     },
-    telegram: { chatId: '', interactive: true, forwardNotifications: true },
+    telegram: { chatId: '', interactive: true, forwardNotifications: true, transcribeCommand: '' },
     watcher: {
       enabled: false,
       autoWhenOff: true,
@@ -114,6 +114,7 @@ function normalize(raw: unknown): AppConfig {
         : {}
     },
     telegram: {
+      transcribeCommand: str(r.telegram?.transcribeCommand).trim(),
       chatId: str(r.telegram?.chatId).trim(),
       interactive: bool(r.telegram?.interactive, true),
       forwardNotifications: bool(r.telegram?.forwardNotifications, true)
@@ -203,6 +204,11 @@ function normProject(p: Project): Project {
           .filter((v) => v.key)
       : [],
     checkCommand: str(p.checkCommand).trim(),
+    kind: (['front', 'back', 'fullstack', 'outro'] as const).includes(p.kind as never) ? p.kind : 'outro',
+    localUrl: str(p.localUrl).trim().replace(/\/+$/, ''),
+    routes: Array.isArray(p.routes) ? p.routes.filter((x) => typeof x === 'string').map((x) => x.trim()).filter(Boolean).slice(0, 30) : [],
+    mobileShots: bool(p.mobileShots, false),
+    memoryFile: str(p.memoryFile).trim() || 'CLAUDE.md',
     guides: Array.isArray(p.guides)
       ? [...new Set(p.guides.filter((g) => typeof g === 'string').map((g) => g.trim().replace(/\\/g, '/')).filter(Boolean))].slice(0, 10)
       : []
