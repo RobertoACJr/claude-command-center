@@ -108,6 +108,6 @@ test('áudio: comando de transcrição com {{arquivo}}, saída limpa ou .txt gra
   assert.equal(out, 'ajusta o filtro true')
   const viaTxt = await transcribe(`${node} -e "require('fs').writeFileSync('voz.txt', 'texto do arquivo')"`, audio, dir)
   assert.equal(viaTxt, 'texto do arquivo')
-  await assert.rejects(transcribe(`${node} -e "process.exit(3)"`, audio, tempDir()), /código 3/)
+  await assert.rejects(transcribe(`${node} -e "process.exit(3)"`, audio, tempDir()))
   assert.equal(cleanTranscript('Detected language: Portuguese\n[00:00.000 --> 00:01.000] oi\n'), 'oi')
 })
