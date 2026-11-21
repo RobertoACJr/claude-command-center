@@ -144,7 +144,7 @@ try {
 
   // 1) Tela principal
   const t1 = await bodyText()
-  for (const expected of ['Claude Command Center', 'Projetos', 'Ações globais', 'Terminais', 'Online', 'Ausente', 'ChatGPT', 'Gemini']) {
+  for (const expected of ['Hélice', 'Projetos', 'Ações globais', 'Terminais', 'Online', 'Ausente', 'ChatGPT', 'Gemini']) {
     if (!t1.includes(expected)) fail(`Tela principal sem "${expected}"`)
   }
   const apiKeys = await evaluate('Object.keys(window.api || {}).length')
