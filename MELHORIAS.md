@@ -109,11 +109,13 @@ O usuário não conseguiu configurar Git, Jira, Google Chat nem Telegram sozinho
 - [x] Implementação com o Claude numa conversa própria por demanda (app, terminal da demanda ou Telegram `/demanda`).
 - [x] Branch com o nome do card (cria ou troca), etapas, linha do tempo, paleta e avisos no sino.
 - [ ] Próximo: ligar pedidos de deploy do Vigia à demanda pelo número do card (etapa Beta automática).
-- [ ] Próximo: importar a transcrição direto do e-mail (Gmail).
 
-### Fase 10: Git no card do projeto
-- [ ] Arquivos alterados, commits à frente/atrás, último commit.
-- [ ] Botões: puxar, ver diferenças, trocar de branch; aviso de "tem coisa sem push" ao ir para Ausente.
+
+### Fase 10: Git no card do projeto ✅ (v0.11.0)
+- [x] Arquivos alterados, commits à frente/atrás, "sem push", último commit (no chip da branch).
+- [x] Chip da branch: puxar (só fast-forward), ver diferenças, trocar de branch; aviso ao ir para Ausente.
+- [x] Demanda: "Atualizar com a master" (fetch + merge, só com a árvore limpa; em conflito, botão para o Claude resolver).
+- [x] Guias do projeto (ex: docs/STYLE_GUIDE.md): o Claude segue em tudo no projeto; as Demandas levam o conteúdo.
 
 ### Fase 11: Fila de tarefas para o Claude
 - [ ] Enfileirar ordens por projeto (pelo app ou Telegram); roda uma por vez, de preferência no Ausente.
@@ -128,7 +130,7 @@ O usuário não conseguiu configurar Git, Jira, Google Chat nem Telegram sozinho
 - [ ] Painel de gasto por projeto, IA e dia (os dados já vêm nas respostas do Claude/Gemini).
 - [ ] Limite diário que pausa automações e avisa.
 
-### Fase 14: Modelos de projeto
+### Fase 14: Modelos de projeto (sem prioridade por enquanto)
 - [ ] "Projeto Node", "Laravel", etc. com comando de execução, variáveis e scripts comuns já prontos.
 
 ### Ideias soltas

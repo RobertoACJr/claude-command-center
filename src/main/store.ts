@@ -195,6 +195,9 @@ function normProject(p: Project): Project {
           .filter((v) => v && typeof v.key === 'string')
           .map((v) => ({ key: v.key.trim().replace(/[^\w.-]/g, '_'), value: str(v.value) }))
           .filter((v) => v.key)
+      : [],
+    guides: Array.isArray(p.guides)
+      ? [...new Set(p.guides.filter((g) => typeof g === 'string').map((g) => g.trim().replace(/\\/g, '/')).filter(Boolean))].slice(0, 10)
       : []
   }
 }

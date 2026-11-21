@@ -5,6 +5,7 @@ import {
   Download,
   ExternalLink,
   GitBranch,
+  GitMerge,
   Loader2,
   MessageSquarePlus,
   PenLine,
@@ -16,7 +17,7 @@ import {
   SquareTerminal,
   Trash2
 } from 'lucide-react'
-import type { Demand, DemandAi, DemandBusy, DemandStatus, OpResult, Project } from '@shared/types'
+import type { Demand, DemandAi, DemandBusy, DemandStatus, GitInfo, OpResult, Project } from '@shared/types'
 import { cn, uid } from '../lib/utils'
 import { Button, Modal } from './ui'
 
@@ -134,8 +135,12 @@ export function DemandModal({
   onClose,
   onCreated,
   onOpenTerminal,
-  onDeleted
+  onDeleted,
+  git,
+  onGitChanged
 }: {
+  git: GitInfo | null | undefined
+  onGitChanged: () => void
   open: boolean
   demand: Demand | null
   isNew: boolean
@@ -153,6 +158,7 @@ export function DemandModal({
   const [msg, setMsg] = useState('')
   const [base, setBase] = useState('')
   const [editDesign, setEditDesign] = useState(false)
+  const [conflicts, setConflicts] = useState<string[]>([])
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastId = useRef<string | null>(null)
 
@@ -573,6 +579,55 @@ export function DemandModal({
               <GitBranch size={13} /> Branch <code className="font-mono text-purple">{d.key}</code>
               {currentBranch === d.key && <span className="font-normal text-emerald-300">· você está nela</span>}
             </div>
+            {currentBranch === d.key && git && (
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    disabled={working}
+                    data-testid="demand-update-base"
+                    onClick={async () => {
+                      await flush(d)
+                      const r = (await window.api.demandUpdateBase(d.id)) as OpResult & { conflicts?: string[] }
+                      setResult(r)
+                      setConflicts(r.conflicts ?? [])
+                      onGitChanged()
+                    }}
+                  >
+                    <GitMerge size={12} /> Atualizar com a {git.base}
+                  </Button>
+                  <span className="text-[11px] text-zinc-500">
+                    Busca a {git.base} do remoto e faz merge nesta branch (precisa estar sem alterações pendentes).
+                    {git.changed > 0 && <span className="text-amber-300"> Agora há {git.changed} alterado(s) sem commit.</span>}
+                  </span>
+                </div>
+                {conflicts.length > 0 && (
+                  <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-2 text-xs text-red-200">
+                    Conflito em: {conflicts.join(', ')}
+                    <div className="mt-1.5 flex gap-2">
+                      <Button
+                        size="sm"
+                        disabled={working}
+                        onClick={async () => {
+                          setResult(
+                            await window.api.demandImplement(
+                              d.id,
+                              `Atualizei a branch ${d.key} com a ${git.base} (merge) e deu conflito em: ${conflicts.join(', ')}. ` +
+                                'Resolva os conflitos mantendo o que a demanda precisa e o que veio da ' +
+                                git.base +
+                                '. Depois de resolver, marque os arquivos com git add, mas NÃO faça o commit: eu confiro e commito.'
+                            )
+                          )
+                          setConflicts([])
+                        }}
+                      >
+                        Pedir ao Claude para resolver
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             {currentBranch !== d.key && (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs text-zinc-500">criar a partir de</span>

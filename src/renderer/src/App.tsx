@@ -12,6 +12,7 @@ import type {
   ScriptType,
   UpdateState,
   WatcherState,
+  GitInfo,
   NotificationTarget,
   Demand,
   DemandBusy
@@ -320,9 +321,11 @@ export default function App() {
   }, [config?.status])
 
   // ---------- branches ----------
+  const [gitInfos, setGitInfos] = useState<Record<string, GitInfo | null>>({})
   const refreshBranches = useCallback(async (projects: Project[]) => {
-    const entries = await Promise.all(projects.map(async (p) => [p.id, await window.api.gitBranch(p.path)] as const))
-    setBranches(Object.fromEntries(entries))
+    const entries = await Promise.all(projects.map(async (p) => [p.id, await window.api.gitInfo(p.id)] as const))
+    setGitInfos(Object.fromEntries(entries))
+    setBranches(Object.fromEntries(entries.map(([id, g]) => [id, g ? g.branch : null])))
   }, [])
 
   const projectsKey = config?.projects.map((p) => `${p.id}:${p.path}`).join('|') ?? ''
@@ -441,6 +444,24 @@ export default function App() {
   const togglePresence = async () => {
     if (!config) return
     if (config.status === 'on') {
+      // Aviso: coisa sem commit ou sem push antes de sair
+      const pend = config.projects
+        .map((p) => ({ p, g: gitInfos[p.id] }))
+        .filter(({ g }) => g && (g.changed > 0 || g.ahead > 0 || (!g.upstream && g.branch && g.branch !== g.base)))
+        .map(({ p, g }) =>
+          [
+            `${p.name} (${g!.branch})`,
+            g!.changed ? `${g!.changed} alterado(s) sem commit` : '',
+            g!.ahead ? `${g!.ahead} commit(s) sem push` : '',
+            !g!.upstream && g!.branch !== g!.base ? 'branch nunca teve push' : ''
+          ]
+            .filter(Boolean)
+            .join(' · ')
+        )
+      if (pend.length) {
+        showToast(`Atenção antes de sair: ${pend.join(' | ')}`)
+        for (const l of pend) log('error', `[Git] ${l}`)
+      }
       setConfig(await window.api.setPresence('off'))
       log('info', 'Modo Ausente: Vigia e Remote Control automáticos ligados')
     } else if (activeRemote.length) {
@@ -775,6 +796,15 @@ export default function App() {
           demands={demands}
           demandsBusy={demandsBusy}
           onOpenDemand={(d) => setDemandOpen({ id: d.id })}
+          gitInfos={gitInfos}
+          onGitDiff={(p) =>
+            execute('terminal', 'git status -sb; git diff --stat', undefined, p.path, { tab: `git:${p.id}`, title: `git · ${p.name}` })
+          }
+          onGitResult={(r) => {
+            if (!r.ok) showToast(r.message)
+            else log('success', `[Git] ${r.message}`)
+            refreshBranches(config.projects)
+          }}
           onNewDemand={(projectId) => setDemandOpen({ draft: newDemand(projectId) })}
         />
         <ScriptsPanel
@@ -856,6 +886,8 @@ export default function App() {
             busy={current ? demandsBusy.find((b) => b.demandId === current.id) : undefined}
             projects={config.projects}
             currentBranch={current ? branches[current.projectId] : undefined}
+            git={current ? gitInfos[current.projectId] : undefined}
+            onGitChanged={() => refreshBranches(config.projects)}
             onClose={() => {
               setDemandOpen(null)
               refreshBranches(config.projects)

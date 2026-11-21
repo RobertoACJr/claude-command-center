@@ -7,7 +7,8 @@ import { randomUUID } from 'crypto'
 import appIcon from '../../build/icons/512x512.png?asset'
 import trayIcon from '../../build/icons/64x64.png?asset'
 import { configFilePath, store } from './store'
-import { getGitBranch } from './git'
+import { getGitBranch, gitBranches, gitCheckout, gitInfo, gitPull } from './git'
+import { checkGuides, guidesInstruction } from './guides'
 import { RunManager } from './runner'
 import { RemoteManager } from './remote'
 import { secrets } from './secrets'
@@ -170,7 +171,14 @@ const approvals = new ApprovalServer({
     approvalTelegram.delete(id)
   }
 })
-runs.setClaudeArgsProvider((runId, req) => approvals.claudeArgs(runId, req, store.get()))
+runs.setClaudeArgsProvider((runId, req) => {
+  const cfg = store.get()
+  const args = approvals.claudeArgs(runId, req, cfg)
+  // Guias do projeto (ex: docs/STYLE_GUIDE.md): o Claude lê e segue em tudo que fizer ali
+  const g = guidesInstruction(cfg.projects.find((p) => p.id === req.projectId))
+  if (g) args.push('--append-system-prompt', g)
+  return args
+})
 
 function respondApproval(id: string, decision: ApprovalDecision, via: string): string {
   const tgMsg = approvalTelegram.get(id)
@@ -500,6 +508,27 @@ function registerIpc(): void {
   ipcMain.handle('scripts:delete', (_e, id: string) => store.deleteScript(id))
   ipcMain.handle('ui:save', (_e, ui: Partial<UiState>) => store.saveUi(ui))
   ipcMain.handle('git:branch', (_e, path: string) => getGitBranch(path))
+  const proj = (id: string) => store.get().projects.find((p) => p.id === id)
+  ipcMain.handle('git:info', (_e, id: string) => {
+    const p = proj(String(id))
+    return p ? gitInfo(p) : null
+  })
+  ipcMain.handle('git:pull', (_e, id: string) => {
+    const p = proj(String(id))
+    return p ? gitPull(p) : { ok: false, message: 'Projeto não encontrado.' }
+  })
+  ipcMain.handle('git:branches', (_e, id: string) => {
+    const p = proj(String(id))
+    return p ? gitBranches(p) : []
+  })
+  ipcMain.handle('git:checkout', (_e, id: string, branch: string) => {
+    const p = proj(String(id))
+    return p ? gitCheckout(p, String(branch)) : { ok: false, message: 'Projeto não encontrado.' }
+  })
+  ipcMain.handle('project:checkGuides', (_e, path: string, guides: string[]) =>
+    checkGuides(String(path), Array.isArray(guides) ? guides.map(String) : [])
+  )
+  ipcMain.handle('demands:updateBase', (_e, id: string) => demands.updateBase(String(id)))
   ipcMain.handle('sys:home', () => homedir())
   ipcMain.handle('sys:configPath', () => configFilePath())
 

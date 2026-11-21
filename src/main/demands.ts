@@ -1,8 +1,9 @@
-import { execFile } from 'child_process'
 import { randomUUID } from 'crypto'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { Demand, DemandAi, DemandBusy, DemandJira, DemandStatus, OpResult, Project, RunEvent } from '../shared/types'
+import { git, updateWithBase } from './git'
+import { readGuides } from './guides'
 import type { RunManager } from './runner'
 import { secrets } from './secrets'
 import { store } from './store'
@@ -82,6 +83,13 @@ export function demandContext(d: Demand, project?: Project, refs: Project[] = []
       parts.push('### Comentários\n' + j.comments.map((c) => `- **${c.author}** (${c.at}): ${c.body}`).join('\n'))
     }
     if (j.attachments.length) parts.push('### Anexos (nomes)\n' + j.attachments.map((a) => `- ${a}`).join('\n'))
+  }
+  if (project) {
+    for (const g of readGuides(project)) {
+      parts.push(
+        `## Guia do projeto: ${g.path} (siga à risca)\n` + g.content + (g.truncated ? `\n\n(…cortado; leia o resto em ${g.path})` : '')
+      )
+    }
   }
   if (d.context.trim()) parts.push('## Contexto extra (chat, anotações)\n' + d.context.trim())
   if (d.transcript.trim()) parts.push('## Transcrição da call de apresentação\n' + d.transcript.trim())
@@ -205,16 +213,6 @@ export async function fetchJiraIssue(key: string): Promise<{ ok: true; jira: Dem
   } finally {
     clearTimeout(timer)
   }
-}
-
-// ---------------------------------------------------------------- git
-
-function git(cwd: string, args: string[]): Promise<{ ok: boolean; out: string }> {
-  return new Promise((resolve) => {
-    execFile('git', args, { cwd, timeout: 30_000, windowsHide: true }, (err, stdout, stderr) => {
-      resolve({ ok: !err, out: `${stdout}${stderr}`.trim() })
-    })
-  })
 }
 
 // ---------------------------------------------------------------- gerenciador
@@ -423,6 +421,25 @@ export class DemandManager {
       this.note(d, exists ? `Voltou para a branch ${d.key}` : `Branch ${d.key} criada${b ? ` a partir de ${b}` : ''}`)
       this.persist()
       return { ok: true, message: exists ? `Branch ${d.key} já existia: agora você está nela.` : `Branch ${d.key} criada e ativa.` }
+    } finally {
+      this.setBusy(id, null)
+    }
+  }
+
+  /** Traz a branch principal (ex: master) para a branch da demanda */
+  async updateBase(id: string): Promise<OpResult> {
+    const d = this.get(id)
+    if (!d) return { ok: false, message: 'Demanda não encontrada.' }
+    const p = this.projectOf(d)
+    if (!p) return { ok: false, message: 'O projeto desta demanda não existe mais.' }
+    if (this.busy.has(id)) return { ok: false, message: 'Espere a tarefa em andamento terminar.' }
+    this.setBusy(id, { demandId: id, what: 'branch' })
+    try {
+      const r = await updateWithBase(p, d.key)
+      if (r.ok && !/Já estava/.test(r.message)) this.note(d, r.message.split(' (')[0])
+      if (r.conflicts?.length) this.note(d, `Conflito ao atualizar com a principal: ${r.conflicts.length} arquivo(s)`)
+      this.persist()
+      return r
     } finally {
       this.setBusy(id, null)
     }

@@ -210,6 +210,11 @@ Engrenagem no header → **Configurações & Integrações**.
   entendimento, o que muda, dúvidas para o refinamento, riscos e estimativa em horas. Depois desenha a solução
   (editável, você aprova) e o Claude implementa numa conversa própria da demanda, na branch com o nome do card.
   Dá para continuar pelo Telegram: `/demanda WEB-482 o botão ficou desalinhado`.
+- **Git no card**: o chip da branch mostra alterados, ↑ sem push / ↓ novos no remoto e o último commit; clique para
+  puxar, ver diferenças ou trocar de branch. Ao ir para Ausente, o app avisa o que ficou sem commit ou sem push.
+  Na demanda, **Atualizar com a master** (usa a variável `branch_principal` do projeto, ou a padrão do remoto).
+- **Guias do projeto** (no formulário do projeto, ex: `docs/STYLE_GUIDE.md`): o Claude é instruído a ler e seguir em
+  tudo que fizer naquele projeto, e as Demandas levam o conteúdo do guia na análise, no desenho e na implementação.
 - **Histórico** (ícone de relógio no topo): as últimas 300 execuções com quem disparou (app, Telegram, pedido),
   resultado, duração e a saída completa. Fica só no PC (`history.json` + `history/` na pasta de dados do app).
 - **Paleta de comandos** (`Ctrl+K`): rodar qualquer script, executar/parar projeto, ligar Remote, falar com o Claude
@@ -256,3 +261,4 @@ src/
 - [x] Fase 7 (parte 1): instaladores no GitHub Actions + Releases
 - [x] Fase 7 (parte 2): atualização automática + Release automática ao subir a versão
 - [x] Fase 8: central de notificações, Telegram completo, histórico, paleta de comandos
+- [x] Fase 9: Demandas · Fase 10: Git no card + guias do projeto

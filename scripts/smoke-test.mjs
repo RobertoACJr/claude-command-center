@@ -211,7 +211,7 @@ try {
   await evaluate(`window.api.saveProject({
     id: 'smoke', name: 'Projeto Smoke', path: ${JSON.stringify(process.cwd())}, remoteEnabled: false, createdAt: Date.now(),
     runCommand: ${JSON.stringify(`node -e "process.stdin.on('data', d => console.log('eco:' + String(d).trim())); console.log('pronto')"`)},
-    port: null, vars: [{ key: 'remote', value: 'origin' }], claudeMode: 'ask', allowedTools: []
+    port: null, vars: [{ key: 'remote', value: 'origin' }], claudeMode: 'ask', allowedTools: [], guides: ['README.md']
   })`)
   await sleep(1200)
   if (!(await bodyText()).includes('remote=origin')) fail('Variáveis do projeto não aparecem no card')
@@ -262,6 +262,9 @@ try {
   const [wk, wv] = JSON.parse(widths)
   if (!wk || !wv || Math.abs(wk - wv) > 4 || wv < 150) fail('Campos de variável sem largura meio a meio: ' + widths)
   else console.log(`✓ Variável chave/valor meio a meio (${wk}px / ${wv}px)`)
+  await sleep(500)
+  if (!(await bodyText()).includes('✓ README.md')) fail('Guia do projeto (README.md) não aparece como encontrado no formulário')
+  else console.log('✓ Guia do projeto reconhecido (README.md)')
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
   await sleep(300)
 
@@ -274,6 +277,15 @@ try {
   })()`)
   if (picker !== 'ok') fail('Seletor de modo: ' + picker)
   else console.log('✓ Seletor de modo único com as opções')
+
+  // 4h) Git no card: chip da branch abre puxar / diferenças / trocar de branch
+  await evaluate(`document.querySelector('[data-testid="git-chip"]')?.click()`)
+  await sleep(1200)
+  const gm = await evaluate(`document.querySelector('[data-testid="git-menu"]')?.textContent ?? ''`)
+  if (!gm.includes('Puxar do remoto') || !gm.includes('Trocar de branch')) fail('Menu do git no card não abriu: ' + gm.slice(0, 120))
+  else console.log('✓ Menu do git no card (puxar, diferenças, trocar de branch)')
+  await evaluate(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`)
+  await sleep(300)
 
   // 4g) Demanda: criar pelo card do projeto, colar contexto e analisar com o Claude (falso) em modo só leitura
   const setVal = (sel, text) =>

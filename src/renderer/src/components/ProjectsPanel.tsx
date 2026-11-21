@@ -20,8 +20,8 @@ import {
   SquareTerminal,
   Trash2
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import type { Demand, DemandBusy, Project, ProjectRunState, RemoteSession, Script } from '@shared/types'
+import { useEffect, useRef, useState } from 'react'
+import type { Demand, DemandBusy, GitInfo, OpResult, Project, ProjectRunState, RemoteSession, Script } from '@shared/types'
 import { statusInfo } from './DemandModal'
 import { Button, EmptyState, IconButton } from './ui'
 import { ScriptRow, type ScriptActions } from './ScriptsPanel'
@@ -45,12 +45,18 @@ export function ProjectsPanel({
   demands,
   demandsBusy,
   onOpenDemand,
-  onNewDemand
+  onNewDemand,
+  gitInfos,
+  onGitDiff,
+  onGitResult
 }: {
   demands: Demand[]
   demandsBusy: DemandBusy[]
   onOpenDemand: (d: Demand) => void
   onNewDemand: (projectId: string) => void
+  gitInfos: Record<string, GitInfo | null | undefined>
+  onGitDiff: (p: Project) => void
+  onGitResult: (r: OpResult) => void
   projects: Project[]
   /** Todos os scripts; o card mostra os que pertencem ao projeto */
   scripts: Script[]
@@ -114,6 +120,9 @@ export function ProjectsPanel({
             demandsBusy={demandsBusy}
             onOpenDemand={onOpenDemand}
             onNewDemand={onNewDemand}
+            git={gitInfos[p.id]}
+            onGitDiff={onGitDiff}
+            onGitResult={onGitResult}
           />
         ))}
       </div>
@@ -179,12 +188,18 @@ function ProjectCard({
   demands,
   demandsBusy,
   onOpenDemand,
-  onNewDemand
+  onNewDemand,
+  git,
+  onGitDiff,
+  onGitResult
 }: {
   demands: Demand[]
   demandsBusy: DemandBusy[]
   onOpenDemand: (d: Demand) => void
   onNewDemand: (projectId: string) => void
+  git: GitInfo | null | undefined
+  onGitDiff: (p: Project) => void
+  onGitResult: (r: OpResult) => void
   p: Project
   branch: string | null | undefined
   session: RemoteSession | undefined
@@ -262,15 +277,33 @@ function ProjectCard({
       </div>
 
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-        <span
-          className={cn(
-            'inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[11px]',
-            branch ? 'border-violet/30 bg-violet/10 text-purple' : 'border-line bg-white/[0.02] text-zinc-600'
-          )}
-        >
-          <GitBranch size={11} />
-          {branch === undefined ? '…' : (branch ?? 'sem git')}
-        </span>
+        <GitMenu p={p} branch={branch} git={git} onDiff={() => onGitDiff(p)} onResult={onGitResult} />
+        {git && git.changed > 0 && (
+          <span
+            title={git.conflicts ? `${git.conflicts} arquivo(s) com conflito` : 'Arquivos alterados ou novos, sem commit'}
+            className={cn(
+              'rounded-md border px-1.5 py-0.5 text-[11px]',
+              git.conflicts ? 'border-red-500/40 text-red-300' : 'border-amber-400/40 text-amber-300'
+            )}
+          >
+            {git.conflicts ? `⚠ ${git.conflicts} conflito(s)` : `● ${git.changed} alterado${git.changed > 1 ? 's' : ''}`}
+          </span>
+        )}
+        {git && (git.ahead > 0 || git.behind > 0) && (
+          <span
+            title={`${git.ahead} commit(s) seu(s) sem push · ${git.behind} commit(s) novo(s) no remoto (${git.upstream})`}
+            className="rounded-md border border-sky-500/40 px-1.5 py-0.5 font-mono text-[11px] text-sky-300"
+          >
+            {git.ahead > 0 && `↑${git.ahead}`}
+            {git.ahead > 0 && git.behind > 0 && ' '}
+            {git.behind > 0 && `↓${git.behind}`}
+          </span>
+        )}
+        {git && !git.upstream && git.branch && git.branch !== git.base && git.branch !== '(detached)' && (
+          <span title="Esta branch ainda não existe no remoto" className="rounded-md border border-line px-1.5 py-0.5 text-[11px] text-zinc-500">
+            sem push
+          </span>
+        )}
         <RunChip p={p} run={run} />
       </div>
 
@@ -433,6 +466,102 @@ function ProjectCard({
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+/** Chip da branch: clique abre puxar, diferenças e troca de branch */
+function GitMenu({
+  p,
+  branch,
+  git,
+  onDiff,
+  onResult
+}: {
+  p: Project
+  branch: string | null | undefined
+  git: GitInfo | null | undefined
+  onDiff: () => void
+  onResult: (r: OpResult) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [list, setList] = useState<string[] | null>(null)
+  const [working, setWorking] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    setList(null)
+    window.api.gitBranches(p.id).then(setList)
+    const close = (e: MouseEvent) => box.current && !box.current.contains(e.target as Node) && setOpen(false)
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [open, p.id])
+  const run = async (fn: () => Promise<OpResult>) => {
+    setWorking(true)
+    try {
+      onResult(await fn())
+    } finally {
+      setWorking(false)
+      setOpen(false)
+    }
+  }
+  const last = git?.lastCommit
+  return (
+    <div ref={box} className="relative">
+      <button
+        type="button"
+        data-testid="git-chip"
+        disabled={!git}
+        onClick={() => setOpen(!open)}
+        title={last ? `Último commit: ${last.hash} ${last.subject} (${last.when})\nClique: puxar, diferenças, trocar de branch` : 'Branch atual'}
+        className={cn(
+          'inline-flex cursor-pointer items-center gap-1 rounded-md border px-1.5 py-0.5 font-mono text-[11px] disabled:cursor-default',
+          branch ? 'border-violet/30 bg-violet/10 text-purple hover:border-violet/60' : 'border-line bg-white/[0.02] text-zinc-600'
+        )}
+      >
+        {working ? <Loader2 size={11} className="animate-spin" /> : <GitBranch size={11} />}
+        {branch === undefined ? '…' : (branch ?? 'sem git')}
+        {git && <ChevronDown size={10} />}
+      </button>
+      {open && git && (
+        <div data-testid="git-menu" className="absolute top-full left-0 z-40 mt-1 w-72 overflow-hidden rounded-xl border border-line bg-card text-xs shadow-2xl">
+          {last && (
+            <div className="border-b border-line px-3 py-2 text-[11px] text-zinc-500">
+              <span className="font-mono text-zinc-400">{last.hash}</span> {last.subject}
+              <div>{last.when}</div>
+            </div>
+          )}
+          <button type="button" className="block w-full cursor-pointer px-3 py-2 text-left text-zinc-200 hover:bg-white/5" onClick={() => run(() => window.api.gitPull(p.id))}>
+            ⬇ Puxar do remoto {git.behind ? `(${git.behind} novo${git.behind > 1 ? 's' : ''})` : ''}
+          </button>
+          <button
+            type="button"
+            className="block w-full cursor-pointer px-3 py-2 text-left text-zinc-200 hover:bg-white/5"
+            onClick={() => {
+              setOpen(false)
+              onDiff()
+            }}
+          >
+            ± Ver diferenças ({git.changed} alterado{git.changed === 1 ? '' : 's'})
+          </button>
+          <div className="border-t border-line px-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-zinc-600">Trocar de branch</div>
+          <div className="max-h-48 overflow-y-auto pb-1">
+            {list === null && <div className="px-3 py-1.5 text-zinc-500">carregando…</div>}
+            {list?.map((b) => (
+              <button
+                key={b}
+                type="button"
+                disabled={b === git.branch}
+                onClick={() => run(() => window.api.gitCheckout(p.id, b))}
+                className="block w-full cursor-pointer truncate px-3 py-1.5 text-left font-mono text-[11px] text-zinc-300 hover:bg-white/5 disabled:cursor-default disabled:text-purple"
+              >
+                {b === git.branch ? '● ' : ''}
+                {b}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -32,6 +32,8 @@ export function ProjectModal({
   const [vars, setVars] = useState<ProjectVar[]>([])
   const [perms, setPerms] = useState<ClaudePerms>({ claudeMode: 'ask', allowedTools: [] })
   const [branch, setBranch] = useState<string | null>(null)
+  const [guides, setGuides] = useState('')
+  const [guideOk, setGuideOk] = useState<boolean[]>([])
 
   useEffect(() => {
     if (!open) return
@@ -42,7 +44,23 @@ export function ProjectModal({
     setPort(initial?.port ? String(initial.port) : '')
     setVars(initial?.vars ?? [])
     setPerms({ claudeMode: initial?.claudeMode ?? 'ask', allowedTools: initial?.allowedTools ?? [] })
+    setGuides((initial?.guides ?? []).join('\n'))
   }, [open, initial])
+
+  const guideList = guides
+    .split('\n')
+    .map((g) => g.trim())
+    .filter(Boolean)
+  const guideKey = guideList.join('|')
+  useEffect(() => {
+    let alive = true
+    if (!path || !guideKey) return setGuideOk([])
+    const t = setTimeout(() => window.api.checkGuides(path, guideKey.split('|')).then((r) => alive && setGuideOk(r)), 300)
+    return () => {
+      alive = false
+      clearTimeout(t)
+    }
+  }, [path, guideKey])
 
   useEffect(() => {
     let alive = true
@@ -81,7 +99,8 @@ export function ProjectModal({
         .map((v) => ({ key: v.key.trim().replace(/[^\w.-]/g, '_'), value: v.value }))
         .filter((v) => v.key),
       claudeMode: perms.claudeMode,
-      allowedTools: perms.allowedTools
+      allowedTools: perms.allowedTools,
+      guides: guideList
     })
     onClose()
   }
@@ -224,6 +243,35 @@ export function ProjectModal({
             ))}
           </div>
         </div>
+      </Field>
+
+      <Field
+        label="Guias do projeto"
+        hint={
+          <>
+            Um arquivo por linha, relativo à pasta do projeto (ex: <code>docs/STYLE_GUIDE.md</code>). O Claude recebe a
+            instrução de ler e seguir esses guias em tudo que fizer aqui, e as Demandas levam o conteúdo deles na análise,
+            no desenho e na implementação.
+          </>
+        }
+      >
+        <textarea
+          data-testid="project-guides"
+          rows={2}
+          className={inputCls + ' h-auto py-2 font-mono text-xs'}
+          value={guides}
+          onChange={(e) => setGuides(e.target.value)}
+          placeholder={'docs/STYLE_GUIDE.md\nCONTRIBUTING.md'}
+        />
+        {guideList.length > 0 && guideOk.length === guideList.length && (
+          <div className="mt-1 flex flex-wrap gap-2 text-[11px]">
+            {guideList.map((g, i) => (
+              <span key={g} className={guideOk[i] ? 'text-emerald-300' : 'text-amber-300'}>
+                {guideOk[i] ? '✓' : '✗ não encontrado:'} {g}
+              </span>
+            ))}
+          </div>
+        )}
       </Field>
 
       <Field label="Permissões do Claude neste projeto">

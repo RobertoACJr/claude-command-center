@@ -22,6 +22,8 @@ export interface Project {
   claudeMode: ClaudeMode
   /** Regras "sempre permitir" (formato do Claude Code, ex: Bash(git status:*)) */
   allowedTools: string[]
+  /** Arquivos-guia do projeto, relativos à pasta (ex: docs/STYLE_GUIDE.md): as IAs leem e seguem */
+  guides: string[]
 }
 
 /**
@@ -351,6 +353,21 @@ export interface RunRequest {
   addDirs?: string[]
 }
 
+/** Estado do git de um projeto (card) */
+export interface GitInfo {
+  branch: string | null
+  /** Remoto que a branch acompanha (ex: origin/WEB-482); null = nunca deu push */
+  upstream: string | null
+  ahead: number
+  behind: number
+  /** Arquivos alterados/novos sem commit */
+  changed: number
+  conflicts: number
+  lastCommit: { hash: string; subject: string; when: string } | null
+  /** Branch principal (variável branch_principal ou a do remoto) */
+  base: string
+}
+
 // ---------------------------------------------------------------- Demandas
 
 /** Etapas de uma demanda (card do Jira) */
@@ -511,6 +528,16 @@ export interface CommandCenterApi {
   /** keepRemote: ao voltar para Online, manter as sessões remotas abertas */
   setPresence(status: PresenceStatus, opts?: { keepRemote?: boolean }): Promise<AppConfig>
   onShowWindowRequest(cb: (what: NotificationTarget | 'go-online') => void): () => void
+
+  /** Quais arquivos-guia existem na pasta do projeto */
+  checkGuides(projectPath: string, guides: string[]): Promise<boolean[]>
+
+  // Git no card do projeto
+  gitInfo(projectId: string): Promise<GitInfo | null>
+  gitPull(projectId: string): Promise<OpResult>
+  gitBranches(projectId: string): Promise<string[]>
+  gitCheckout(projectId: string, branch: string): Promise<OpResult>
+  demandUpdateBase(id: string): Promise<OpResult>
 
   // Demandas
   demands(): Promise<Demand[]>
