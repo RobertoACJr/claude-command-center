@@ -1,9 +1,10 @@
 import { randomUUID } from 'crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
+import { writeFileAtomic } from './fsutil'
 import { join } from 'path'
 import type { Demand, DemandAi, DemandBusy, DemandJira, DemandQueueCopy, DemandReview, DemandStatus, DemandTiming, OpResult, PrComment, PrDraft, Project, ReviewAi, RunEvent } from '../shared/types'
 import { spawn } from 'child_process'
-import { baseBranch, bringQueueToBranch, git, gitInfo, queueAhead, removeWorktree, updateWithBase } from './git'
+import { baseBranch, bringQueueToBranch, dirSize, git, gitInfo, queueAhead, removeWorktree, updateWithBase } from './git'
 import { readGuides } from './guides'
 import type { RunManager } from './runner'
 import { secrets } from './secrets'
@@ -446,6 +447,13 @@ export async function fetchJiraIssue(key: string): Promise<{ ok: true; jira: Dem
   }
 }
 
+/** O que mudou na lista (para mandar à tela só o necessário) */
+export interface DemandChange {
+  upsert?: Demand
+  removed?: string
+  all?: boolean
+}
+
 // ---------------------------------------------------------------- gerenciador
 
 /**
@@ -467,21 +475,36 @@ export class DemandManager {
       sessionField?: 'sessionId' | 'queueSessionId'
     }
   >()
-  private file: string
+  private dir: string
 
   constructor(
     private base: string,
     private runs: RunManager,
-    private onChange: (list: Demand[], busy: DemandBusy[]) => void
+    private onChange: (list: Demand[], busy: DemandBusy[], change?: DemandChange) => void
   ) {
-    this.file = join(base, 'demands.json')
+    this.dir = join(base, 'demands')
+    const legacy = join(base, 'demands.json')
     try {
-      if (existsSync(this.file)) {
-        const raw = JSON.parse(readFileSync(this.file, 'utf8'))
+      if (existsSync(this.dir)) {
+        for (const f of readdirSync(this.dir)) {
+          if (!f.endsWith('.json')) continue
+          try {
+            this.list.push(normDemand(JSON.parse(readFileSync(join(this.dir, f), 'utf8'))))
+          } catch {
+            /* arquivo corrompido: pula só ele */
+          }
+        }
+        this.list.sort((a, b) => b.createdAt - a.createdAt)
+      } else if (existsSync(legacy)) {
+        // Versões antigas guardavam tudo num arquivo só: separa e guarda o antigo como .migrado
+        const raw = JSON.parse(readFileSync(legacy, 'utf8'))
         if (Array.isArray(raw)) this.list = raw.map(normDemand)
+        mkdirSync(this.dir, { recursive: true })
+        for (const d of this.list) writeFileAtomic(this.fileOf(d.id), JSON.stringify(d))
+        renameSync(legacy, legacy + '.migrado')
       }
     } catch {
-      this.list = []
+      /* começa vazio */
     }
   }
 
@@ -502,13 +525,27 @@ export class DemandManager {
     return this.list.find((d) => d.key === k)
   }
 
-  private persist(): void {
+  private fileOf(id: string): string {
+    return join(this.dir, `${id.replace(/[^\w-]/g, '')}.json`)
+  }
+
+  /**
+   * Grava só a demanda que mudou (um arquivo por demanda, gravação segura) e avisa a tela só dela.
+   * Sem argumento: grava todas (ex: depois da sincronização entre PCs).
+   */
+  private persist(d?: Demand): void {
     try {
-      writeFileSync(this.file, JSON.stringify(this.list, null, 1))
+      mkdirSync(this.dir, { recursive: true })
+      if (d) writeFileAtomic(this.fileOf(d.id), JSON.stringify(d))
+      else {
+        const keep = new Set(this.list.map((x) => `${x.id.replace(/[^\w-]/g, '')}.json`))
+        for (const x of this.list) writeFileAtomic(this.fileOf(x.id), JSON.stringify(x))
+        for (const f of readdirSync(this.dir)) if (f.endsWith('.json') && !keep.has(f)) rmSync(join(this.dir, f), { force: true })
+      }
     } catch {
-      /* ignora */
+      /* disco cheio etc.: tenta de novo na próxima mudança */
     }
-    this.onChange(this.list, this.busyList())
+    this.onChange(this.list, this.busyList(), d ? { upsert: d } : { all: true })
   }
 
   private setStatus(d: Demand, s: DemandStatus): void {
@@ -547,13 +584,14 @@ export class DemandManager {
       if (old.status !== d.status) {
         this.note(d, `Etapa: ${d.status}`)
         d.statusLog.push({ at: Date.now(), status: d.status })
+        if (d.status === 'feita') void this.cleanupCopy(d.id)
       }
       if (old.hours !== d.hours && d.hours) this.note(d, `Estimativa: ${hoursLabel(d.hours)}`)
       if (!old.designApproved && d.designApproved) this.note(d, 'Desenho aprovado')
       d.updatedAt = Date.now()
       this.list[i] = d
     }
-    this.persist()
+    this.persist(d)
     return this.list
   }
 
@@ -565,14 +603,15 @@ export class DemandManager {
 
   delete(id: string): Demand[] {
     this.list = this.list.filter((d) => d.id !== id)
-    this.persist()
+    rmSync(this.fileOf(id), { force: true })
+    this.onChange(this.list, this.busyList(), { removed: id })
     return this.list
   }
 
   private setBusy(id: string, b: DemandBusy | null): void {
     if (b) this.busy.set(id, b)
     else this.busy.delete(id)
-    this.onChange(this.list, this.busyList())
+    this.onChange(this.list, this.busyList(), {})
   }
 
   private projectOf(d: Demand): Project | undefined {
@@ -590,7 +629,7 @@ export class DemandManager {
     d.jira = r.jira
     if (!d.title.trim()) d.title = r.jira.summary
     this.note(d, `Card atualizado do Jira (${r.jira.comments.length} comentário(s))`)
-    this.persist()
+    this.persist(d)
     return { ok: true, message: `Card ${d.key} carregado do Jira.` }
   }
 
@@ -673,7 +712,7 @@ export class DemandManager {
     this.setBusy(id, { demandId: id, what: 'dev', runId })
     if (first) this.note(d, opts.queueCopy ? 'A fila começou a trabalhar na cópia separada' : 'Implementação começou com o Claude')
     if (d.status === 'nova' || d.status === 'estimada' || d.status === 'desenhada') this.setStatus(d, 'dev')
-    this.persist()
+    this.persist(d)
     return { ok: true, message: first ? 'O Claude começou a implementar.' : 'Mensagem enviada ao Claude.', runId }
   }
 
@@ -697,7 +736,7 @@ export class DemandManager {
       const r = exists ? await git(p.path, ['checkout', d.key]) : await git(p.path, ['checkout', '-b', d.key, ...(b ? [b] : [])])
       if (!r.ok) return { ok: false, message: `O git recusou: ${r.out.split('\n').slice(-3).join(' ')}` }
       this.note(d, exists ? `Voltou para a branch ${d.key}` : `Branch ${d.key} criada${b ? ` a partir de ${b}` : ''}`)
-      this.persist()
+      this.persist(d)
       return { ok: true, message: exists ? `Branch ${d.key} já existia: agora você está nela.` : `Branch ${d.key} criada e ativa.` }
     } finally {
       this.setBusy(id, null)
@@ -716,7 +755,7 @@ export class DemandManager {
       const r = await updateWithBase(p, d.key)
       if (r.ok && !/Já estava/.test(r.message)) this.note(d, r.message.split(' (')[0])
       if (r.conflicts?.length) this.note(d, `Conflito ao atualizar com a principal: ${r.conflicts.length} arquivo(s)`)
-      this.persist()
+      this.persist(d)
       return r
     } finally {
       this.setBusy(id, null)
@@ -781,7 +820,7 @@ export class DemandManager {
     const d = this.get(id)
     if (!d?.review) return
     d.review = { ...d.review, text }
-    this.persist()
+    this.persist(d)
   }
 
   /** Publica a revisão como comentário no PR da branch (gh pr comment) */
@@ -809,7 +848,7 @@ export class DemandManager {
     }
     d.review = { ...d.review, publishedAt: Date.now() }
     this.note(d, 'Revisão publicada no PR')
-    this.persist()
+    this.persist(d)
     return { ok: true, message: 'Revisão publicada como comentário no PR.' + (r.out ? ` ${r.out.split('\n').pop()}` : '') }
   }
 
@@ -827,7 +866,8 @@ export class DemandManager {
     const p = d && this.projectOf(d)
     if (!d || !p) return null
     const dir = this.queueCopyDir(d)
-    return { dir, exists: existsSync(dir), ahead: await queueAhead(p, d.key) }
+    const exists = existsSync(dir)
+    return { dir, exists, ahead: await queueAhead(p, d.key), bytes: exists ? dirSize(dir) : 0 }
   }
 
   async bringQueue(id: string): Promise<OpResult> {
@@ -837,9 +877,24 @@ export class DemandManager {
     const r = await bringQueueToBranch(p, d.key)
     if (r.ok && !/Nada novo/.test(r.message)) {
       this.note(d, r.message)
-      this.persist()
+      this.persist(d)
     }
     return r
+  }
+
+  /** Demanda feita: apaga a cópia da fila se todo o trabalho dela já está na branch do card */
+  async cleanupCopy(id: string): Promise<boolean> {
+    const d = this.get(id)
+    const p = d && this.projectOf(d)
+    if (!d || !p || !existsSync(this.queueCopyDir(d))) return false
+    if ((await queueAhead(p, d.key)) > 0) return false
+    const r = await removeWorktree(p, d.key, this.queueCopyDir(d))
+    if (r.ok) {
+      d.queueSessionId = null
+      this.note(d, 'Cópia da fila removida sozinha (demanda feita e trabalho já na branch)')
+      this.persist(d)
+    }
+    return r.ok
   }
 
   async removeQueueCopy(id: string): Promise<OpResult> {
@@ -850,7 +905,7 @@ export class DemandManager {
     if (r.ok) {
       d.queueSessionId = null
       this.note(d, 'Cópia da fila removida')
-      this.persist()
+      this.persist(d)
     }
     return r
   }
@@ -881,7 +936,7 @@ export class DemandManager {
       const existing = r.out.match(/https:\/\/github\.com\/\S+\/pull\/\d+/)?.[0]
       if (/already exists/i.test(r.out) && existing) {
         d.prUrl = existing
-        this.persist()
+        this.persist(d)
         return { ok: true, message: `Já existia um PR desta branch: ${existing}` }
       }
       if (/auth|login/i.test(r.out)) return { ok: false, message: 'O gh não está logado: rode "gh auth login" (Configurações → Começar).' }
@@ -890,7 +945,7 @@ export class DemandManager {
     const url = r.out.match(/https:\/\/\S+\/pull\/\d+/)?.[0] ?? r.out.split('\n').pop() ?? ''
     d.prUrl = url || null
     this.note(d, `PR aberto${pr.draft ? ' (rascunho)' : ''}: ${url}`)
-    this.persist()
+    this.persist(d)
     return { ok: true, message: `PR aberto: ${url}` }
   }
 
@@ -924,7 +979,7 @@ export class DemandManager {
     }
     const comments = parsePrComments(data, lines, me)
     const fresh = comments.filter((c) => !d.prCommentsDone.includes(c.id)).length
-    this.persist()
+    this.persist(d)
     return { ok: true, message: comments.length ? `${comments.length} comentário(s), ${fresh} ainda não mandado(s) ao Claude.` : 'Nenhum comentário do time no PR.', comments }
   }
 
@@ -934,7 +989,7 @@ export class DemandManager {
     if (!d || !comments.length) return null
     d.prCommentsDone = [...new Set([...d.prCommentsDone, ...comments.map((c) => c.id)])]
     this.note(d, `${comments.length} comentário(s) do PR mandados ao Claude`)
-    this.persist()
+    this.persist(d)
     return prCommentsPrompt(d, comments)
   }
 
@@ -951,7 +1006,7 @@ export class DemandManager {
     const r = await postJiraComment(d.key, text)
     if (r.ok) {
       this.note(d, 'Dúvidas comentadas no card do Jira')
-      this.persist()
+      this.persist(d)
     }
     return r
   }
@@ -975,7 +1030,7 @@ export class DemandManager {
     const file = join(dir, `${Date.now()}.${m[1] === 'jpeg' ? 'jpg' : m[1]}`)
     writeFileSync(file, buf)
     d.images = [...d.images, file]
-    this.persist()
+    this.persist(d)
     return { ok: true, message: 'Imagem anexada.', file }
   }
 
@@ -984,7 +1039,7 @@ export class DemandManager {
     if (!d || !d.images.includes(file)) return
     d.images = d.images.filter((f) => f !== file)
     rmSync(file, { force: true })
-    this.persist()
+    this.persist(d)
   }
 
   // ---------------------------------------------------------------- estimado × real
@@ -1008,7 +1063,7 @@ export class DemandManager {
     if (e.type !== 'exit') return
     this.running.delete(e.runId)
     this.busy.delete(r.demandId)
-    if (!d) return this.onChange(this.list, this.busyList())
+    if (!d) return this.onChange(this.list, this.busyList(), {})
     const text = r.text.join('\n')
     const ok = !e.killed && e.code === 0
     // Revisão dupla: a 1ª passada (ChatGPT) terminou → o Claude confere e aprofunda
@@ -1040,7 +1095,7 @@ export class DemandManager {
         d.review = { at: Date.now(), ai: rv.ai, base: rv.base, commit: rv.commit, scope: rv.scope, text: extractResult(text) }
         this.note(d, `Revisão pronta (${rv.scope})`)
       }
-      this.persist()
+      this.persist(d)
       return
     }
     if (r.what === 'dev') {
@@ -1057,6 +1112,6 @@ export class DemandManager {
       d.designApproved = false
       this.note(d, 'Desenho pronto para revisar')
     }
-    this.persist()
+    this.persist(d)
   }
 }

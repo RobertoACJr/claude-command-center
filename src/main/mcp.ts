@@ -181,9 +181,17 @@ async function mcpLine(name: string, label: string, enabled: boolean): Promise<L
   return parseMcpGet(`${r.stdout}\n${r.stderr}`, label, enabled)
 }
 
+/**
+ * `claude mcp list` liga todos os seus servidores MCP para testar (10-30s de CPU).
+ * Uma chamada só é compartilhada entre os testes das integrações e guardada por 3 minutos.
+ */
+let connectorsCache: { at: number; p: Promise<string[]> } | null = null
 async function claudeAiConnectors(): Promise<string[]> {
-  const r = await runClaudeCapture(['mcp', 'list'], { cwd: cwd(), timeoutMs: 90_000 })
-  return parseConnectors(`${r.stdout}`)
+  if (connectorsCache && Date.now() - connectorsCache.at < 180_000) return connectorsCache.p
+  const p = runClaudeCapture(['mcp', 'list'], { cwd: cwd(), timeoutMs: 90_000 }).then((r) => parseConnectors(`${r.stdout}`))
+  connectorsCache = { at: Date.now(), p }
+  p.catch(() => (connectorsCache = null))
+  return p
 }
 
 async function httpJson(url: string, headers: Record<string, string>): Promise<{ status: number; body: any; headers?: Headers; error?: string }> {

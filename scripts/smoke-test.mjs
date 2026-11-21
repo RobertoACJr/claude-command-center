@@ -387,10 +387,10 @@ try {
     shotsText = await evaluate(`document.querySelector('[data-testid="shot-sets"]')?.textContent ?? ''`)
   }
   await sleep(800)
-  const hasImg = await evaluate(`!!document.querySelector('[data-testid="shot-sets"] img[src^="data:image/png"]')`)
+  const hasImg = await evaluate(`!!document.querySelector('[data-testid="shot-sets"] img[src^="data:image/jpeg"]')`)
   if (!shotsText.includes('erro de teste no console')) fail('Print não pegou o erro do console: ' + shotsText.slice(0, 200))
   else if (!shotsText.includes('HTTP 404')) fail('Print não pegou a requisição que falhou: ' + shotsText.slice(0, 200))
-  else if (!hasImg) fail('Print da tela não apareceu')
+  else if (!hasImg) fail("Miniatura do print (JPEG) não apareceu")
   else console.log('✓ Print de verdade da tela, com o erro do console e o HTTP 404')
   shotDemand2 = await cdp('Page.captureScreenshot', { format: 'jpeg', quality: 55 })
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)

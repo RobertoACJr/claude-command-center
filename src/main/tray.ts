@@ -36,9 +36,17 @@ export class AppTray {
     this.tray.on('click', () => this.actions.show())
   }
 
+  /** Quadros prontos (decodificados e no tamanho certo uma vez só) */
+  private frames = new Map<string, Electron.NativeImage>()
   private image() {
-    const size = process.platform === 'win32' ? 16 : 22
-    return nativeImage.createFromDataURL(TRAY_FRAMES[this.state][this.frame]).resize({ width: size, height: size })
+    const key = `${this.state}:${this.frame}`
+    let img = this.frames.get(key)
+    if (!img) {
+      const size = process.platform === 'win32' ? 16 : 22
+      img = nativeImage.createFromDataURL(TRAY_FRAMES[this.state][this.frame]).resize({ width: size, height: size })
+      this.frames.set(key, img)
+    }
+    return img
   }
 
   /** Gira a hélice enquanto a fila ou o Vigia trabalham; azul-petróleo no modo Ausente */

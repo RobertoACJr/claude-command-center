@@ -48,6 +48,8 @@ export interface ShotItem {
   width: number
   /** Arquivo PNG (front) */
   file?: string
+  /** Miniatura leve (JPEG ~480px) para as listas */
+  thumb?: string
   /** Erros no console e requisições que falharam (front) */
   errors: string[]
   /** Back: status recebido e esperado */
@@ -69,6 +71,8 @@ export interface ShotSet {
   items: ShotItem[]
   /** Por que não rodou (ex: projeto fora do ar) */
   error?: string
+  /** Espaço em disco ocupado pelas imagens */
+  bytes?: number
 }
 
 // ---------------------------------------------------------------- Comentários do PR
@@ -628,6 +632,8 @@ export interface QueueTask {
   shotSetIds?: string[]
   /** Algum conjunto depois da tarefa teve erro */
   shotsFailed?: boolean
+  /** Aviso da preparação (ex: dependências da cópia diferentes do projeto) */
+  warning?: string
 }
 
 /** Situação da cópia da fila de uma demanda */
@@ -636,6 +642,8 @@ export interface DemandQueueCopy {
   exists: boolean
   /** Commits da fila que ainda não estão na branch do card */
   ahead: number
+  /** Espaço ocupado pela cópia (sem contar o node_modules emprestado) */
+  bytes: number
 }
 
 /** Rascunho do PR montado a partir do card, desenho e revisão */

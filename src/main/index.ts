@@ -1,5 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Notification, shell } from 'electron'
 import { existsSync } from 'fs'
+import { writeFileAtomic } from './fsutil'
 import { homedir } from 'os'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
@@ -33,7 +34,7 @@ import { QueueManager, queueSummary } from './queue'
 import { buildDaily } from './daily'
 import { SyncManager } from './sync'
 import { isUp, ShotManager } from './shots'
-import { captureWithElectron } from './capture'
+import { captureWithElectron, makeThumb } from './capture'
 import { learn } from './guides'
 import type {
   AlertStatus,
@@ -93,8 +94,9 @@ const runs = new RunManager((e) => {
   if (e.type === 'exit') approvals.runEnded(e.runId)
   send('run:event', e)
 })
-const demands = new DemandManager(app.getPath('userData'), runs, (list, busy) => {
-  send('demands:update', { list, busy })
+const demands = new DemandManager(app.getPath('userData'), runs, (list, busy, change) => {
+  // Só o que mudou vai para a tela (antes ia a lista inteira, com transcrições, a cada tecla)
+  send('demands:update', change?.all || !change ? { list, busy } : { upsert: change.upsert, removed: change.removed, busy })
   refreshTrayActivity()
 })
 /** Hélice da bandeja gira enquanto a fila, o Vigia ou uma demanda trabalham */
@@ -166,7 +168,7 @@ function scheduleSync(): void {
 }
 
 // ---------- Telas (front) e checagem da API (back) ----------
-const shots = new ShotManager(app.getPath('userData'), captureWithElectron, (s) => send('shots:new', s))
+const shots = new ShotManager(app.getPath('userData'), captureWithElectron, (s) => send('shots:new', s), makeThumb)
 /** Prints antes/depois de uma tarefa da fila, se o projeto for front/back e estiver no ar */
 async function queueShots(t: QueueTask, label: 'antes' | 'depois'): Promise<ShotSet[] | null> {
   const p = store.get().projects.find((x) => x.id === t.projectId)
@@ -473,7 +475,7 @@ function saveNotificationsSoon(): void {
   notifSaveTimer = setTimeout(() => {
     notifSaveTimer = null
     try {
-      writeFileSync(notificationsFile, JSON.stringify(notifications))
+      writeFileAtomic(notificationsFile, JSON.stringify(notifications))
     } catch {
       /* ignora */
     }

@@ -6,12 +6,22 @@ import { Button, Modal } from './ui'
 
 function Thumb({ item, onOpen }: { item: ShotItem; onOpen: (src: string) => void }) {
   const [src, setSrc] = useState<string | null>(null)
+  // Lista carrega a miniatura leve; o print inteiro só quando você clica
   useEffect(() => {
-    if (item.file) window.api.shotImage(item.file).then(setSrc)
-  }, [item.file])
+    const f = item.thumb ?? item.file
+    if (f) window.api.shotImage(f).then(setSrc)
+  }, [item.thumb, item.file])
   return (
     <div className={cn('min-w-0 overflow-hidden rounded-lg border bg-bg', item.ok ? 'border-line' : 'border-red-500/40')}>
-      <button type="button" disabled={!src} onClick={() => src && onOpen(src)} className="block w-full cursor-zoom-in">
+      <button
+        type="button"
+        disabled={!src}
+        onClick={async () => {
+          const full = item.thumb && item.file ? await window.api.shotImage(item.file) : src
+          if (full) onOpen(full)
+        }}
+        className="block w-full cursor-zoom-in"
+      >
         {src ? (
           <img src={src} alt={item.route} className="h-36 w-full object-cover object-top" />
         ) : (

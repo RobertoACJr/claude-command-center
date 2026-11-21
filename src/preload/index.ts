@@ -26,6 +26,9 @@ function subscribe<T>(channel: string, cb: (v: T) => void): () => void {
   return () => ipcRenderer.removeListener(channel, h)
 }
 
+/** Lista de demandas que a tela tem (atualizada pelos avisos de mudança) */
+let demandCache: Demand[] | null = null
+
 const api: CommandCenterApi = {
   // Aprovação de permissões do Claude
   onApprovalRequest: (cb) => subscribe<ApprovalRequest>('approval:request', cb),
@@ -69,9 +72,21 @@ const api: CommandCenterApi = {
   gitBranches: (id) => ipcRenderer.invoke('git:branches', id),
   gitCheckout: (id, branch) => ipcRenderer.invoke('git:checkout', id, branch),
   demandUpdateBase: (id) => ipcRenderer.invoke('demands:updateBase', id),
-  demands: () => ipcRenderer.invoke('demands:list'),
+  demands: async () => (demandCache = await ipcRenderer.invoke('demands:list')),
   demandsBusy: () => ipcRenderer.invoke('demands:busy'),
-  onDemands: (cb) => subscribe<{ list: Demand[]; busy: DemandBusy[] }>('demands:update', (p) => cb(p.list, p.busy)),
+  onDemands: (cb) =>
+    subscribe<{ list?: Demand[]; upsert?: Demand; removed?: string; busy: DemandBusy[] }>('demands:update', (p) => {
+      // O app manda só a demanda que mudou: junta aqui com a lista que a tela já tem
+      if (p.list) demandCache = p.list
+      else if (demandCache) {
+        if (p.upsert) {
+          const i = demandCache.findIndex((d) => d.id === p.upsert!.id)
+          demandCache = i < 0 ? [p.upsert, ...demandCache] : demandCache.map((d, j) => (j === i ? p.upsert! : d))
+        }
+        if (p.removed) demandCache = demandCache.filter((d) => d.id !== p.removed)
+      }
+      if (demandCache) cb(demandCache, p.busy)
+    }),
   saveDemand: (d) => ipcRenderer.invoke('demands:save', d),
   deleteDemand: (id) => ipcRenderer.invoke('demands:delete', id),
   demandFetchJira: (id) => ipcRenderer.invoke('demands:jira', id),

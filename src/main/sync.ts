@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { writeFileAtomic } from './fsutil'
 import { hostname } from 'os'
 import { join } from 'path'
 import type { AppConfig, Demand, OpResult, SyncStatus } from '../shared/types'
@@ -152,7 +153,7 @@ export class SyncManager {
 
   private save(): void {
     try {
-      writeFileSync(this.stateFile, JSON.stringify(this.state))
+      writeFileAtomic(this.stateFile, JSON.stringify(this.state))
     } catch {
       /* ignora */
     }

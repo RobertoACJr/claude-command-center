@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { writeFileAtomic } from './fsutil'
 import { join } from 'path'
 import type { OpResult, QueueState, QueueTask, RunEvent, ShotSet } from '../shared/types'
 import { shotSummary } from './shots'
@@ -12,7 +13,8 @@ import { store } from './store'
 /** Vai junto de toda tarefa: ninguém está olhando */
 /** Na cópia separada o app guarda o trabalho num commit local ao fim da tarefa */
 export const QUEUE_COPY_NOTE =
-  '\n\n(Você está numa cópia separada do projeto, só da fila. Não faça commit nem push: o app guarda o que você mudar.)'
+  '\n\n(Você está numa cópia separada do projeto, só da fila. Não faça commit nem push: o app guarda o que você mudar. ' +
+  'O node_modules é emprestado do projeto principal: não rode npm/pnpm/yarn install; se precisar de uma dependência nova, diga qual.)'
 
 export const QUEUE_SUFFIX =
   '\n\n(Tarefa da fila, sem ninguém acompanhando: não faça commit nem push. Se algo exigir uma decisão minha, pare e ' +
@@ -73,7 +75,7 @@ export class QueueManager {
 
   private persist(): void {
     try {
-      writeFileSync(this.file, JSON.stringify(this.tasks.slice(-MAX_KEEP), null, 1))
+      writeFileAtomic(this.file, JSON.stringify(this.tasks.slice(-MAX_KEEP), null, 1))
     } catch {
       /* ignora */
     }
@@ -211,6 +213,7 @@ export class QueueManager {
       cwd = this.d.demands.queueCopyDir(dm)
       const w = await ensureWorktree(p, dm.key, cwd)
       if (!w.ok) return this.fail(t, w.message)
+      t.warning = w.warn
       const r = this.d.demands.implement(dm.id, t.prompt + QUEUE_COPY_NOTE + QUEUE_SUFFIX, false, 'fila', { cwd, queueCopy: true })
       if (!r.ok || !r.runId) return this.fail(t, r.message)
       runId = r.runId
@@ -361,7 +364,7 @@ export function queueSummary(done: QueueTask[], names: (t: QueueTask) => string)
     const what = t.prompt.replace(/\s+/g, ' ').slice(0, 90)
     const note = t.status === 'feita' ? (t.summary ?? '').replace(/\s+/g, ' ').slice(-220) : (t.error ?? '')
     const check = t.check ? `\n   ${t.check.ok ? '✔ verificação ok' : '✖ verificação falhou'} (${t.check.command})` : ''
-    const shots = t.shots?.length ? '\n   ' + t.shots.join('\n   ') : ''
+    const shots = (t.shots?.length ? '\n   ' + t.shots.join('\n   ') : '') + (t.warning ? `\n   ⚠ ${t.warning}` : '')
     return `${icon} ${names(t)}: ${what}${note ? `\n   ↳ ${note}` : ''}${check}${shots}`
   })
   return `${head}\n\n${lines.join('\n')}`

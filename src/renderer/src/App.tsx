@@ -40,6 +40,7 @@ import { ApprovalModal } from './components/ApprovalModal'
 import { HistoryModal } from './components/HistoryModal'
 import { CommandPalette, type PaletteItem } from './components/CommandPalette'
 import { DemandModal, newDemand } from './components/DemandModal'
+import { lineStore } from './lib/lineStore'
 import { QueueModal } from './components/QueueModal'
 import { CostsModal } from './components/CostsModal'
 import { DailyModal } from './components/DailyModal'
@@ -80,11 +81,10 @@ import {
 
 type Confirm = { kind: 'project'; item: Project } | { kind: 'script'; item: Script } | null
 
-const MAX_LINES = 4000
 const FIXED_TITLES: Record<string, string> = { console: 'Console', claude: 'Claude', gemini: 'Gemini', codex: 'ChatGPT', system: 'Sistema' }
 
 function newTab(key: string, title: string): TabState {
-  return { key, title, lines: [], status: 'idle', exitCode: null, running: [], unread: false }
+  return { key, title, status: 'idle', exitCode: null, running: [], unread: false }
 }
 
 export default function App() {
@@ -166,7 +166,6 @@ export default function App() {
   const [chatSessions, setChatSessions] = useState<Record<string, string>>({})
   /** Abas em que o usuário clicou Parar e o processo ainda não terminou */
   const [stoppingTabs, setStoppingTabs] = useState<Set<string>>(new Set())
-  const lineId = useRef(0)
   const activeRef = useRef(activeTab)
   activeRef.current = activeTab
   /** runId → chave da conversa ("claude:<pasta>" / "gemini:<pasta>") para continuar depois */
@@ -178,13 +177,15 @@ export default function App() {
     setOrder((o) => (o.includes(key) ? o : [...o, key]))
   }, [])
 
+  const tabsRef = useRef(tabs)
+  tabsRef.current = tabs
+  /** Saída vai para o lineStore (só o terminal redesenha); o App só muda ao marcar "não lida" */
   const append = useCallback((key: string, items: Array<{ kind: LineKind; text: string }>) => {
-    setTabs((ts) => {
-      const t = ts[key]
-      if (!t) return ts // aba fechada: descarta
-      const lines: ConsoleLine[] = [...t.lines, ...items.map((i) => ({ id: ++lineId.current, ...i }))].slice(-MAX_LINES)
-      return { ...ts, [key]: { ...t, lines, unread: t.unread || key !== activeRef.current } }
-    })
+    const t = tabsRef.current[key]
+    lineStore.append(key, items)
+    if (t && key !== activeRef.current && !t.unread) {
+      setTabs((ts) => (ts[key] && !ts[key].unread ? { ...ts, [key]: { ...ts[key], unread: true } } : ts))
+    }
   }, [])
 
   const log = useCallback((kind: LineKind, text: string, tab = 'system') => append(tab, [{ kind, text }]), [append])
@@ -350,7 +351,26 @@ export default function App() {
 
   // ---------- branches ----------
   const [gitInfos, setGitInfos] = useState<Record<string, GitInfo | null>>({})
-  const refreshBranches = useCallback(async (projects: Project[]) => {
+  const gitLast = useRef(0)
+  const gitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const gitProjects = useRef<Project[]>([])
+  /**
+   * Lê o git de todos os projetos. Automático (foco na janela, fim de execução): no máximo a cada 15s,
+   * juntando os pedidos. Pedido seu (botão, depois de mexer no git): na hora.
+   */
+  const refreshBranches = useCallback(async (projects: Project[], now = true) => {
+    gitProjects.current = projects
+    const wait = 15_000 - (Date.now() - gitLast.current)
+    if (!now && wait > 0) {
+      if (!gitTimer.current) {
+        gitTimer.current = setTimeout(() => {
+          gitTimer.current = null
+          void refreshBranches(gitProjects.current, true)
+        }, wait)
+      }
+      return
+    }
+    gitLast.current = Date.now()
     const entries = await Promise.all(projects.map(async (p) => [p.id, await window.api.gitInfo(p.id)] as const))
     setGitInfos(Object.fromEntries(entries))
     setBranches(Object.fromEntries(entries.map(([id, g]) => [id, g ? g.branch : null])))
@@ -363,7 +383,7 @@ export default function App() {
   }, [projectsKey])
 
   useEffect(() => {
-    const onFocus = () => config && refreshBranches(config.projects)
+    const onFocus = () => config && refreshBranches(config.projects, false)
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
   }, [config, refreshBranches])
@@ -372,7 +392,7 @@ export default function App() {
   const totalRunning = useMemo(() => Object.values(tabs).reduce((n, t) => n + t.running.length, 0), [tabs])
   const prevRunning = useRef(0)
   useEffect(() => {
-    if (config && totalRunning < prevRunning.current) refreshBranches(config.projects)
+    if (config && totalRunning < prevRunning.current) refreshBranches(config.projects, false)
     prevRunning.current = totalRunning
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [totalRunning])
@@ -449,6 +469,7 @@ export default function App() {
   const closeTab = (key: string) => {
     if ((FIXED_TABS as readonly string[]).includes(key)) return
     stopTab(key)
+    lineStore.remove(key)
     setTabs((ts) => {
       const next = { ...ts }
       delete next[key]
@@ -462,7 +483,7 @@ export default function App() {
     })
   }
 
-  const clearTab = (key: string) => setTabs((ts) => (ts[key] ? { ...ts, [key]: { ...ts[key], lines: [] } } : ts))
+  const clearTab = (key: string) => lineStore.clear(key)
 
   // ---------- ações ----------
   const save = async (p: Promise<AppConfig>) => setConfig(await p)

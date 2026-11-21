@@ -1,5 +1,6 @@
 import { execFile } from 'child_process'
-import { existsSync } from 'fs'
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync } from 'fs'
+import { dirname, isAbsolute, join } from 'path'
 import type { GitInfo, OpResult, Project } from '../shared/types'
 
 /** Roda o git sem shell (nada de injeção por nome de branch) */
@@ -150,7 +151,113 @@ const exists = async (cwd: string, ref: string) => (await git(cwd, ['rev-parse',
  * Nasce da branch do card (ou da principal, se o card ainda não tem branch) e, a cada tarefa,
  * recebe o que você avançou na branch do card.
  */
-export async function ensureWorktree(p: Project, key: string, dir: string): Promise<OpResult> {
+/** Pastas node_modules do projeto (raiz e até 2 níveis, ex: packages/app/node_modules) */
+export function findNodeModules(root: string, depth = 2, rel = ''): string[] {
+  const out: string[] = []
+  let entries: string[] = []
+  try {
+    entries = readdirSync(join(root, rel))
+  } catch {
+    return out
+  }
+  for (const name of entries) {
+    if (name === '.git') continue
+    const r = rel ? join(rel, name) : name
+    let isDir = false
+    try {
+      isDir = statSync(join(root, r)).isDirectory()
+    } catch {
+      continue
+    }
+    if (!isDir) continue
+    if (name === 'node_modules') out.push(r)
+    else if (depth > 0 && !name.startsWith('.')) out.push(...findNodeModules(root, depth - 1, r))
+  }
+  return out
+}
+
+const LOCKFILES = ['package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb']
+
+/**
+ * A cópia da fila usa as dependências do projeto principal (atalho para o node_modules, sem instalar de novo).
+ * O atalho entra no "exclude" do git para nunca ir num commit. Se o arquivo de lock da cópia ficou diferente,
+ * devolve um aviso (as dependências emprestadas podem não bater).
+ */
+export async function linkDependencies(projectPath: string, dir: string): Promise<{ linked: string[]; warn?: string }> {
+  const linked: string[] = []
+  const rels = findNodeModules(projectPath)
+  for (const rel of rels) {
+    const link = join(dir, rel)
+    if (!existsSync(dirname(link))) continue
+    try {
+      lstatSync(link)
+      continue // já existe (atalho ou pasta)
+    } catch {
+      /* não existe: cria */
+    }
+    try {
+      symlinkSync(join(projectPath, rel), link, process.platform === 'win32' ? 'junction' : 'dir')
+      linked.push(rel)
+    } catch {
+      /* sem permissão para atalho: segue sem */
+    }
+  }
+  if (rels.length) {
+    const ex = (await git(dir, ['rev-parse', '--git-path', 'info/exclude'], 6000)).out.trim()
+    if (ex) {
+      const file = isAbsolute(ex) ? ex : join(dir, ex)
+      let cur = ''
+      try {
+        cur = readFileSync(file, 'utf8')
+      } catch {
+        mkdirSync(dirname(file), { recursive: true })
+      }
+      const add = rels.map((r) => '/' + r.split('\\').join('/')).filter((l) => !cur.split('\n').includes(l))
+      if (add.length) appendFileSync(file, (cur && !cur.endsWith('\n') ? '\n' : '') + add.join('\n') + '\n')
+    }
+  }
+  for (const lock of LOCKFILES) {
+    const a = join(projectPath, lock)
+    const b = join(dir, lock)
+    if (existsSync(a) && existsSync(b) && !readFileSync(a).equals(readFileSync(b))) {
+      return {
+        linked,
+        warn: `As dependências desta demanda mudaram (${lock}): o node_modules emprestado do projeto pode não bater. Instale na cópia (botão "Terminal na cópia") ou no projeto.`
+      }
+    }
+  }
+  return { linked }
+}
+
+/** Espaço ocupado por uma pasta (sem seguir atalhos nem entrar no .git) */
+export function dirSize(dir: string, limit = 50_000): number {
+  let total = 0
+  let seen = 0
+  const walk = (d: string) => {
+    let names: string[] = []
+    try {
+      names = readdirSync(d)
+    } catch {
+      return
+    }
+    for (const n of names) {
+      if (++seen > limit || n === '.git') continue
+      const f = join(d, n)
+      try {
+        const st = lstatSync(f)
+        if (st.isSymbolicLink()) continue
+        if (st.isDirectory()) walk(f)
+        else total += st.size
+      } catch {
+        /* sumiu no meio */
+      }
+    }
+  }
+  walk(dir)
+  return total
+}
+
+export async function ensureWorktree(p: Project, key: string, dir: string): Promise<OpResult & { warn?: string }> {
   if (!SAFE_BRANCH.test(key)) return { ok: false, message: 'Número do card inválido para branch.' }
   const qb = queueBranch(key)
   await git(p.path, ['worktree', 'prune'], 10_000)
@@ -182,7 +289,8 @@ export async function ensureWorktree(p: Project, key: string, dir: string): Prom
       }
     }
   }
-  return { ok: true, message: 'Cópia pronta.' }
+  const deps = await linkDependencies(p.path, dir)
+  return { ok: true, message: 'Cópia pronta.', warn: deps.warn }
 }
 
 /** Guarda tudo que mudou na cópia num commit local (sem push). Devolve se houve commit. */

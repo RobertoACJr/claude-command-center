@@ -1,9 +1,12 @@
 import { randomUUID } from 'crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { writeFileAtomic } from './fsutil'
 import { join, normalize, relative } from 'path'
 import type { OpResult, Project, ShotItem, ShotSet } from '../shared/types'
 
 const MAX_SETS = 200
+/** Limite de espaço das capturas: passou, apaga as mais antigas */
+export const MAX_BYTES = 500 * 1024 * 1024
 
 /** "GET /health 200" → { method, path, expected }. Sem status = 200; sem método = GET. */
 export function parseApiRoute(line: string): { method: string; path: string; expected: number } | null {
@@ -84,7 +87,10 @@ export class ShotManager {
   constructor(
     base: string,
     private capture: Capturer,
-    private onNew: (s: ShotSet) => void
+    private onNew: (s: ShotSet) => void,
+    /** Gera a miniatura JPEG (Electron); sem ela, a lista usa o PNG */
+    private thumb?: (png: Buffer) => Buffer | null,
+    private maxBytes = MAX_BYTES
   ) {
     this.dir = join(base, 'shots')
     this.file = join(this.dir, 'shots.json')
@@ -106,8 +112,15 @@ export class ShotManager {
 
   private persist(): void {
     const old = this.sets.splice(0, Math.max(0, this.sets.length - MAX_SETS))
+    // Limite por espaço: tira as mais antigas até caber (fica pelo menos a mais nova)
+    let total = this.sets.reduce((n, s) => n + (s.bytes ?? 0), 0)
+    while (total > this.maxBytes && this.sets.length > 1) {
+      const s = this.sets.shift()!
+      total -= s.bytes ?? 0
+      old.push(s)
+    }
     for (const s of old) rmSync(join(this.dir, s.id), { recursive: true, force: true })
-    writeFileSync(this.file, JSON.stringify(this.sets))
+    writeFileAtomic(this.file, JSON.stringify(this.sets))
   }
 
   delete(id: string): void {
@@ -156,11 +169,20 @@ export class ShotManager {
             try {
               const r = await this.capture(joinUrl(p.localUrl, route), width)
               let file: string | undefined
+              let thumb: string | undefined
               if (r.png) {
-                file = join(this.dir, set.id, `${n++}.png`)
+                const k = n++
+                file = join(this.dir, set.id, `${k}.png`)
                 writeFileSync(file, r.png)
+                set.bytes = (set.bytes ?? 0) + r.png.length
+                const t = this.thumb?.(r.png)
+                if (t) {
+                  thumb = join(this.dir, set.id, `${k}.thumb.jpg`)
+                  writeFileSync(thumb, t)
+                  set.bytes += t.length
+                }
               }
-              set.items.push({ route, width, file, errors: r.errors, ok: r.errors.length === 0 && !!r.png })
+              set.items.push({ route, width, file, thumb, errors: r.errors, ok: r.errors.length === 0 && !!r.png })
             } catch (e) {
               set.items.push({ route, width, errors: [`não consegui abrir: ${(e as Error).message}`], ok: false })
             }

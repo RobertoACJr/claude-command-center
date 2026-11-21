@@ -1037,6 +1037,8 @@ function realDays(d: Demand): number | null {
   return Math.round(total * 10) / 10
 }
 
+const fmtBytes = (b: number) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b > 1e6 ? `${Math.round(b / 1e6)} MB` : `${Math.max(1, Math.round(b / 1e3))} KB`)
+
 /** Cópia separada onde a fila trabalha (git worktree) */
 function QueueCopyBox({
   d,
@@ -1074,6 +1076,7 @@ function QueueCopyBox({
           ) : (
             <span className="font-normal text-zinc-500"> · nada novo</span>
           )}
+          {copy.exists && <span className="font-normal text-zinc-500"> · ocupa {fmtBytes(copy.bytes)}</span>}
         </span>
         <div className="flex gap-1.5">
           <Button size="sm" disabled={!copy.exists} onClick={() => window.api.openSystemTerminal(copy.dir)} title={copy.dir}>
@@ -1095,7 +1098,8 @@ function QueueCopyBox({
         </div>
       </div>
       <p className="text-[11px] text-zinc-500">
-        A fila trabalha numa pasta separada, sem mexer na sua. Cada tarefa vira um commit local em fila/{d.key}; "Trazer"
+        A fila trabalha numa pasta separada, sem mexer na sua (usando o node_modules do projeto, sem instalar de novo).
+        A cópia some sozinha quando a demanda vira Feita e o trabalho já está na branch. Cada tarefa vira um commit local em fila/{d.key}; "Trazer"
         junta esses commits na branch {d.key} (se ela estiver aberta no card, faz merge; precisa estar sem alterações
         pendentes).
       </p>

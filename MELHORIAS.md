@@ -155,6 +155,18 @@ O usuário não conseguiu configurar Git, Jira, Google Chat nem Telegram sozinho
 - [x] Áudio no Telegram com transcrição configurável.
 - [x] Memória do projeto (CLAUDE.md) com sugestão automática.
 
+### Desempenho e solidez ✅ (v0.15.0)
+- [x] Terminal isolado: saída nova só redesenha o terminal (antes o app inteiro, a cada 40ms); só as últimas 400 linhas
+  viram elementos (rolar para cima mostra mais).
+- [x] Prints com miniatura JPEG leve; o PNG inteiro só ao clicar; limite de 500 MB (apaga as capturas mais antigas).
+- [x] `claude mcp list` uma vez só para os testes das integrações (guardado por 3 min).
+- [x] Git dos projetos automático no máximo a cada 15s (pedidos seus continuam na hora).
+- [x] Cópia da fila usa o node_modules do projeto (atalho fora dos commits) e avisa se o lock mudou.
+- [x] Cópia da fila apagada sozinha quando a demanda vira Feita e o trabalho já está na branch; mostra o espaço ocupado.
+- [x] Demandas: um arquivo por demanda e só a que mudou vai para a tela (migração automática do arquivo antigo).
+- [x] Gravação segura (temporário + troca) em demandas, fila, histórico, gastos, capturas, notificações e sincronização.
+- [x] Quadros da hélice da bandeja preparados uma vez só.
+
 ### Para depois (sugeridos)
 - [ ] Critérios de aceite como checklist conferido antes do PR.
 - [ ] Atualizar o Jira (comentar PR aberto / mover etapa) com confirmação.

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useLines } from '../lib/lineStore'
 import {
   Ban,
   Bot,
@@ -38,7 +39,6 @@ export type RunStatus = 'idle' | 'running' | 'success' | 'error' | 'stopped'
 export interface TabState {
   key: string
   title: string
-  lines: ConsoleLine[]
   status: RunStatus
   exitCode: number | null
   /** Execuções vivas nesta aba */
@@ -47,6 +47,20 @@ export interface TabState {
 }
 
 export const FIXED_TABS = ['console', 'claude', 'gemini', 'codex', 'system'] as const
+
+/** Quantas linhas viram elementos de cada vez */
+const PAGE = 400
+
+/** Uma linha do terminal: não redesenha quando chegam outras */
+const LineRow = memo(function LineRow({ line: l }: { line: ConsoleLine }) {
+  return (
+    <div className={cn('min-h-[1.2em] whitespace-pre-wrap break-words', kindCls[l.kind])}>
+      {l.kind === 'cmd' && <span className="text-zinc-600">$ </span>}
+      {l.kind === 'user' && <span className="text-zinc-600">› </span>}
+      {l.text}
+    </div>
+  )
+})
 
 const kindCls: Record<LineKind, string> = {
   info: 'text-zinc-500',
@@ -225,6 +239,19 @@ export function TerminalsPanel({
   const [histIdx, setHistIdx] = useState(-1)
   const [copied, setCopied] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const lines = useLines(active)
+  /** Só as últimas N linhas viram elementos na tela; rolar até o topo mostra mais */
+  const [limit, setLimit] = useState(PAGE)
+  const growFrom = useRef<number | null>(null)
+  useEffect(() => setLimit(PAGE), [active])
+  // Depois de mostrar mais linhas no topo, mantém a posição de leitura
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (el && growFrom.current !== null) {
+      el.scrollTop += el.scrollHeight - growFrom.current
+      growFrom.current = null
+    }
+  }, [limit])
   const inputRef = useRef<HTMLInputElement>(null)
   const stick = useRef(true)
 
@@ -234,7 +261,7 @@ export function TerminalsPanel({
   useEffect(() => {
     const el = scrollRef.current
     if (el && stick.current) el.scrollTop = el.scrollHeight
-  }, [tab?.lines, active, open, expanded])
+  }, [lines, active, open, expanded, limit])
 
   // Trocar de aba volta a grudar no fim
   useEffect(() => {
@@ -273,7 +300,7 @@ export function TerminalsPanel({
 
   const copyAll = async () => {
     if (!tab) return
-    await window.api.copyText(tab.lines.map((l) => l.text).join('\n'))
+    await window.api.copyText(lines.map((l) => l.text).join('\n'))
     setCopied(true)
     setTimeout(() => setCopied(false), 1200)
   }
@@ -363,10 +390,14 @@ export function TerminalsPanel({
             onScroll={(e) => {
               const el = e.currentTarget
               stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+              if (el.scrollTop < 80 && lines.length > limit && growFrom.current === null) {
+                growFrom.current = el.scrollHeight
+                setLimit((l) => l + PAGE)
+              }
             }}
             className="selectable min-h-0 flex-1 overflow-y-auto px-4 py-2 font-mono text-[12.5px] leading-relaxed"
           >
-            {!tab || tab.lines.length === 0 ? (
+            {!tab || lines.length === 0 ? (
               <div className="pt-2 text-zinc-600">
                 {active === 'console'
                   ? 'Digite um comando abaixo. Cada script e cada projeto em execução ganham uma aba própria.'
@@ -383,13 +414,16 @@ export function TerminalsPanel({
                         : 'Sem saída ainda.'}
               </div>
             ) : (
-              tab.lines.map((l) => (
-                <div key={l.id} className={cn('min-h-[1.2em] whitespace-pre-wrap break-words', kindCls[l.kind])}>
-                  {l.kind === 'cmd' && <span className="text-zinc-600">$ </span>}
-                  {l.kind === 'user' && <span className="text-zinc-600">› </span>}
-                  {l.text}
-                </div>
-              ))
+              <>
+                {lines.length > limit && (
+                  <div className="py-1 text-center text-[11px] text-zinc-600">
+                    {lines.length - limit} linha(s) anteriores · role para cima para ver
+                  </div>
+                )}
+                {(lines.length > limit ? lines.slice(-limit) : lines).map((l) => (
+                  <LineRow key={l.id} line={l} />
+                ))}
+              </>
             )}
           </div>
         </div>

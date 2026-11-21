@@ -1,4 +1,4 @@
-import { BrowserWindow, session } from 'electron'
+import { BrowserWindow, nativeImage, session } from 'electron'
 import { randomUUID } from 'crypto'
 import type { Capturer } from './shots'
 
@@ -56,6 +56,15 @@ export const captureWithElectron: Capturer = async (url, width) => {
     win.destroy()
     void ses.clearStorageData().catch(() => {})
   }
+}
+
+/** Miniatura leve para as listas (JPEG de 480px de largura, só o topo da página) */
+export function makeThumb(png: Buffer): Buffer | null {
+  const img = nativeImage.createFromBuffer(png)
+  if (img.isEmpty()) return null
+  const { width, height } = img.getSize()
+  const top = img.crop({ x: 0, y: 0, width, height: Math.min(height, Math.round(width * 0.75)) })
+  return top.resize({ width: 480, quality: 'good' }).toJPEG(72)
 }
 
 const short = (u: string) => (u.length > 90 ? u.slice(0, 87) + '…' : u)

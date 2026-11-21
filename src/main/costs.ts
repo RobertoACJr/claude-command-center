@@ -1,4 +1,5 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'fs'
+import { writeFileAtomic } from './fsutil'
 import { join } from 'path'
 import type { CostEntry, CostGuard } from '../shared/types'
 
@@ -54,7 +55,7 @@ export class CostLedger {
           }
         }
         // Reescreve sem o que passou dos 120 dias
-        writeFileSync(this.file, this.entries.map((e) => JSON.stringify(e)).join('\n') + (this.entries.length ? '\n' : ''))
+        writeFileAtomic(this.file, this.entries.map((e) => JSON.stringify(e)).join('\n') + (this.entries.length ? '\n' : ''))
       }
     } catch {
       this.entries = []

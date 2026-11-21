@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, readdirSync } from 'fs'
+import { writeFileAtomic } from './fsutil'
 import { join } from 'path'
 import type { HistoryEntry, RunEvent } from '../shared/types'
 
@@ -77,7 +78,7 @@ export class History {
       entry.code = e.code
       entry.status = e.killed ? 'stopped' : e.code === 0 ? 'ok' : 'error'
       try {
-        writeFileSync(join(this.dir, `${safe(e.runId)}.log`), (buf ?? []).join('\n'))
+        writeFileAtomic(join(this.dir, `${safe(e.runId)}.log`), (buf ?? []).join('\n'))
       } catch {
         /* disco cheio etc.: o histórico é melhor-esforço */
       }
@@ -122,7 +123,7 @@ export class History {
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null
       try {
-        writeFileSync(this.file, JSON.stringify(this.entries))
+        writeFileAtomic(this.file, JSON.stringify(this.entries))
       } catch {
         /* ignora */
       }
@@ -133,7 +134,7 @@ export class History {
     if (this.saveTimer) clearTimeout(this.saveTimer)
     this.saveTimer = null
     try {
-      writeFileSync(this.file, JSON.stringify(this.entries))
+      writeFileAtomic(this.file, JSON.stringify(this.entries))
     } catch {
       /* ignora */
     }
