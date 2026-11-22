@@ -4,6 +4,15 @@ import { secrets } from './secrets'
 /** Permite apontar para um servidor falso em testes */
 const API = () => process.env.CCC_TELEGRAM_API || 'https://api.telegram.org'
 
+/**
+ * Tira o que costuma vir junto ao colar o token: espaços, aspas, o prefixo "bot" ou a URL inteira.
+ * Token do Telegram: número, dois-pontos e ~35 letras/números/_/-.
+ */
+export function cleanToken(raw: string): string {
+  const m = raw.match(/\d{5,}:[A-Za-z0-9_-]{30,}/)
+  return m ? m[0] : raw.trim()
+}
+
 export function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
@@ -13,7 +22,7 @@ export async function call(
   body?: Record<string, unknown>,
   timeoutMs = 15_000
 ): Promise<{ ok: boolean; result?: any; description?: string; status?: number }> {
-  const token = secrets.get('telegram.token')
+  const token = cleanToken(secrets.get('telegram.token') ?? '')
   if (!token) return { ok: false, description: 'Informe o token do bot.' }
   const ctrl = new AbortController()
   const timer = setTimeout(() => ctrl.abort(), timeoutMs)
@@ -37,10 +46,11 @@ export async function call(
 /** Traduz os erros mais comuns do Telegram para o que fazer */
 export function explainTelegramError(desc: string): string {
   const d = desc.toLowerCase()
-  if (d.includes('unauthorized') || (d.includes('not found') && d.includes('404')))
-    return 'O token do bot não vale (Unauthorized). Copie de novo o token no @BotFather e salve.'
   if (d.includes('chat not found'))
     return 'O Telegram não achou esse Chat ID. Abra o seu bot, mande "oi" e clique em Detectar de novo.'
+  // "Not Found" sozinho (404) é o Telegram dizendo que o token não existe
+  if (d.includes('unauthorized') || d.includes('not found') || d.includes('http 404'))
+    return 'O token do bot não vale: o Telegram não reconheceu esse bot. No @BotFather, mande /mybots → seu bot → API Token, copie o token inteiro (número:letras) e cole de novo aqui.'
   if (d.includes('blocked by the user'))
     return 'Você bloqueou o bot no Telegram. Abra a conversa com ele, desbloqueie (ou toque em Iniciar) e teste de novo.'
   if (d.includes("can't initiate") || d.includes('initiate conversation'))
@@ -52,6 +62,8 @@ export function explainTelegramError(desc: string): string {
 
 export async function sendTelegram(chatId: string, html: string): Promise<OpResult> {
   if (!chatId) return { ok: false, message: 'Informe o Chat ID.' }
+  const me = await call('getMe')
+  if (!me.ok) return { ok: false, message: explainTelegramError(me.description ?? 'Erro') }
   const r = await call('sendMessage', { chat_id: chatId, text: html, parse_mode: 'HTML', disable_web_page_preview: true })
   return {
     ok: r.ok,
@@ -61,6 +73,8 @@ export async function sendTelegram(chatId: string, html: string): Promise<OpResu
 
 /** Lê as últimas mensagens recebidas pelo bot para descobrir o seu Chat ID */
 export async function detectChatId(): Promise<OpResult> {
+  const me = await call('getMe')
+  if (!me.ok) return { ok: false, message: explainTelegramError(me.description ?? 'Erro') }
   // Com o bot escutando (botões/comandos), quem lê as mensagens é ele
   if (bot?.isRunning()) {
     const c = bot.lastChat()
@@ -254,7 +268,7 @@ export function formatDecision(a: DeployAlert, approved: boolean): string {
 
 /** Baixa um arquivo que chegou no Telegram (ex: áudio) */
 export async function downloadTelegramFile(fileId: string): Promise<{ data: Buffer; name: string } | null> {
-  const token = secrets.get('telegram.token')
+  const token = cleanToken(secrets.get('telegram.token') ?? '')
   if (!token) return null
   const r = await call('getFile', { file_id: fileId })
   const path = (r.result as { file_path?: string } | undefined)?.file_path
@@ -266,7 +280,7 @@ export async function downloadTelegramFile(fileId: string): Promise<{ data: Buff
 
 /** Manda uma imagem (PNG) com legenda */
 export async function sendTelegramPhoto(chatId: string, png: Buffer, caption: string): Promise<boolean> {
-  const token = secrets.get('telegram.token')
+  const token = cleanToken(secrets.get('telegram.token') ?? '')
   if (!token || !chatId) return false
   const form = new FormData()
   form.append('chat_id', chatId)
