@@ -185,6 +185,66 @@ export interface TargetOption {
   label: string
 }
 
+/** Pasta onde o comando roda: mesmo visual e comportamento do seletor de modo */
+function FolderPicker({
+  targets,
+  value,
+  onChange,
+  hint
+}: {
+  targets: TargetOption[]
+  value: string
+  onChange: (v: string) => void
+  hint: string
+}) {
+  const [open, setOpen] = useState(false)
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const current = targets.find((t) => t.value === value) ?? targets[0]
+  const keepOpen = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current)
+    setOpen(true)
+  }
+  const closeSoon = () => {
+    closeTimer.current = setTimeout(() => setOpen(false), 180)
+  }
+  return (
+    <div className="relative shrink-0" onMouseEnter={keepOpen} onMouseLeave={closeSoon}>
+      <button
+        type="button"
+        data-testid="folder-picker"
+        onClick={() => setOpen((o) => !o)}
+        data-tip={hint}
+        className="inline-flex h-8 max-w-[200px] cursor-pointer items-center gap-1.5 rounded-lg border border-line bg-bg px-2.5 text-xs text-zinc-300 transition-colors hover:border-violet/50 hover:text-zinc-100"
+      >
+        <FolderTree size={13} className="shrink-0 text-zinc-500" />
+        <span className="truncate">{current?.label ?? '—'}</span>
+        <ChevronDown size={12} className={cn('shrink-0 transition-transform', open ? 'rotate-180' : '')} />
+      </button>
+      <div className={cn('absolute bottom-full left-0 z-50 pb-1.5', open ? '' : 'hidden')}>
+        <div className="max-h-80 w-64 overflow-y-auto rounded-xl border border-line bg-card p-1 shadow-2xl">
+          {targets.map((t) => (
+            <button
+              key={t.value}
+              type="button"
+              onClick={() => {
+                onChange(t.value)
+                setOpen(false)
+              }}
+              className={cn(
+                'flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-xs transition-colors',
+                t.value === value ? 'bg-violet/15 font-medium text-zinc-100' : 'text-zinc-300 hover:bg-white/5'
+              )}
+            >
+              <FolderTree size={13} className={cn('shrink-0', t.value === value ? 'text-purple' : 'text-zinc-500')} />
+              <span className="truncate">{t.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function TerminalsPanel({
   tabs,
   order,
@@ -458,20 +518,15 @@ export function TerminalsPanel({
           }}
         />
 
-        <div className="flex h-8 shrink-0 items-center gap-1 rounded-lg border border-line bg-bg px-2 text-xs text-zinc-500" title={cwdLabel}>
-          <FolderTree size={12} />
-          <select
-            value={target}
-            onChange={(e) => onTargetChange(e.target.value)}
-            className="max-w-[160px] cursor-pointer bg-transparent text-xs text-zinc-300 focus:outline-none"
-          >
-            {targets.map((t) => (
-              <option key={t.value} value={t.value} className="bg-card">
-                {t.label}
-              </option>
-            ))}
-          </select>
-        </div>
+        <FolderPicker
+          targets={targets}
+          value={target}
+          hint={cwdLabel}
+          onChange={(v) => {
+            onTargetChange(v)
+            inputRef.current?.focus()
+          }}
+        />
 
         <div className="flex h-8 min-w-0 flex-1 items-center rounded-lg border border-line bg-bg px-2.5 focus-within:border-violet/70">
           {inputTarget === 'stdin' ? (

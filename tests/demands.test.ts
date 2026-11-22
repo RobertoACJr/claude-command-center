@@ -112,10 +112,10 @@ test('fluxo: Jira → análise → desenho → implementação contínua → bra
   exit(m, i2.runId!)
 
   // Branch com o nome do card
-  const b = await m.branch('d1', 'master')
+  const b = await m.branch('d1', { base: 'master' })
   assert.equal(b.ok, true, b.message)
   assert.equal(sh(work, 'branch', '--show-current'), 'WEB-482')
-  assert.equal((await m.branch('d1', 'x;rm')).ok, false)
+  assert.equal((await m.branch('d1', { base: 'x;rm' })).ok, false)
 
   // Revisão dupla: ChatGPT → Claude, com o diff da branch
   writeFileSync(join(work, 'filtro.ts'), 'export const f = 1\n')

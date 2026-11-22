@@ -1,8 +1,47 @@
 import { useEffect, useState } from 'react'
-import { Moon, Radio, Sun } from 'lucide-react'
+import { Eye, EyeOff, Loader2, Moon, Radio, RefreshCw, Sun } from 'lucide-react'
 import type { RemoteSession, WatcherState } from '@shared/types'
 import { Button, Modal } from './ui'
 import { fmtDuration } from '../lib/utils'
+
+/** Faixa do Vigia ligado com você Online: magenta, com o próximo giro e o último resultado */
+export function VigiaBanner({ watcher, onRunNow, onTurnOff }: { watcher: WatcherState; onRunNow: () => void; onTurnOff: () => void }) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    if (!watcher.nextAt) return
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [watcher.nextAt])
+  const left = watcher.nextAt ? Math.max(0, Math.round((watcher.nextAt - now) / 1000)) : null
+  const checking = watcher.phase === 'checking'
+  const blocked = watcher.phase === 'blocked'
+  return (
+    <div data-testid="vigia-banner" className="flex shrink-0 items-center justify-between gap-3 border-b border-violet/40 bg-violet/15 px-5 py-2 text-xs">
+      <div className="flex min-w-0 items-center gap-2 text-zinc-300">
+        {checking ? <Loader2 size={14} className="animate-spin text-purple" /> : <Eye size={14} className="text-purple" />}
+        <b className="shrink-0 text-purple">Vigia de plantão</b>
+        <span className="truncate text-zinc-400">
+          {blocked
+            ? `bloqueado: ${watcher.reason}`
+            : checking
+              ? 'olhando o Google Chat agora…'
+              : left !== null
+                ? `próxima olhada em ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`
+                : watcher.reason}
+          {watcher.lastResult ? ` · último: ${watcher.lastResult}` : ''}
+        </span>
+      </div>
+      <div className="flex shrink-0 gap-1.5">
+        <Button size="sm" disabled={checking || blocked} onClick={onRunNow}>
+          <RefreshCw size={12} /> Olhar agora
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onTurnOff}>
+          <EyeOff size={12} /> Desligar
+        </Button>
+      </div>
+    </div>
+  )
+}
 
 /** Faixa do modo Ausente: deixa claro que o app está em "piloto automático" */
 export function AwayBanner({

@@ -202,12 +202,38 @@ export function DemandModal({
     if (!busyWhat) setResult((r) => (r?.ok ? null : r))
   }, [busyWhat])
 
-  useEffect(() => setBase(currentBranch && currentBranch !== demand?.key ? currentBranch : ''), [currentBranch, demand?.key])
+  const [syncLinked, setSyncLinked] = useState(true)
 
   if (!open || !draft) return null
   const d = draft
   const project = projects.find((p) => p.id === d.projectId)
   const working = !!busy
+  // Remotos (variáveis remoto_empresa / remoto_fork) e projetos ligados, como o app principal calcula
+  const varOf = (k: string) => project?.vars.find((v) => v.key === k)?.value.trim() || ''
+  const forkRemote = varOf('remoto_fork') || varOf('remote') || 'origin'
+  const companyRemote = varOf('remoto_empresa') || forkRemote
+  const splitRemotes = companyRemote !== forkRemote
+  const linkedProjects = project
+    ? projects.filter(
+        (o) => o.id !== project.id && ((project.linkedProjectIds ?? []).includes(o.id) || (o.linkedProjectIds ?? []).includes(project.id))
+      )
+    : []
+  const goBranch = async (opts: { base?: string; createOnCompany?: boolean }) => {
+    await flush(d)
+    const r = await window.api.demandBranch(d.id, { ...opts, linked: syncLinked })
+    if (r.needsCompanyBranch) {
+      const ok = confirm(
+        `${r.message}\n\nCriar ${d.key} no ${companyRemote} a partir da ${git?.base ?? 'principal'} de lá? ` +
+          `É um push para o remoto da empresa, o mesmo que criar a branch pelo site.`
+      )
+      if (ok) {
+        setResult(await window.api.demandBranch(d.id, { createOnCompany: true, linked: syncLinked }))
+      } else {
+        setResult({ ok: false, message: `Nada feito. Crie ${d.key} no site da empresa e clique de novo, ou crie só local.` })
+      }
+    } else setResult(r)
+    onGitChanged()
+  }
   const keyOk = /^[A-Za-z][A-Za-z0-9_]*-\d+$/.test(d.key.trim())
 
   const flush = async (next: Demand) => {
@@ -679,7 +705,9 @@ export function DemandModal({
                     <GitMerge size={12} /> Atualizar com a {git.base}
                   </Button>
                   <span className="text-[11px] text-zinc-500">
-                    Busca a {git.base} do remoto e faz merge nesta branch (precisa estar sem alterações pendentes).
+                    {splitRemotes
+                      ? `Busca ${companyRemote}/${d.key} e ${companyRemote}/${git.base} e faz merge nesta branch, sem push (precisa estar sem alterações pendentes).`
+                      : `Busca a ${git.base} do ${companyRemote} e faz merge nesta branch (precisa estar sem alterações pendentes).`}
                     {git.changed > 0 && <span className="text-amber-300"> Agora há {git.changed} alterado(s) sem commit.</span>}
                   </span>
                 </div>
@@ -711,13 +739,45 @@ export function DemandModal({
               </div>
             )}
             {currentBranch !== d.key && (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs text-zinc-500">criar a partir de</span>
-                <input className={inputCls + ' w-48 font-mono text-xs'} value={base} onChange={(e) => setBase(e.target.value)} placeholder="branch atual" />
-                <Button size="sm" disabled={working} onClick={() => act(() => window.api.demandBranch(d.id, base))}>
-                  <GitBranch size={12} /> Criar / ir para {d.key}
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button size="sm" variant="primary" disabled={working} data-testid="demand-branch" onClick={() => goBranch({})}>
+                    <GitBranch size={12} /> Ir para {d.key}
+                  </Button>
+                  <span className="text-[11px] text-zinc-500">
+                    {splitRemotes
+                      ? `Se já existir aqui, só troca; senão busca ${companyRemote}/${d.key} (git checkout -b ${d.key} ${companyRemote}/${d.key}). Se não existir lá, pergunta antes de criar.`
+                      : `Se já existir, só troca; senão busca ${companyRemote}/${d.key} ou cria a partir da branch atual.`}
+                  </span>
+                </div>
+                {linkedProjects.length > 0 && (
+                  <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-zinc-400">
+                    <input type="checkbox" checked={syncLinked} onChange={(e) => setSyncLinked(e.target.checked)} className="accent-violet-500" />
+                    Levar também {linkedProjects.map((o) => o.name).join(', ')} para {d.key} (só se a branch existir lá; nada é criado)
+                  </label>
+                )}
+                {splitRemotes && (
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                    ou criar só local a partir de
+                    <input
+                      className={inputCls + ' h-7 w-40 font-mono text-xs'}
+                      value={base}
+                      onChange={(e) => setBase(e.target.value)}
+                      placeholder={currentBranch || 'branch atual'}
+                    />
+                    <Button size="sm" disabled={working} onClick={() => goBranch({ base: base.trim() || currentBranch || 'HEAD' })}>
+                      Criar local
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
+            {currentBranch === d.key && linkedProjects.length > 0 && (
+              <div className="mt-2 flex items-center gap-2 text-[11px] text-zinc-500">
+                <Button size="sm" disabled={working} onClick={() => goBranch({})} data-testid="demand-branch-linked">
+                  <GitBranch size={12} /> Levar {linkedProjects.map((o) => o.name).join(', ')} para {d.key}
                 </Button>
-                <span className="text-[11px] text-zinc-500">Se a branch já existir, o app só troca para ela.</span>
+                só troca onde a branch já existe
               </div>
             )}
           </div>

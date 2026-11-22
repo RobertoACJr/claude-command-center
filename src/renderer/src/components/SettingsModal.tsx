@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { AppWindow, ArrowLeftRight, Bell, Bot, Eye, Gem, Github, KeyRound, Loader2, MessageSquare, MessageSquareReply, Pencil, Plug, Plus, RefreshCw, Rocket, Search, Send, Settings, ShieldCheck, SquareKanban, Trash2, Workflow, X, Zap } from 'lucide-react'
+import { AppWindow, ArrowLeftRight, CircleHelp, Bell, Bot, Eye, Gem, Github, KeyRound, Loader2, MessageSquare, MessageSquareReply, Pencil, Plug, Plus, RefreshCw, Rocket, Search, Send, Settings, ShieldCheck, SquareKanban, Trash2, Workflow, X, Zap } from 'lucide-react'
 import type {
   AiProvider,
   AppConfig,
@@ -194,12 +194,9 @@ function SyncSection({ config, save }: { config: AppConfig; save: SaveFn }) {
 /** Bolinha "?" que mostra uma explicação ao passar o mouse */
 function HelpTip({ children }: { children: ReactNode }) {
   return (
-    <span className="group relative inline-flex">
-      <span
-        tabIndex={0}
-        className="flex h-4 w-4 cursor-help items-center justify-center rounded-full border border-zinc-600 text-[10px] font-bold text-zinc-400 group-hover:border-violet group-hover:text-purple"
-      >
-        ?
+    <span className="group relative inline-flex items-center self-center">
+      <span tabIndex={0} className="flex cursor-help items-center text-zinc-500 group-hover:text-purple">
+        <CircleHelp size={15} strokeWidth={2} />
       </span>
       <span className="pointer-events-none invisible absolute top-6 left-1/2 z-50 w-80 -translate-x-1/2 rounded-lg border border-line bg-card p-3 text-[11px] font-normal leading-relaxed text-zinc-300 opacity-0 shadow-2xl transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
         {children}
@@ -225,8 +222,8 @@ function Section({
   return (
     <div className="rounded-xl border border-line bg-card-2 p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
-          <span className="text-purple">{icon}</span>
+        <div className="flex items-center gap-2 text-sm font-semibold leading-none text-zinc-100">
+          <span className="flex items-center text-purple">{icon}</span>
           {title}
           {help && <HelpTip>{help}</HelpTip>}
         </div>
@@ -323,6 +320,12 @@ const CHECK_STYLE = {
   off: ['○', 'text-zinc-500']
 } as const
 
+function fmtWhen(at: number): string {
+  const d = new Date(at)
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return new Date().toDateString() === d.toDateString() ? `hoje às ${time}` : `${d.toLocaleDateString()} às ${time}`
+}
+
 /** Resultado do teste de verdade (conta, MCP no Claude, conectores da conta claude.ai) */
 function CheckList({ check, testing }: { check: IntegrationCheck | undefined; testing: boolean }) {
   if (testing && !check)
@@ -343,7 +346,7 @@ function CheckList({ check, testing }: { check: IntegrationCheck | undefined; te
         </div>
       ))}
       <div className="text-[10px] text-zinc-600">
-        testado {new Date(check.at).toLocaleTimeString()} {testing && '· testando de novo…'}
+        testado {fmtWhen(check.at)} {testing ? '· testando de novo…' : '· o resultado fica guardado por um dia'}
       </div>
     </div>
   )
@@ -363,6 +366,31 @@ function CheckBadge({ check, testing }: { check: IntegrationCheck | undefined; t
 }
 
 // ---------------------------------------------------------------- Integrações
+
+const CHECKS_KEY = 'helice.testesIntegracoes'
+const CHECK_TTL = 24 * 60 * 60 * 1000
+
+/** Resultados de teste guardados neste PC (valem um dia) */
+function loadChecks(): Partial<Record<IntegrationId, IntegrationCheck>> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(CHECKS_KEY) || '{}') as Record<string, IntegrationCheck>
+    const out: Partial<Record<IntegrationId, IntegrationCheck>> = {}
+    for (const [k, v] of Object.entries(raw)) {
+      if (v && typeof v.at === 'number' && Array.isArray(v.lines) && Date.now() - v.at < CHECK_TTL) out[k as IntegrationId] = v
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function saveChecks(c: Partial<Record<IntegrationId, IntegrationCheck>>) {
+  try {
+    localStorage.setItem(CHECKS_KEY, JSON.stringify(c))
+  } catch {
+    /* sem armazenamento: testa de novo na próxima vez */
+  }
+}
 
 function IntegrationsTab({ config, sec, save }: { config: AppConfig; sec: SecretsStatus; save: SaveFn }) {
   const i = config.integrations
@@ -396,20 +424,25 @@ function IntegrationsTab({ config, sec, save }: { config: AppConfig; sec: Secret
       setEditing((e) => ({ ...e, [id]: false }))
     })
 
-  // Teste de verdade: roda sozinho ao abrir a aba e depois de aplicar
-  const [checks, setChecks] = useState<Partial<Record<IntegrationId, IntegrationCheck>>>({})
+  // Teste de verdade: o resultado fica guardado por um dia (Testar de novo refaz na hora).
+  // Ao abrir a aba, só testa o que não tem resultado recente, e depois de aplicar.
+  const [checks, setChecks] = useState<Partial<Record<IntegrationId, IntegrationCheck>>>(loadChecks)
   const [testing, setTesting] = useState<Partial<Record<IntegrationId, boolean>>>({})
   const test = async (id: IntegrationId) => {
     setTesting((t) => ({ ...t, [id]: true }))
     try {
       const c = await window.api.integrationCheck(id)
-      setChecks((s) => ({ ...s, [id]: c }))
+      setChecks((s) => {
+        const next = { ...s, [id]: c }
+        saveChecks(next)
+        return next
+      })
     } finally {
       setTesting((t) => ({ ...t, [id]: false }))
     }
   }
   useEffect(() => {
-    for (const id of ['jira', 'github', 'gchat'] as IntegrationId[]) test(id)
+    for (const id of ['jira', 'github', 'gchat'] as IntegrationId[]) if (!checks[id]) test(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const status = (id: IntegrationId) => test(id)
@@ -419,15 +452,16 @@ function IntegrationsTab({ config, sec, save }: { config: AppConfig; sec: Secret
     const main = checks[id]?.lines.filter((l) => !l.label.startsWith('Conectores da sua conta')) ?? []
     return main.some((l) => l.state === 'ok') && !main.some((l) => l.state === 'fail')
   }
-  const showForm = (id: IntegrationId) => !working(id) || !!editing[id]
+  // Testando: os campos esperam o resultado (não aparecem e somem logo depois)
+  const showForm = (id: IntegrationId) => !testing[id] && (!working(id) || !!editing[id])
 
   const clearSecret = (k: SecretKey) => save({ secrets: { [k]: null } })
 
   return (
     <div className="space-y-3">
       <p className="text-[11px] text-zinc-500">
-        Cada integração é testada de verdade ao abrir esta aba. Passe o mouse no <b>?</b> para ver para que serve. As que
-        estão funcionando ficam fechadas; use o lápis para editar.
+        Cada integração é testada de verdade e o resultado fica guardado por um dia (use Testar de novo quando quiser). Passe
+        o mouse no <b>?</b> para ver para que serve. As que estão funcionando ficam fechadas; use o lápis para editar.
       </p>
 
       {/* GitHub */}

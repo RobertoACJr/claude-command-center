@@ -4,7 +4,7 @@ import { writeFileAtomic } from './fsutil'
 import { join } from 'path'
 import type { Demand, DemandAi, DemandBusy, DemandJira, DemandQueueCopy, DemandReview, DemandStatus, DemandTiming, OpResult, PrComment, PrDraft, Project, ReviewAi, RunEvent } from '../shared/types'
 import { spawn } from 'child_process'
-import { baseBranch, bringQueueToBranch, dirSize, git, gitInfo, queueAhead, removeWorktree, updateWithBase } from './git'
+import { baseBranch, bringQueueToBranch, dirSize, fetchRemoteBranch, git, gitInfo, githubRepoOf, goToDemandBranch, linkedProjectsOf, queueAhead, remotesOf, remoteUrl, removeWorktree, updateWithBase, type DemandBranchResult } from './git'
 import { readGuides } from './guides'
 import type { RunManager } from './runner'
 import { secrets } from './secrets'
@@ -721,23 +721,36 @@ export class DemandManager {
     if (b?.runId) await this.runs.stop(b.runId)
   }
 
-  /** Branch com o nome do card. Se já existe, só troca para ela. */
-  async branch(id: string, base: string): Promise<OpResult> {
+  /**
+   * Vai para a branch do card (fluxo empresa + fork, veja goToDemandBranch) e leva junto
+   * os projetos ligados (ex.: o back) para a mesma branch, quando ela existir lá.
+   */
+  async branch(
+    id: string,
+    opts: { base?: string; createOnCompany?: boolean; linked?: boolean } = {}
+  ): Promise<DemandBranchResult & { linked?: Array<{ project: string; ok: boolean; message: string }> }> {
     const d = this.get(id)
     if (!d) return { ok: false, message: 'Demanda não encontrada.' }
     const p = this.projectOf(d)
     if (!p) return { ok: false, message: 'O projeto desta demanda não existe mais.' }
     if (!CARD_RE.test(d.key)) return { ok: false, message: 'O número do card não serve como nome de branch.' }
-    const b = base.trim()
-    if (b && !/^[\w./-]+$/.test(b)) return { ok: false, message: 'Nome da branch base inválido.' }
     this.setBusy(id, { demandId: id, what: 'branch' })
     try {
-      const exists = (await git(p.path, ['rev-parse', '--verify', '--quiet', `refs/heads/${d.key}`])).ok
-      const r = exists ? await git(p.path, ['checkout', d.key]) : await git(p.path, ['checkout', '-b', d.key, ...(b ? [b] : [])])
-      if (!r.ok) return { ok: false, message: `O git recusou: ${r.out.split('\n').slice(-3).join(' ')}` }
-      this.note(d, exists ? `Voltou para a branch ${d.key}` : `Branch ${d.key} criada${b ? ` a partir de ${b}` : ''}`)
+      const r = await goToDemandBranch(p, d.key, { base: opts.base, createOnCompany: opts.createOnCompany })
+      if (!r.ok) return r
+      this.note(d, r.message)
+      const linked: Array<{ project: string; ok: boolean; message: string }> = []
+      if (opts.linked !== false) {
+        for (const lp of linkedProjectsOf(p, store.get().projects)) {
+          if (!lp.path) continue
+          const lr = await goToDemandBranch(lp, d.key, { onlyExisting: true })
+          linked.push({ project: lp.name, ok: lr.ok, message: lr.message })
+          if (lr.ok && !lr.skipped) this.note(d, `${lp.name}: ${lr.message}`)
+        }
+      }
       this.persist(d)
-      return { ok: true, message: exists ? `Branch ${d.key} já existia: agora você está nela.` : `Branch ${d.key} criada e ativa.` }
+      const extra = linked.length ? ' ' + linked.map((l) => `${l.project}: ${l.message}`).join(' ') : ''
+      return { ...r, message: r.message + extra, linked }
     } finally {
       this.setBusy(id, null)
     }
@@ -775,9 +788,14 @@ export class DemandManager {
     if (!info) return { ok: false, message: 'A pasta do projeto não é um repositório git.' }
     const hasBranch = (await git(p.path, ['rev-parse', '--verify', '--quiet', `refs/heads/${d.key}`])).ok
     if (!hasBranch) return { ok: false, message: `A branch ${d.key} ainda não existe.` }
+    // Compara com o destino do PR: empresa/KEY (fluxo com fork), senão a principal da empresa
     const base = info.base
-    const remoteBase = (await git(p.path, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${base}`])).ok
-    const ref = remoteBase ? `origin/${base}` : base
+    const { company, split } = remotesOf(p)
+    const ref = split && (await fetchRemoteBranch(p, company, d.key))
+      ? `${company}/${d.key}`
+      : (await git(p.path, ['rev-parse', '--verify', '--quiet', `refs/remotes/${company}/${base}`])).ok
+        ? `${company}/${base}`
+        : base
     const committed = await git(p.path, ['diff', `${ref}...${d.key}`], 30_000)
     const onBranch = info.branch === d.key
     const pending = onBranch ? await git(p.path, ['diff', 'HEAD'], 30_000) : { ok: true, out: '' }
@@ -916,7 +934,17 @@ export class DemandManager {
     const d = this.get(id)
     const p = d && this.projectOf(d)
     if (!d || !p) return null
-    return buildPrDraft(d, await baseBranch(p))
+    const { company, split } = remotesOf(p)
+    // No fluxo com fork o PR vai de fork/KEY para empresa/KEY
+    return buildPrDraft(d, split ? `${company}/${d.key}` : await baseBranch(p))
+  }
+
+  /** "dono/repo" do remoto no GitHub, para o gh saber onde abrir/ler o PR */
+  private async ghRepos(p: Project): Promise<{ company: string | null; fork: string | null }> {
+    const { company, fork } = remotesOf(p)
+    const cu = await remoteUrl(p, company)
+    const fu = await remoteUrl(p, fork)
+    return { company: cu ? githubRepoOf(cu) : null, fork: fu ? githubRepoOf(fu) : null }
   }
 
   /** Envia a branch (push) e abre o PR com o gh */
@@ -925,10 +953,29 @@ export class DemandManager {
     const p = d && this.projectOf(d)
     if (!d || !p) return { ok: false, message: 'Demanda não encontrada.' }
     if (!(await git(p.path, ['rev-parse', '--verify', '--quiet', `refs/heads/${d.key}`])).ok) return { ok: false, message: `A branch ${d.key} ainda não existe.` }
-    const base = await baseBranch(p)
-    const push = await git(p.path, ['push', '-u', 'origin', d.key], 180_000)
-    if (!push.ok) return { ok: false, message: 'O push da branch falhou: ' + push.out.split('\n').slice(-2).join(' ') }
-    const args = ['pr', 'create', '--base', base, '--head', d.key, '--title', pr.title.trim() || `${d.key}`, '--body-file', '-']
+    const { company, fork, split } = remotesOf(p)
+    const push = await git(p.path, ['push', '-u', fork, d.key], 180_000)
+    if (!push.ok) return { ok: false, message: `O push da branch para o ${fork} falhou: ` + push.out.split('\n').slice(-2).join(' ') }
+    let args: string[]
+    if (split) {
+      const repos = await this.ghRepos(p)
+      if (!repos.company || !repos.fork) {
+        this.note(d, `Branch enviada para o ${fork}`)
+        this.persist(d)
+        return {
+          ok: false,
+          message: `Branch enviada para o ${fork}. O app só abre PR sozinho no GitHub: abra pelo site, de ${fork}/${d.key} para ${company}/${d.key}.`
+        }
+      }
+      if (!(await fetchRemoteBranch(p, company, d.key))) {
+        return { ok: false, message: `Branch enviada para o ${fork}, mas ${d.key} não existe no ${company} para receber o PR. Crie lá (botão da branch) e tente de novo.` }
+      }
+      const forkOwner = repos.fork.split('/')[0]
+      args = ['pr', 'create', '--repo', repos.company, '--base', d.key, '--head', `${forkOwner}:${d.key}`, '--title', pr.title.trim() || `${d.key}`, '--body-file', '-']
+    } else {
+      const base = await baseBranch(p)
+      args = ['pr', 'create', '--base', base, '--head', d.key, '--title', pr.title.trim() || `${d.key}`, '--body-file', '-']
+    }
     if (pr.draft) args.push('--draft')
     const r = await ghRun(p.path, args, pr.body)
     if (r.missing) return { ok: false, message: 'O GitHub CLI (gh) não está instalado. Veja em Configurações → Começar.' }
@@ -955,7 +1002,9 @@ export class DemandManager {
     const d = this.get(id)
     const p = d && this.projectOf(d)
     if (!d || !p) return { ok: false, message: 'Demanda não encontrada.' }
-    const view = await ghRun(p.path, ['pr', 'view', d.key, '--json', 'number,url,comments,reviews'], '')
+    const { split } = remotesOf(p)
+    const repo = split ? (await this.ghRepos(p)).company : null
+    const view = await ghRun(p.path, ['pr', 'view', d.key, ...(repo ? ['--repo', repo] : []), '--json', 'number,url,comments,reviews'], '')
     if (view.missing) return { ok: false, message: 'O GitHub CLI (gh) não está instalado. Veja em Configurações → Começar.' }
     if (!view.ok) {
       if (/no pull requests found|no open pull/i.test(view.out)) return { ok: false, message: `Não achei PR da branch ${d.key}.` }
@@ -969,7 +1018,7 @@ export class DemandManager {
       return { ok: false, message: 'Resposta estranha do gh.' }
     }
     if (data.url) d.prUrl = data.url
-    const inline = await ghRun(p.path, ['api', `repos/{owner}/{repo}/pulls/${data.number}/comments`, '--paginate'], '')
+    const inline = await ghRun(p.path, ['api', `repos/${repo ?? '{owner}/{repo}'}/pulls/${data.number}/comments`, '--paginate'], '')
     const me = (await ghRun(p.path, ['api', 'user', '--jq', '.login'], '')).out.trim()
     let lines: any[] = []
     try {

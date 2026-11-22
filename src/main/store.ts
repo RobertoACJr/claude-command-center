@@ -209,6 +209,9 @@ function normProject(p: Project): Project {
     routes: Array.isArray(p.routes) ? p.routes.filter((x) => typeof x === 'string').map((x) => x.trim()).filter(Boolean).slice(0, 30) : [],
     mobileShots: bool(p.mobileShots, false),
     memoryFile: str(p.memoryFile).trim() || 'CLAUDE.md',
+    linkedProjectIds: Array.isArray(p.linkedProjectIds)
+      ? [...new Set(p.linkedProjectIds.filter((x) => typeof x === 'string' && x && x !== p.id))].slice(0, 10)
+      : [],
     guides: Array.isArray(p.guides)
       ? [...new Set(p.guides.filter((g) => typeof g === 'string').map((g) => g.trim().replace(/\\/g, '/')).filter(Boolean))].slice(0, 10)
       : []

@@ -778,7 +778,13 @@ function registerIpc(): void {
   ipcMain.handle('demands:implement', (_e, id: string, message: string, fresh?: boolean) =>
     demands.implement(String(id), String(message ?? ''), Boolean(fresh))
   )
-  ipcMain.handle('demands:branch', (_e, id: string, base: string) => demands.branch(String(id), String(base ?? '')))
+  ipcMain.handle('demands:branch', (_e, id: string, opts: { base?: string; createOnCompany?: boolean; linked?: boolean }) =>
+    demands.branch(String(id), {
+      base: typeof opts?.base === 'string' ? opts.base : undefined,
+      createOnCompany: opts?.createOnCompany === true,
+      linked: opts?.linked !== false
+    })
+  )
   ipcMain.handle('demands:stop', (_e, id: string) => demands.stop(String(id)))
   ipcMain.handle('demands:review', (_e, id: string) => demands.review(String(id)))
   ipcMain.handle('demands:saveReview', (_e, id: string, text: string) => demands.saveReview(String(id), String(text ?? '')))

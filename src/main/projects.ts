@@ -73,10 +73,18 @@ export class ProjectProcesses {
     }
   }
 
-  async start(id: string): Promise<OpResult> {
+  /** Projeto ligado -> projeto que o ligou junto (para desligar junto também) */
+  private startedWith = new Map<string, string>()
+
+  /**
+   * Executa o projeto. Com `cascade`, também executa os projetos ligados a ele
+   * (ex.: ligar o front liga o back), antes dele, para a API já estar subindo.
+   */
+  async start(id: string, cascade = true, seen = new Set<string>()): Promise<OpResult> {
     const p = this.projects.get(id)
     if (!p) return { ok: false, message: 'Projeto não encontrado.' }
     if (!p.runCommand) return { ok: false, message: 'Defina "Como executar" no cadastro do projeto.' }
+    seen.add(id)
     const s = this.get(id)
     if (this.runs.isRunning(s.runId)) return { ok: true, message: 'Já está rodando.' }
 
@@ -87,6 +95,23 @@ export class ProjectProcesses {
       return {
         ok: false,
         message: `A porta ${p.port} já está em uso: o projeto parece estar rodando fora do app. Feche o outro processo e tente de novo.`
+      }
+    }
+
+    const alsoStarted: string[] = []
+    const problems: string[] = []
+    if (cascade) {
+      for (const lid of p.linkedProjectIds ?? []) {
+        if (seen.has(lid)) continue
+        const lp = this.projects.get(lid)
+        if (!lp?.runCommand) continue
+        const ls = this.get(lid)
+        if (this.runs.isRunning(ls.runId) || ls.state === 'external') continue
+        const r = await this.start(lid, true, seen)
+        if (r.ok) {
+          this.startedWith.set(lid, id)
+          alsoStarted.push(lp.name)
+        } else problems.push(`${lp.name}: ${r.message}`)
       }
     }
 
@@ -110,19 +135,30 @@ export class ProjectProcesses {
         this.changed()
       }
     }, p.port ? 60_000 : 2000)
-    return { ok: true, message: 'Iniciado.' }
+    let message = 'Iniciado.'
+    if (alsoStarted.length) message = `Iniciado junto com ${alsoStarted.join(', ')}.`
+    if (problems.length) message += ` Não deu para ligar: ${problems.join('; ')}`
+    return { ok: true, message }
   }
 
-  async stop(id: string): Promise<void> {
+  /** Para o projeto e, com `cascade`, os ligados que subiram junto com ele */
+  async stop(id: string, cascade = true): Promise<void> {
     const s = this.states.get(id)
     if (s?.runId && this.runs.isRunning(s.runId)) await this.runs.stop(s.runId)
+    if (!cascade) return
+    const mine = [...this.startedWith].filter(([, by]) => by === id).map(([lid]) => lid)
+    for (const lid of mine) {
+      this.startedWith.delete(lid)
+      await this.stop(lid, true)
+    }
   }
 
+  /** Reinicia só este projeto (os ligados continuam rodando) */
   async restart(id: string): Promise<OpResult> {
-    await this.stop(id)
+    await this.stop(id, false)
     // Dá um respiro para a porta ser liberada
     await new Promise((r) => setTimeout(r, 600))
-    return this.start(id)
+    return this.start(id, false)
   }
 
   /** Recebe todos os eventos de execução; só interessa a saída dos projetos */
@@ -133,6 +169,7 @@ export class ProjectProcesses {
     s.state = e.killed || e.code === 0 ? 'stopped' : 'crashed'
     s.exitCode = e.code
     s.runId = undefined
+    this.startedWith.delete(s.projectId)
     this.changed()
   }
 

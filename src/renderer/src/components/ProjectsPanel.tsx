@@ -1,7 +1,11 @@
 import {
+  Activity,
   AlertTriangle,
   AppWindow,
   Camera,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Link2,
   Braces,
   ChevronDown,
   ChevronRight,
@@ -76,6 +80,21 @@ export function ProjectsPanel({
   onError: (msg: string) => void
   scriptActions: ScriptActions
 }) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed)
+  const toggle = (id: string) =>
+    setCollapsed((c) => {
+      const n = new Set(c)
+      if (n.has(id)) n.delete(id)
+      else n.add(id)
+      saveCollapsed(n)
+      return n
+    })
+  const allCollapsed = projects.length > 0 && projects.every((p) => collapsed.has(p.id))
+  const toggleAll = () => {
+    const n = allCollapsed ? new Set<string>() : new Set(projects.map((p) => p.id))
+    saveCollapsed(n)
+    setCollapsed(n)
+  }
   return (
     <section className="flex min-h-0 min-w-0 flex-col rounded-2xl border border-line bg-card">
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
@@ -85,6 +104,11 @@ export function ProjectsPanel({
           <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-zinc-500">{projects.length}</span>
         </div>
         <div className="flex items-center gap-1">
+          {projects.length > 1 && (
+            <IconButton title={allCollapsed ? 'Expandir todos os projetos' : 'Recolher todos os projetos'} onClick={toggleAll} data-testid="collapse-all">
+              {allCollapsed ? <ChevronsUpDown size={14} /> : <ChevronsDownUp size={14} />}
+            </IconButton>
+          )}
           <IconButton title="Atualizar branches" onClick={onRefreshBranches}>
             <RefreshCw size={14} />
           </IconButton>
@@ -127,11 +151,33 @@ export function ProjectsPanel({
             onGitDiff={onGitDiff}
             onGitResult={onGitResult}
             onOpenShots={onOpenShots}
+            collapsed={collapsed.has(p.id)}
+            onToggleCollapse={() => toggle(p.id)}
           />
         ))}
       </div>
     </section>
   )
+}
+
+const COLLAPSED_KEY = 'helice.projetosRecolhidos'
+
+/** Quais cards estão recolhidos (só neste PC; não vai para a sincronização) */
+function loadCollapsed(): Set<string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(COLLAPSED_KEY) || '[]')
+    return new Set(Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function saveCollapsed(s: Set<string>) {
+  try {
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...s]))
+  } catch {
+    /* sem armazenamento: só não lembra */
+  }
 }
 
 function useTick(active: boolean) {
@@ -196,8 +242,12 @@ function ProjectCard({
   git,
   onGitDiff,
   onGitResult,
-  onOpenShots
+  onOpenShots,
+  collapsed,
+  onToggleCollapse
 }: {
+  collapsed: boolean
+  onToggleCollapse: () => void
   demands: Demand[]
   demandsBusy: DemandBusy[]
   onOpenDemand: (d: Demand) => void
@@ -247,7 +297,10 @@ function ProjectCard({
     try {
       const r = await fn()
       if (r && !r.ok) onError(`${p.name}: ${r.message}`)
-      else if (kind !== 'stop') onOpenTerminal(p.id)
+      else if (kind !== 'stop') {
+        if (r && /Não deu para ligar/.test(r.message)) onError(`${p.name}: ${r.message}`)
+        onOpenTerminal(p.id)
+      }
     } finally {
       // Segurança: nunca deixa o botão preso
       setTimeout(() => setBusy((b) => (b === kind ? null : b)), 1500)
@@ -260,24 +313,77 @@ function ProjectCard({
     setTimeout(() => setBusy((b) => (b === 'remote' ? null : b)), 8000)
   }
 
+  const links = (p.linkedProjectIds ?? []).map((id) => projects.find((o) => o.id === id)?.name).filter(Boolean) as string[]
+  const runButton =
+    p.runCommand &&
+    (alive ? (
+      <Button size="sm" variant="danger" disabled={!!busy && busy !== 'remote'} onClick={() => act('stop', () => window.api.projectStop(p.id))}>
+        {busy === 'stop' ? <Loader2 size={11} className="animate-spin" /> : <Square size={10} fill="currentColor" />}
+        {busy === 'stop' ? 'Parando…' : 'Parar'}
+      </Button>
+    ) : (
+      <Button
+        size="sm"
+        variant="primary"
+        disabled={busy === 'start'}
+        onClick={() => act('start', () => window.api.projectStart(p.id))}
+        title={links.length ? `${p.runCommand}\nLiga junto: ${links.join(', ')}` : p.runCommand}
+      >
+        {busy === 'start' ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+        {busy === 'start' ? 'Iniciando…' : 'Executar'}
+      </Button>
+    ))
+
+  if (collapsed) {
+    return (
+      <div data-testid="project-card" data-collapsed="true" className="group flex min-w-0 items-center gap-2 rounded-xl border border-line bg-card-2 px-2.5 py-2 transition-colors hover:border-violet/40">
+        <IconButton title="Expandir o projeto" onClick={onToggleCollapse} data-testid="project-collapse">
+          <ChevronRight size={14} />
+        </IconButton>
+        <button type="button" onClick={onToggleCollapse} className="min-w-0 flex-1 cursor-pointer truncate text-left text-sm font-medium text-zinc-100">
+          {p.name}
+          {branch && <span className="ml-2 font-mono text-[11px] font-normal text-purple">{branch}</span>}
+        </button>
+        {links.length > 0 && (
+          <span title={`Ligado a: ${links.join(', ')}`} className="text-zinc-500">
+            <Link2 size={12} />
+          </span>
+        )}
+        <RunChip p={p} run={run} />
+        {runButton}
+      </div>
+    )
+  }
+
   return (
-    <div className="group min-w-0 rounded-xl border border-line bg-card-2 p-3 transition-colors hover:border-violet/40">
+    <div data-testid="project-card" className="group min-w-0 rounded-xl border border-line bg-card-2 p-3 transition-colors hover:border-violet/40">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium text-zinc-100">{p.name}</div>
-          <div className="selectable mt-0.5 truncate font-mono text-[11px] text-zinc-500" title={p.path}>
-            {shortPath(p.path, 52)}
+        <div className="flex min-w-0 items-start gap-1">
+          <IconButton title="Recolher o projeto" onClick={onToggleCollapse} data-testid="project-collapse">
+            <ChevronDown size={14} />
+          </IconButton>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-medium text-zinc-100">{p.name}</div>
+            <div className="selectable mt-0.5 truncate font-mono text-[11px] text-zinc-500" title={p.path}>
+              {shortPath(p.path, 52)}
+            </div>
           </div>
         </div>
         <div className="flex shrink-0 items-center">
           {p.kind !== 'outro' && (
             <IconButton
-              title={p.kind === 'back' ? 'Checar a API (rotas do projeto)' : 'Telas: prints e erros do navegador'}
+              title={
+                p.kind === 'back'
+                  ? 'Checar a API: chama as rotas do projeto e confere o status de cada uma'
+                  : p.kind === 'fullstack'
+                    ? 'Telas e API: prints, erros do navegador e checagem das rotas'
+                    : 'Telas: prints e erros do navegador'
+              }
               tone="accent"
               data-testid="project-shots"
               onClick={() => onOpenShots(p)}
             >
-              <Camera size={13} />
+              {p.kind === 'back' ? <Activity size={13} /> : <Camera size={13} />}
             </IconButton>
           )}
           <IconButton title="Abrir o terminal do sistema nesta pasta" tone="accent" onClick={() => window.api.openSystemTerminal(p.path).then((r) => !r.ok && onError(r.message))}>
@@ -326,6 +432,14 @@ function ProjectCard({
           </span>
         )}
         <RunChip p={p} run={run} />
+        {links.length > 0 && (
+          <span
+            title="Executar este projeto também executa os ligados; parar desliga os que subiram junto"
+            className="inline-flex items-center gap-1 rounded-md border border-line px-1.5 py-0.5 text-[11px] text-zinc-400"
+          >
+            <Link2 size={11} /> liga junto: {links.join(', ')}
+          </span>
+        )}
       </div>
 
       {/* Variáveis do projeto (clique para editar) */}
@@ -349,30 +463,13 @@ function ProjectCard({
 
       {/* Ações do projeto */}
       <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-        {p.runCommand &&
-          (alive ? (
-            <>
-              <Button size="sm" variant="danger" disabled={!!busy && busy !== 'remote'} onClick={() => act('stop', () => window.api.projectStop(p.id))}>
-                {busy === 'stop' ? <Loader2 size={11} className="animate-spin" /> : <Square size={10} fill="currentColor" />}
-                {busy === 'stop' ? 'Parando…' : 'Parar'}
-              </Button>
-              <Button size="sm" disabled={!!busy && busy !== 'remote'} onClick={() => act('restart', () => window.api.projectRestart(p.id))}>
-                {busy === 'restart' ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
-                {busy === 'restart' ? 'Reiniciando…' : 'Reiniciar'}
-              </Button>
-            </>
-          ) : (
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={busy === 'start'}
-              onClick={() => act('start', () => window.api.projectStart(p.id))}
-              title={p.runCommand}
-            >
-              {busy === 'start' ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
-              {busy === 'start' ? 'Iniciando…' : 'Executar'}
-            </Button>
-          ))}
+        {runButton}
+        {alive && p.runCommand && (
+          <Button size="sm" disabled={!!busy && busy !== 'remote'} onClick={() => act('restart', () => window.api.projectRestart(p.id))}>
+            {busy === 'restart' ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+            {busy === 'restart' ? 'Reiniciando…' : 'Reiniciar'}
+          </Button>
+        )}
         <Button size="sm" onClick={() => onOpenTerminal(p.id)} title="Abrir o terminal deste projeto">
           <SquareTerminal size={12} /> Terminal
         </Button>

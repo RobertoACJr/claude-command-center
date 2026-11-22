@@ -36,6 +36,11 @@ export interface Project {
   mobileShots: boolean
   /** Arquivo de memória do projeto, onde ficam os aprendizados (o Claude lê sozinho). Padrão: CLAUDE.md */
   memoryFile: string
+  /**
+   * Projetos ligados: executar este também executa eles (ex.: o front liga o back) e parar desliga
+   * os que subiram junto. A branch da demanda também vai para eles quando existir lá.
+   */
+  linkedProjectIds: string[]
 }
 
 export type ProjectKind = 'front' | 'back' | 'fullstack' | 'outro'
@@ -793,7 +798,10 @@ export interface CommandCenterApi {
   demandFetchJira(id: string): Promise<OpResult>
   demandAnalyze(id: string, what: 'analysis' | 'design'): Promise<OpResult>
   demandImplement(id: string, message: string, fresh?: boolean): Promise<OpResult>
-  demandBranch(id: string, base: string): Promise<OpResult>
+  demandBranch(
+    id: string,
+    opts: { base?: string; createOnCompany?: boolean; linked?: boolean }
+  ): Promise<OpResult & { needsCompanyBranch?: boolean; linked?: Array<{ project: string; ok: boolean; message: string }> }>
   demandStop(id: string): Promise<void>
   demandReview(id: string): Promise<OpResult>
   demandSaveReview(id: string, text: string): Promise<void>

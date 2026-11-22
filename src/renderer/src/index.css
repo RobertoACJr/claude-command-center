@@ -63,6 +63,11 @@ textarea,
   --color-violet: #0e7490;
   --color-purple: #3cb8cf;
 }
+/* Vigia ligado (Online): o destaque vira magenta */
+[data-mode='vigia'] {
+  --color-violet: #db2777;
+  --color-purple: #f472b6;
+}
 ::selection {
   background: color-mix(in srgb, var(--color-violet) 45%, transparent);
 }

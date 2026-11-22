@@ -44,13 +44,14 @@ export function Header({
   onOpenPalette: () => void
 }) {
   const on = status === 'on'
+  const vigia = watcherEnabled && watcher.phase !== 'off'
   return (
     <header className="flex h-16 shrink-0 items-center justify-between border-b border-line bg-bg/80 px-5">
       <div className="flex items-center gap-3">
-        <HelixLogo size={36} away={!on} spin={busy} />
+        <HelixLogo size={36} tone={!on ? 'away' : vigia ? 'vigia' : 'online'} spin={busy} />
         <div className="leading-tight">
           <div className="text-[15px] font-semibold tracking-tight text-zinc-50">Hélice</div>
-          <div className="text-[11px] text-zinc-500">central de comando</div>
+          <div className={cn('text-[11px]', vigia && on ? 'text-purple' : 'text-zinc-500')}>{vigia && on ? 'vigia de plantão' : 'central de comando'}</div>
         </div>
       </div>
 
@@ -175,7 +176,7 @@ function WatcherPill({ state, enabled, onClick }: { state: WatcherState; enabled
   const look = {
     off: { cls: 'border-line bg-card text-zinc-500', icon: <EyeOff size={14} />, label: 'Vigia' },
     idle: {
-      cls: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+      cls: 'border-pink-500/50 bg-pink-500/15 text-pink-300',
       icon: <Eye size={14} />,
       label: mmss ? `Vigia · ${mmss}` : 'Vigia'
     },

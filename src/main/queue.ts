@@ -225,8 +225,11 @@ export class QueueManager {
       if (info && info.branch !== dm.key) {
         if (info.changed > 0) return this.fail(t, `${p.name} está em ${info.branch} com ${info.changed} alteração(ões) sem commit; não troquei para ${dm.key}.`)
         const has = (await git(p.path, ['rev-parse', '--verify', '--quiet', `refs/heads/${dm.key}`])).ok
-        const r = has ? await gitCheckout(p, dm.key) : await this.d.demands.branch(dm.id, '')
-        if (!r.ok) return this.fail(t, r.message)
+        const r = has ? await gitCheckout(p, dm.key) : await this.d.demands.branch(dm.id, {})
+        if (!r.ok) {
+          const ask = 'needsCompanyBranch' in r && r.needsCompanyBranch
+          return this.fail(t, ask ? `${r.message} A fila não cria branch no remoto da empresa sozinha: crie pela demanda e reenvie.` : r.message)
+        }
       }
       await this.d.shots?.(t, 'antes').catch(() => null)
       const r = this.d.demands.implement(dm.id, t.prompt + QUEUE_SUFFIX, false, 'fila')

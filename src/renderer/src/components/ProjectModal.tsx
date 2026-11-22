@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FolderGit2, FolderOpen, Plus, X } from 'lucide-react'
+import { FolderGit2, FolderOpen, Link2, Plus, X } from 'lucide-react'
 import type { ClaudePerms, Project, ProjectKind, ProjectVar } from '@shared/types'
 import { cn } from '../lib/utils'
 import { ClaudePermsEditor } from './ClaudePermsEditor'
@@ -9,17 +9,34 @@ import { uid } from '../lib/utils'
 /** Sugestões de variáveis comuns (clicáveis) */
 const VAR_SUGGESTIONS: ProjectVar[] = [
   { key: 'branch_principal', value: 'master' },
-  { key: 'remote', value: 'origin' },
+  { key: 'remoto_empresa', value: 'empresa' },
+  { key: 'remoto_fork', value: 'origin' },
   { key: 'branch_beta', value: 'beta' },
   { key: 'apelidos', value: '' }
 ]
+
+/** O que cada variável conhecida faz (aparece embaixo da linha) */
+const VAR_HELP: Record<string, string> = {
+  branch_principal:
+    'Branch de produção no remoto da empresa (ex: master). A branch do card nasce dela e o "Atualizar" da demanda faz merge dela.',
+  remoto_empresa:
+    'Nome, no seu git, do remoto da empresa, o que tem o código de produção (veja com git remote -v; ex: empresa ou upstream). A branch do card (MAS-123) nasce lá e o PR vai para ela.',
+  remoto_fork:
+    'Seu fork pessoal (normalmente origin). Seus pushes vão para ele e o PR sai daqui: origin/MAS-123 → empresa/MAS-123.',
+  remote: 'Nome antigo: vale como remoto_fork. Prefira remoto_empresa + remoto_fork.',
+  branch_beta: 'Branch de homologação, para usar nas suas ações globais como {{projeto.branch_beta}}.',
+  apelidos: 'Nomes que o pessoal usa no chat para este projeto, separados por vírgula: o Vigia reconhece o projeto por eles.'
+}
 
 export function ProjectModal({
   open,
   initial,
   onClose,
-  onSave
+  onSave,
+  projects
 }: {
+  /** Todos os projetos (para ligar este a outros) */
+  projects: Project[]
   open: boolean
   initial: Project | null
   onClose: () => void
@@ -41,6 +58,7 @@ export function ProjectModal({
   const [mobileShots, setMobileShots] = useState(false)
   const [memoryFile, setMemoryFile] = useState('CLAUDE.md')
   const [guideOk, setGuideOk] = useState<boolean[]>([])
+  const [linked, setLinked] = useState<string[]>([])
 
   useEffect(() => {
     if (!open) return
@@ -58,6 +76,7 @@ export function ProjectModal({
     setRoutes((initial?.routes ?? []).join('\n'))
     setMobileShots(initial?.mobileShots ?? false)
     setMemoryFile(initial?.memoryFile || 'CLAUDE.md')
+    setLinked(initial?.linkedProjectIds ?? [])
   }, [open, initial])
 
   const guideList = guides
@@ -122,7 +141,8 @@ export function ProjectModal({
         .map((r) => r.trim())
         .filter(Boolean),
       mobileShots,
-      memoryFile: memoryFile.trim() || 'CLAUDE.md'
+      memoryFile: memoryFile.trim() || 'CLAUDE.md',
+      linkedProjectIds: linked.filter((id) => projects.some((o) => o.id === id))
     })
     onClose()
   }
@@ -211,12 +231,32 @@ export function ProjectModal({
         hint={dupKeys.length > 0 ? <span className="text-red-400">Chave repetida: {dupKeys[0]}</span> : undefined}
       >
         <div className="mb-2 rounded-lg border border-line bg-bg p-2.5 text-xs leading-relaxed text-zinc-400">
-          São informações deste projeto que as <b className="text-zinc-200">ações globais</b> usam. Ex: cadastre{' '}
-          <code className="text-purple">remote = origin</code> aqui; numa ação global, o texto{' '}
-          <code className="text-purple">{'{{projeto.remote}}'}</code> vira <code>origin</code> quando você rodar neste
-          projeto (e vira o valor do outro projeto quando rodar lá). Use também <code>apelidos</code> (separados por
-          vírgula) para o Vigia reconhecer o projeto pelo nome que o pessoal usa no chat.
+          São informações deste projeto que o app e as <b className="text-zinc-200">ações globais</b> usam: numa ação global,{' '}
+          <code className="text-purple">{'{{projeto.remoto_fork}}'}</code> vira o valor deste projeto quando você roda aqui.
+          As sugestões abaixo já têm significado para o app (passe o mouse ou veja a explicação embaixo de cada uma).
         </div>
+        {keys.includes('remoto_empresa') && (
+          <div className="mb-2 rounded-lg border border-violet/30 bg-violet/5 p-2.5 text-[11px] leading-relaxed text-zinc-300" data-testid="git-flow">
+            <b className="text-purple">Fluxo com fork</b>, como o app faz em cada demanda (ex.: MAS-123):
+            <ol className="mt-1 list-decimal space-y-0.5 pl-4 text-zinc-400">
+              <li>
+                a branch <code>MAS-123</code> nasce no remoto da empresa a partir da principal (pelo site, ou o app cria se você
+                confirmar);
+              </li>
+              <li>
+                local: <code>git checkout -b MAS-123 {vars.find((v) => v.key === 'remoto_empresa')?.value || 'empresa'}/MAS-123</code>;
+              </li>
+              <li>
+                commits e push no seu fork (<code>{vars.find((v) => v.key === 'remoto_fork')?.value || 'origin'}</code>);
+              </li>
+              <li>
+                PR de <code>{vars.find((v) => v.key === 'remoto_fork')?.value || 'origin'}/MAS-123</code> para{' '}
+                <code>{vars.find((v) => v.key === 'remoto_empresa')?.value || 'empresa'}/MAS-123</code>. "Atualizar" traz o que
+                entrou em empresa/MAS-123 e na principal; a revisão compara com empresa/MAS-123 (o mesmo que o PR mostra).
+              </li>
+            </ol>
+          </div>
+        )}
         <div className="space-y-1.5">
           {vars.length > 0 && (
             <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] gap-2 px-1 text-[10px] uppercase tracking-wider text-zinc-600">
@@ -247,6 +287,7 @@ export function ProjectModal({
               <IconButton title="Remover" tone="danger" onClick={() => setVars((vs) => vs.filter((_, j) => j !== i))}>
                 <X size={13} />
               </IconButton>
+              {VAR_HELP[v.key.trim()] && <div className="col-span-4 -mt-1 px-1 text-[11px] leading-snug text-zinc-500">{VAR_HELP[v.key.trim()]}</div>}
             </div>
           ))}
           <div className="flex flex-wrap items-center gap-1.5">
@@ -257,6 +298,7 @@ export function ProjectModal({
               <button
                 key={s.key}
                 type="button"
+                title={VAR_HELP[s.key]}
                 onClick={() => setVars((vs) => [...vs, { ...s }])}
                 className="cursor-pointer rounded-md border border-dashed border-line px-2 py-0.5 font-mono text-[11px] text-zinc-500 hover:border-violet/60 hover:text-zinc-300"
               >
@@ -266,6 +308,35 @@ export function ProjectModal({
           </div>
         </div>
       </Field>
+
+      {projects.some((o) => o.id !== initial?.id) && (
+        <Field
+          label="Projetos ligados"
+          hint="Executar este projeto também executa os marcados (ex.: o front liga o back); parar desliga os que subiram junto. Nas demandas, a branch do card também vai para eles quando existir lá."
+        >
+          <div className="flex flex-wrap gap-1.5" data-testid="project-links">
+            {projects
+              .filter((o) => o.id !== initial?.id)
+              .map((o) => {
+                const on = linked.includes(o.id)
+                return (
+                  <button
+                    key={o.id}
+                    type="button"
+                    onClick={() => setLinked((l) => (on ? l.filter((x) => x !== o.id) : [...l, o.id]))}
+                    className={cn(
+                      'inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs transition-colors',
+                      on ? 'border-violet/60 bg-violet/15 text-purple' : 'border-line text-zinc-400 hover:text-zinc-200'
+                    )}
+                  >
+                    <Link2 size={12} />
+                    {o.name}
+                  </button>
+                )
+              })}
+          </div>
+        </Field>
+      )}
 
       <Field
         label="Tipo do projeto"

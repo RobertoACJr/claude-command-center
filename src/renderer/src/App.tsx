@@ -27,7 +27,7 @@ import { ScriptModal } from './components/ScriptModal'
 import { VariablesModal } from './components/VariablesModal'
 import { SettingsModal, type SettingsTab } from './components/SettingsModal'
 import { AlertsBar } from './components/AlertsBar'
-import { AwayBanner, GoOnlineModal } from './components/Presence'
+import { AwayBanner, GoOnlineModal, VigiaBanner } from './components/Presence'
 import {
   FIXED_TABS,
   TerminalsPanel,
@@ -344,10 +344,11 @@ export default function App() {
     [goTo]
   )
 
-  // Tema: azul-petróleo no modo Ausente
+  // Tema: azul-petróleo no modo Ausente; magenta com o Vigia ligado e você Online
+  const vigiaOn = !!config?.watcher.enabled && watcher.phase !== 'off'
   useEffect(() => {
-    document.documentElement.dataset.mode = config?.status === 'off' ? 'away' : 'online'
-  }, [config?.status])
+    document.documentElement.dataset.mode = config?.status === 'off' ? 'away' : vigiaOn ? 'vigia' : 'online'
+  }, [config?.status, vigiaOn])
 
   // ---------- branches ----------
   const [gitInfos, setGitInfos] = useState<Record<string, GitInfo | null>>({})
@@ -848,6 +849,13 @@ export default function App() {
           </button>
         </div>
       )}
+      {!away && vigiaOn && (
+        <VigiaBanner
+          watcher={watcher}
+          onRunNow={() => window.api.watcherRunNow()}
+          onTurnOff={async () => setConfig(await window.api.setWatcherEnabled(false))}
+        />
+      )}
       {away && (
         <AwayBanner since={config.statusSince} watcher={watcher} remoteActive={activeRemote.length} onBack={togglePresence} />
       )}
@@ -1011,6 +1019,7 @@ export default function App() {
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} items={paletteItems} />
 
       <ProjectModal
+        projects={config?.projects ?? []}
         open={projectModal.open}
         initial={projectModal.item}
         onClose={() => setProjectModal({ open: false, item: null })}

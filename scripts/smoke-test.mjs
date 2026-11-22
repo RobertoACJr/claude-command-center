@@ -129,7 +129,7 @@ try {
   }
   const clickByText = (text) =>
     evaluate(`(() => {
-      const el = [...document.querySelectorAll('button')].find(b => b.textContent.includes(${JSON.stringify(text)}) || b.title === ${JSON.stringify(text)})
+      const el = [...document.querySelectorAll('button')].find(b => b.textContent.includes(${JSON.stringify(text)}) || b.title === ${JSON.stringify(text)} || b.dataset.tip === ${JSON.stringify(text)})
       if (!el) return false
       el.click(); return true
     })()`)
@@ -230,10 +230,26 @@ try {
   if (!(await bodyText()).includes('Parado')) fail('Projeto não voltou para "Parado"')
   else console.log('✓ Projeto parou')
 
+  // 4b2) Tooltip próprio (no lugar do balão nativo), recolher o card e o seletor de pasta do terminal
+  await evaluate(`document.querySelector('[data-testid="project-collapse"]').dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))`)
+  await sleep(800)
+  const tip = await evaluate(`document.querySelector('[data-testid="tooltip"]')?.textContent ?? ''`)
+  if (!tip.includes('Recolher')) fail('Tooltip próprio não apareceu: ' + JSON.stringify(tip))
+  else console.log('✓ Tooltip próprio apareceu')
+  await evaluate(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`)
+  await evaluate(`document.querySelector('[data-testid="project-collapse"]').click()`)
+  await sleep(400)
+  if (!(await evaluate(`!!document.querySelector('[data-testid="project-card"][data-collapsed="true"]')`))) fail('Card do projeto não recolheu')
+  await evaluate(`document.querySelector('[data-testid="project-collapse"]').click()`)
+  await sleep(400)
+  if (await evaluate(`!!document.querySelector('[data-testid="project-card"][data-collapsed="true"]')`)) fail('Card do projeto não expandiu de novo')
+  else console.log('✓ Card do projeto recolhe e expande')
+  if (!(await evaluate(`!!document.querySelector('[data-testid="folder-picker"]')`))) fail('Seletor de pasta do terminal não encontrado')
+
   // 4c) Remote Control com link enorme: não pode criar rolagem horizontal; vira notificação no sino
   const clickRemote = () =>
     evaluate(`(() => {
-      const el = document.querySelector('[role="switch"][title*="Remote Control deste projeto"]')
+      const el = document.querySelector('[role="switch"][title*="Remote Control deste projeto"], [role="switch"][data-tip*="Remote Control deste projeto"]')
       if (!el) return false
       el.click(); return true
     })()`)
@@ -335,7 +351,7 @@ try {
   if (!ql.includes('tarefa de teste da fila') || !(await bodyText()).includes('Esperando você ir para Ausente')) fail('Fila não recebeu a tarefa ou não está esperando o Ausente: ' + ql.slice(0, 200))
   else console.log('✓ Fila recebeu a tarefa e espera o modo Ausente')
   // Remove para não rodar quando o teste for para Ausente
-  await evaluate(`[...document.querySelectorAll('[data-testid="queue-list"] button[title="Cancelar"]')].forEach(b => b.click())`)
+  await evaluate(`[...document.querySelectorAll('[data-testid="queue-list"] button[title="Cancelar"], [data-testid="queue-list"] button[data-tip="Cancelar"]')].forEach(b => b.click())`)
   await sleep(300)
   await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
   await sleep(300)

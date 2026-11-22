@@ -29,16 +29,139 @@ export async function getGitBranch(cwd: string): Promise<string | null> {
 
 export const SAFE_BRANCH = /^[\w./-]+$/
 
-/** Branch principal: variável branch_principal do projeto, senão a padrão do remoto, senão main/master */
+// ---------------------------------------------------------------- remotos (empresa e fork)
+
+const SAFE_REMOTE = /^[\w.-]+$/
+
+/**
+ * Remotos do projeto, pelas variáveis:
+ * - remoto_empresa: o repositório oficial (código de produção, onde nasce a branch do card e para onde vai o PR)
+ * - remoto_fork: o seu fork, onde você faz push (padrão: origin; a antiga variável `remote` também vale)
+ * Sem remoto_empresa, os dois são o mesmo (fluxo de um remoto só).
+ */
+export interface Remotes {
+  company: string
+  fork: string
+  /** Empresa e fork são remotos diferentes */
+  split: boolean
+}
+
+export function remotesOf(p: Project): Remotes {
+  const v = (k: string) => {
+    const x = p.vars.find((y) => y.key === k)?.value.trim()
+    return x && SAFE_REMOTE.test(x) ? x : ''
+  }
+  const fork = v('remoto_fork') || v('remote') || 'origin'
+  const company = v('remoto_empresa') || fork
+  return { company, fork, split: company !== fork }
+}
+
+/** "dono/repo" de uma URL do GitHub (https ou ssh); null se não for GitHub */
+export function githubRepoOf(url: string): string | null {
+  const m = url.trim().match(/github\.com[:/]+([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i)
+  return m ? `${m[1]}/${m[2]}` : null
+}
+
+export async function remoteUrl(p: Project, remote: string): Promise<string | null> {
+  const r = await git(p.path, ['remote', 'get-url', remote], 4000)
+  return r.ok ? r.out.split('\n')[0].trim() : null
+}
+
+/** Busca a branch no remoto; true se ela existe lá (e fica em <remoto>/<branch>) */
+export async function fetchRemoteBranch(p: Project, remote: string, branch: string): Promise<boolean> {
+  if (!SAFE_BRANCH.test(branch) || !SAFE_REMOTE.test(remote)) return false
+  const f = await git(p.path, ['fetch', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`], 120_000)
+  return f.ok
+}
+
+async function hasRef(p: Project, ref: string): Promise<boolean> {
+  return (await git(p.path, ['rev-parse', '--verify', '--quiet', ref], 4000)).ok
+}
+
+/** Branch principal: variável branch_principal do projeto, senão a padrão do remoto da empresa, senão main/master */
 export async function baseBranch(p: Project): Promise<string> {
   const v = p.vars.find((x) => x.key === 'branch_principal')?.value.trim()
   if (v && SAFE_BRANCH.test(v)) return v
-  const head = await git(p.path, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], 4000)
-  if (head.ok && head.out.startsWith('origin/')) return head.out.slice('origin/'.length).split('\n')[0]
+  const { company } = remotesOf(p)
+  const head = await git(p.path, ['symbolic-ref', '--short', `refs/remotes/${company}/HEAD`], 4000)
+  if (head.ok && head.out.startsWith(company + '/')) return head.out.slice(company.length + 1).split('\n')[0]
   for (const b of ['master', 'main']) {
     if ((await git(p.path, ['rev-parse', '--verify', '--quiet', `refs/heads/${b}`], 4000)).ok) return b
   }
   return 'master'
+}
+
+/** Projetos ligados a este, nos dois sentidos (front liga o back; a demanda do back também leva o front) */
+export function linkedProjectsOf(p: Project, all: Project[]): Project[] {
+  const ids = new Set(p.linkedProjectIds ?? [])
+  for (const o of all) if (o.id !== p.id && (o.linkedProjectIds ?? []).includes(p.id)) ids.add(o.id)
+  ids.delete(p.id)
+  return all.filter((o) => ids.has(o.id))
+}
+
+export type DemandBranchResult = OpResult & {
+  /** A branch do card não existe no remoto da empresa: pergunte se pode criar lá */
+  needsCompanyBranch?: boolean
+  /** Nada foi feito (projeto ligado sem a branch) */
+  skipped?: boolean
+}
+
+/**
+ * Leva o projeto para a branch do card, no fluxo empresa + fork:
+ * 1. já existe local: só troca para ela;
+ * 2. existe no remoto da empresa: `git checkout -b KEY empresa/KEY`;
+ * 3. não existe lá: com `createOnCompany`, cria no remoto da empresa a partir da principal
+ *    (o mesmo que criar pelo site) e faz o passo 2; com `base`, cria só local; senão pergunta.
+ * `onlyExisting`: para projetos ligados, nunca cria nada, só troca se a branch já existir.
+ */
+export async function goToDemandBranch(
+  p: Project,
+  key: string,
+  opts: { base?: string; createOnCompany?: boolean; onlyExisting?: boolean } = {}
+): Promise<DemandBranchResult> {
+  if (!SAFE_BRANCH.test(key)) return { ok: false, message: 'O número do card não serve como nome de branch.' }
+  const base = opts.base?.trim() ?? ''
+  if (base && !SAFE_BRANCH.test(base)) return { ok: false, message: 'Nome da branch base inválido.' }
+  const refused = (out: string) =>
+    /would be overwritten|local changes/i.test(out)
+      ? 'Há alterações sem commit que seriam perdidas: faça commit ou stash antes de trocar de branch.'
+      : 'O git recusou: ' + out.split('\n').slice(-2).join(' ')
+
+  if (await hasRef(p, `refs/heads/${key}`)) {
+    const r = await git(p.path, ['checkout', key])
+    return r.ok ? { ok: true, message: `Branch ${key} já existia: agora você está nela.` } : { ok: false, message: refused(r.out) }
+  }
+
+  const { company, split } = remotesOf(p)
+  const checkoutFromCompany = async (how: string): Promise<DemandBranchResult> => {
+    const r = await git(p.path, ['checkout', '-b', key, `${company}/${key}`])
+    return r.ok ? { ok: true, message: `Branch ${key} criada a partir de ${company}/${key}${how}.` } : { ok: false, message: refused(r.out) }
+  }
+  if (await fetchRemoteBranch(p, company, key)) return checkoutFromCompany('')
+
+  if (opts.onlyExisting) return { ok: true, skipped: true, message: `${key} não existe aqui nem em ${company}: ficou como estava.` }
+
+  if (split && opts.createOnCompany) {
+    const main = await baseBranch(p)
+    if (!(await fetchRemoteBranch(p, company, main))) return { ok: false, message: `Não consegui buscar ${company}/${main}. Confira o remoto "${company}" (git remote -v).` }
+    const push = await git(p.path, ['push', company, `refs/remotes/${company}/${main}:refs/heads/${key}`], 120_000)
+    if (!push.ok) return { ok: false, message: `Não consegui criar ${key} no ${company}: ${push.out.split('\n').slice(-2).join(' ')}` }
+    if (!(await fetchRemoteBranch(p, company, key))) return { ok: false, message: `Criei ${key} no ${company}, mas não consegui buscá-la de volta.` }
+    return checkoutFromCompany(` (criada agora no ${company} a partir da ${main})`)
+  }
+
+  if (split && !base) {
+    return {
+      ok: false,
+      needsCompanyBranch: true,
+      message: `A branch ${key} ainda não existe no remoto da empresa (${company}).`
+    }
+  }
+
+  const r = await git(p.path, ['checkout', '-b', key, ...(base ? [base] : [])])
+  return r.ok
+    ? { ok: true, message: `Branch ${key} criada${base ? ` a partir de ${base}` : ''} (só local).` }
+    : { ok: false, message: refused(r.out) }
 }
 
 /** Resumo para o card: branch, alterados, à frente/atrás do remoto, último commit */
@@ -102,7 +225,8 @@ export async function gitCheckout(p: Project, branch: string): Promise<OpResult>
 }
 
 /**
- * Atualiza a branch atual com a principal do remoto (fetch + merge de origin/<base>).
+ * Atualiza a branch atual com o remoto da empresa: no fluxo com fork, primeiro o que entrou em
+ * empresa/<branch da demanda> (ex.: PR aceito), depois a principal (empresa/master). Merge, sem push.
  * Só roda com a árvore limpa. Em conflito, deixa o merge aberto e diz quais arquivos.
  */
 export async function updateWithBase(p: Project, expectBranch: string): Promise<OpResult & { conflicts?: string[] }> {
@@ -114,16 +238,27 @@ export async function updateWithBase(p: Project, expectBranch: string): Promise<
     return { ok: false, message: `Há ${info.changed} arquivo(s) alterado(s) sem commit. Faça commit (ou stash) antes de atualizar com a ${info.base}.` }
   }
   const base = info.base
-  const fetch = await git(p.path, ['fetch', 'origin', base], 120_000)
-  const hasRemote = fetch.ok
-  const ref = hasRemote ? `origin/${base}` : base
-  if (!hasRemote && !(await git(p.path, ['rev-parse', '--verify', '--quiet', `refs/heads/${base}`])).ok) {
-    return { ok: false, message: `Não achei a ${base} (nem no remoto, nem local): ${fetch.out.split('\n').slice(-1)[0]}` }
+  const { company, split } = remotesOf(p)
+  const refs: string[] = []
+  if (split && (await fetchRemoteBranch(p, company, expectBranch))) refs.push(`${company}/${expectBranch}`)
+  if (await fetchRemoteBranch(p, company, base)) refs.push(`${company}/${base}`)
+  else if (await hasRef(p, `refs/heads/${base}`)) refs.push(base)
+  else return { ok: false, message: `Não achei a ${base} (nem em ${company}, nem local).` }
+
+  const brought: string[] = []
+  let m: { ok: boolean; out: string } = { ok: true, out: '' }
+  for (const ref of refs) {
+    const behind = await git(p.path, ['rev-list', '--count', `HEAD..${ref}`], 8000)
+    const n = behind.ok ? Number(behind.out.trim()) : NaN
+    if (n === 0) continue
+    m = await git(p.path, ['merge', '--no-edit', ref], 120_000)
+    if (!m.ok) break
+    brought.push(`${ref} (${Number.isNaN(n) ? '?' : n} commit(s))`)
   }
-  const behind = await git(p.path, ['rev-list', '--count', `HEAD..${ref}`], 8000)
-  if (behind.ok && behind.out.trim() === '0') return { ok: true, message: `Já estava em dia com a ${ref}.` }
-  const m = await git(p.path, ['merge', '--no-edit', ref], 120_000)
-  if (m.ok) return { ok: true, message: `Atualizada com a ${ref} (${behind.out.trim() || '?'} commit(s) trazido(s)). Ainda sem push.` }
+  if (m.ok) {
+    if (!brought.length) return { ok: true, message: `Já estava em dia com a ${refs.join(' e a ')}.` }
+    return { ok: true, message: `Atualizada com ${brought.join(' e ')}. Ainda sem push.` }
+  }
   const files = await git(p.path, ['diff', '--name-only', '--diff-filter=U'], 8000)
   const conflicts = files.ok ? files.out.split('\n').filter(Boolean) : []
   if (conflicts.length) {
@@ -267,11 +402,14 @@ export async function ensureWorktree(p: Project, key: string, dir: string): Prom
     if (await exists(p.path, `refs/heads/${qb}`)) r = await git(p.path, ['worktree', 'add', dir, qb], 120_000)
     else {
       const base = await baseBranch(p)
+      const { company } = remotesOf(p)
       const start = (await exists(p.path, `refs/heads/${key}`))
         ? key
-        : (await exists(p.path, `refs/remotes/origin/${base}`))
-          ? `origin/${base}`
-          : base
+        : (await exists(p.path, `refs/remotes/${company}/${key}`))
+          ? `${company}/${key}`
+          : (await exists(p.path, `refs/remotes/${company}/${base}`))
+            ? `${company}/${base}`
+            : base
       r = await git(p.path, ['worktree', 'add', '-b', qb, dir, start], 120_000)
     }
     if (!r.ok) return { ok: false, message: 'Não consegui criar a cópia da fila: ' + r.out.split('\n').slice(-2).join(' ') }
