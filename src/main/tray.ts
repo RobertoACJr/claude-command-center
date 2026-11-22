@@ -49,7 +49,10 @@ export class AppTray {
     return img
   }
 
-  /** Gira a hélice enquanto a fila ou o Vigia trabalham; acende o azul no Ausente e o rosa com o Vigia */
+  /**
+   * Gira a hélice enquanto a fila ou o Vigia trabalham; acende o azul no Ausente e o rosa com o Vigia.
+   * Ao parar, termina a volta até o quadro inicial (sem pulo de volta para a posição de partida).
+   */
   setActivity(busy: boolean, state: TrayTone): void {
     if (busy === this.busy && state === this.state) return
     this.busy = busy
@@ -58,11 +61,12 @@ export class AppTray {
       this.timer = setInterval(() => {
         this.frame = (this.frame + 1) % TRAY_FRAMES[this.state].length
         this.tray?.setImage(this.image())
+        // Parou de trabalhar: só desliga quando a volta fecha no quadro 0
+        if (!this.busy && this.frame === 0 && this.timer) {
+          clearInterval(this.timer)
+          this.timer = null
+        }
       }, 150)
-    } else if (!busy && this.timer) {
-      clearInterval(this.timer)
-      this.timer = null
-      this.frame = 0
     }
     this.tray?.setImage(this.image())
   }
