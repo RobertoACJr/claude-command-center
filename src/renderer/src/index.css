@@ -58,12 +58,12 @@ textarea,
     0 0 24px -4px color-mix(in srgb, var(--color-violet) 55%, transparent);
 }
 
-/* Modo Ausente: o destaque vira azul-petróleo em todo o app */
+/* Modo Ausente: o destaque vira azul (o fio azul do ícone) em todo o app */
 [data-mode='away'] {
-  --color-violet: #0e7490;
-  --color-purple: #3cb8cf;
+  --color-violet: #2563eb;
+  --color-purple: #60a5fa;
 }
-/* Vigia ligado (Online): o destaque vira magenta */
+/* Vigia ligado (Online): o destaque vira rosa (o fio rosa do ícone) */
 [data-mode='vigia'] {
   --color-violet: #db2777;
   --color-purple: #f472b6;

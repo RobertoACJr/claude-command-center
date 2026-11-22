@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import type { AppConfig } from '../shared/types'
-import { TRAY_FRAMES } from './trayFrames'
+import { TRAY_FRAMES, type TrayTone } from './trayFrames'
 
 export interface TrayActions {
   show: () => void
@@ -19,7 +19,7 @@ export class AppTray {
   private tray: Tray | null = null
   private frame = 0
   private timer: NodeJS.Timeout | null = null
-  private state: 'online' | 'away' = 'online'
+  private state: TrayTone = 'online'
   private busy = false
 
   constructor(
@@ -49,9 +49,8 @@ export class AppTray {
     return img
   }
 
-  /** Gira a hélice enquanto a fila ou o Vigia trabalham; azul-petróleo no modo Ausente */
-  setActivity(busy: boolean, away: boolean): void {
-    const state = away ? 'away' : 'online'
+  /** Gira a hélice enquanto a fila ou o Vigia trabalham; acende o azul no Ausente e o rosa com o Vigia */
+  setActivity(busy: boolean, state: TrayTone): void {
     if (busy === this.busy && state === this.state) return
     this.busy = busy
     this.state = state
@@ -71,7 +70,7 @@ export class AppTray {
   update(cfg: AppConfig, watcherOn: boolean): void {
     if (!this.tray) return
     const away = cfg.status === 'off'
-    this.setActivity(this.busy, away)
+    this.setActivity(this.busy, away ? 'away' : watcherOn ? 'vigia' : 'online')
     const pending = cfg.alerts.filter((a) => a.status === 'pending').length
     this.tray.setToolTip(
       `Hélice · ${away ? 'Ausente' : 'Online'}${watcherOn ? ' · Vigia ligado' : ''}` +

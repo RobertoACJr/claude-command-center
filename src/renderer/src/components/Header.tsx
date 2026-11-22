@@ -126,12 +126,12 @@ export function Header({
           aria-checked={on}
           onClick={onToggle}
           title={on ? 'Ir para o modo Ausente' : 'Voltar ao PC (Online)'}
-          className="relative flex h-11 w-[204px] cursor-pointer items-center rounded-full border border-violet/60 bg-violet/10 p-1 transition-all glow-violet"
+          className="relative flex h-11 w-[204px] cursor-pointer items-center rounded-full border border-violet/60 bg-violet/10 p-[3px] transition-all glow-violet"
         >
           <span
             className={cn(
-              'absolute top-1 h-9 w-[98px] rounded-full bg-gradient-to-b from-purple to-violet transition-all duration-300',
-              on ? 'left-1' : 'left-[102px]'
+              'absolute top-[3px] h-9 w-[98px] rounded-full bg-gradient-to-b from-purple to-violet transition-all duration-300',
+              on ? 'left-[3px]' : 'left-[101px]'
             )}
           />
           <span

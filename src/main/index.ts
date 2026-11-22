@@ -104,7 +104,9 @@ function refreshTrayActivity(): void {
   try {
     const busy =
       queue.state().tasks.some((t) => t.status === 'rodando') || watcher.getState().phase === 'checking' || demands.busyList().length > 0
-    tray.setActivity(busy, store.get().status === 'off')
+    const phase = watcher.getState().phase
+    const tone = store.get().status === 'off' ? 'away' : phase === 'idle' || phase === 'checking' ? 'vigia' : 'online'
+    tray.setActivity(busy, tone)
   } catch {
     /* durante a inicialização algum ainda não existe */
   }

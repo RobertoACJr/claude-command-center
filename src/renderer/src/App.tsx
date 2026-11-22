@@ -344,7 +344,7 @@ export default function App() {
     [goTo]
   )
 
-  // Tema: azul-petróleo no modo Ausente; magenta com o Vigia ligado e você Online
+  // Tema: azul no modo Ausente; rosa com o Vigia ligado e você Online
   const vigiaOn = !!config?.watcher.enabled && watcher.phase !== 'off'
   useEffect(() => {
     document.documentElement.dataset.mode = config?.status === 'off' ? 'away' : vigiaOn ? 'vigia' : 'online'
