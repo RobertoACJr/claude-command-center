@@ -875,6 +875,7 @@ function TelegramTab({ config, sec, save }: { config: AppConfig; sec: SecretsSta
           <Spin on={busy === 'test'} /> <Zap size={12} /> Testar Notificação
         </Button>
       </div>
+      <Result r={result} />
       <Toggle
         checked={config.telegram.interactive}
         onChange={(v) => save({ telegram: { interactive: v } })}
@@ -888,7 +889,6 @@ function TelegramTab({ config, sec, save }: { config: AppConfig; sec: SecretsSta
         hint="Projeto que caiu, script que terminou, Vigia com problema e versão nova. Pedidos e permissões já chegam sempre."
       />
       <TranscribeField config={config} save={save} />
-      <Result r={result} />
     </Section>
   )
 }

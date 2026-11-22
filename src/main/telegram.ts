@@ -34,10 +34,29 @@ export async function call(
   }
 }
 
+/** Traduz os erros mais comuns do Telegram para o que fazer */
+export function explainTelegramError(desc: string): string {
+  const d = desc.toLowerCase()
+  if (d.includes('unauthorized') || (d.includes('not found') && d.includes('404')))
+    return 'O token do bot não vale (Unauthorized). Copie de novo o token no @BotFather e salve.'
+  if (d.includes('chat not found'))
+    return 'O Telegram não achou esse Chat ID. Abra o seu bot, mande "oi" e clique em Detectar de novo.'
+  if (d.includes('blocked by the user'))
+    return 'Você bloqueou o bot no Telegram. Abra a conversa com ele, desbloqueie (ou toque em Iniciar) e teste de novo.'
+  if (d.includes("can't initiate") || d.includes('initiate conversation'))
+    return 'O bot ainda não pode falar com você: abra a conversa com ele, toque em Iniciar e teste de novo.'
+  if (d.includes('falha de rede') || d.includes('tempo esgotado'))
+    return `Sem conexão com o Telegram (${desc}). Confira a internet ou um proxy/firewall da empresa bloqueando api.telegram.org.`
+  return `O Telegram recusou: ${desc}`
+}
+
 export async function sendTelegram(chatId: string, html: string): Promise<OpResult> {
   if (!chatId) return { ok: false, message: 'Informe o Chat ID.' }
   const r = await call('sendMessage', { chat_id: chatId, text: html, parse_mode: 'HTML', disable_web_page_preview: true })
-  return { ok: r.ok, message: r.ok ? 'Mensagem enviada.' : (r.description ?? 'Erro') }
+  return {
+    ok: r.ok,
+    message: r.ok ? 'Mensagem enviada: confira a conversa com o seu bot no Telegram.' : explainTelegramError(r.description ?? 'Erro')
+  }
 }
 
 /** Lê as últimas mensagens recebidas pelo bot para descobrir o seu Chat ID */
