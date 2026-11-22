@@ -72,6 +72,29 @@ tile = rgba(np.broadcast_to(TILE_RGB, src.shape).copy(), tile_alpha)
 prompt = rgba(np.broadcast_to(np.array([244, 244, 245], float), src.shape).copy(), prompt_alpha)
 rings = {t: rgba(tone_rgb(t), ring_alpha) for t in TONES}
 
+# Centro do buraco do meio (onde fica o >_): o ponto mais longe de qualquer anel perto do centro.
+# Os anéis e o >_ são deslocados para esse ponto ficar no centro do quadrado; assim, ao girar,
+# os anéis rodam em volta do >_ (e não em volta do centro da imagem).
+ry, rx = np.where(ring_alpha > 0.3)
+pts = np.stack([rx, ry], 1)[::7].astype(float)
+best = (0, 512, 512)
+for yy in range(380, 650, 4):
+    for xx in range(380, 650, 4):
+        dist = np.hypot(pts[:, 0] - xx, pts[:, 1] - yy).min()
+        if dist > best[0]:
+            best = (dist, xx, yy)
+DX, DY = 512 - best[1], 512 - best[2]
+
+
+def centered(img):
+    out = Image.new('RGBA', img.size, (0, 0, 0, 0))
+    out.paste(img, (DX, DY))
+    return out
+
+
+rings = {t: centered(im) for t, im in rings.items()}
+prompt = centered(prompt)
+
 
 def tray_frame(tone, angle, size=64):
     base = tile.copy()
@@ -112,4 +135,4 @@ for i, t in enumerate(TONES):
     prev.alpha_composite(tray_frame(t, 60, 64), (276 + i * 64, 100))
     prev.alpha_composite(app.resize((32, 32), Image.LANCZOS), (276 + i * 64 + 16, 190))
 prev.save('/tmp/ic/preview-final.png')
-print('ok')
+print('ok', 'centro do buraco', best[1:], 'deslocamento', (DX, DY))
