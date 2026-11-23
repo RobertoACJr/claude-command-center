@@ -158,7 +158,8 @@ export class TelegramControl {
     '/historico · últimas execuções',
     '/status · como está o PC',
     '/pendentes · pedidos aguardando você',
-    '/ausente · /online · /vigia'
+    '/vigia · liga o Vigia (ou mostra o estado, com Olhar agora / Desligar); /vigia off desliga',
+    '/ausente · /online'
   ].join('\n')
 
   /** Devolve true se o comando é deste módulo */

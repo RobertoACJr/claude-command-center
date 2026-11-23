@@ -383,6 +383,43 @@ function telegramReady(): boolean {
   return !!store.get().telegram.chatId && !!secrets.get('telegram.token')
 }
 
+/** Estado do Vigia numa linha (para o Telegram) */
+function vigiaLine(): string {
+  const st = watcher.getState()
+  if (st.phase === 'blocked') return `Bloqueado: ${st.reason}`
+  if (st.phase === 'checking') return 'Olhando o Google Chat agora…'
+  const next = st.nextAt ? Math.max(0, Math.round((st.nextAt - Date.now()) / 60000)) : null
+  return [next !== null ? `Próxima olhada em ~${next} min.` : '', st.lastResult ? `Último: ${st.lastResult}` : ''].filter(Boolean).join(' ')
+}
+
+function vigiaButtons(on: boolean): Array<Array<{ text: string; callback_data: string }>> {
+  return on
+    ? [[{ text: '👁 Olhar agora', callback_data: 'vg:now' }, { text: '⏹ Desligar', callback_data: 'vg:off' }]]
+    : [[{ text: '▶ Ligar o Vigia', callback_data: 'vg:on' }]]
+}
+
+/** Liga/desliga o Vigia (o mesmo que o botão do app) e diz como ficou */
+async function vigiaSet(on: boolean): Promise<string> {
+  store.setWatcherEnabled(on)
+  await new Promise((r) => setTimeout(r, 300))
+  if (!on) {
+    return store.get().status === 'off' && store.get().watcher.autoWhenOff
+      ? '⏹ Vigia desligado manualmente, mas continua rodando sozinho porque você está Ausente (opção "ligar no Ausente").'
+      : '⏹ Vigia <b>desligado</b>.'
+  }
+  const st = watcher.getState()
+  if (st.phase === 'blocked') return `⚠️ Não deu para ligar o Vigia: ${escapeHtml(st.reason)}`
+  return `👁 Vigia <b>ligado</b>: a primeira olhada no Google Chat é em instantes, depois a cada ${store.get().watcher.intervalMin} min.`
+}
+
+async function vigiaNow(): Promise<string> {
+  const st = watcher.getState()
+  if (st.phase === 'off') return 'O Vigia está desligado. Mande /vigia para ligar.'
+  if (st.phase === 'blocked') return `⚠️ Vigia bloqueado: ${escapeHtml(st.reason)}`
+  watcher.runNow()
+  return '👁 Olhando o Google Chat agora…'
+}
+
 const bot = new TelegramBot({
   settings: () => ({ chatId: store.get().telegram.chatId, interactive: store.get().telegram.interactive }),
   log: (text, kind = 'info') => appLog({ kind, text }),
@@ -394,6 +431,11 @@ const bot = new TelegramBot({
     if (kind === 'rr') return (await automation.approve(id, 'pelo Telegram', true)).message
     if (kind === 'pa' || kind === 'pd' || kind === 'pw') {
       return respondApproval(id, kind === 'pa' ? 'allow' : kind === 'pd' ? 'deny' : 'always', 'pelo Telegram')
+    }
+    if (kind === 'vg') {
+      const plain = (h: string) => h.replace(/<[^>]+>/g, '')
+      if (id === 'now') return plain(await vigiaNow())
+      return plain(await vigiaSet(id === 'on'))
     }
     if (kind === 'on') {
       setPresence('on', id === 'keep')
@@ -442,10 +484,21 @@ const bot = new TelegramBot({
         }
         break
       }
-      case 'vigia':
-        watcher.runNow()
-        await say('👁 Verificando o Google Chat agora…')
+      case 'vigia': {
+        // /vigia liga (se estiver desligado) ou mostra o estado; /vigia on|off|agora faz direto
+        const a = args.trim().toLowerCase()
+        const enabled = cfg.watcher.enabled
+        if (['off', 'desligar', 'desliga', 'parar'].includes(a)) {
+          await say(await vigiaSet(false))
+        } else if (['agora', 'now', 'olhar'].includes(a)) {
+          await say(await vigiaNow())
+        } else if (['on', 'ligar', 'liga'].includes(a) || !enabled) {
+          await sendTelegramMessage(chat, await vigiaSet(true), vigiaButtons(true))
+        } else {
+          await sendTelegramMessage(chat, `👁 Vigia <b>ligado</b>. ${escapeHtml(vigiaLine())}`, vigiaButtons(true))
+        }
         break
+      }
       default:
         await say(tg.help)
     }
