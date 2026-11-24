@@ -2,7 +2,7 @@ import { homedir } from 'os'
 import { spawnSync } from 'child_process'
 import { MCP_NAMES, type AppConfig, type IntegrationCheck, type IntegrationId, type OpResult } from '../shared/types'
 import { secrets } from './secrets'
-import { IS_WIN, runClaudeCapture } from './proc'
+import { envWithPath, IS_WIN, runClaudeCapture } from './proc'
 
 /**
  * Configura os MCPs pelo próprio CLI do Claude Code (`claude mcp ...`, escopo user),
@@ -25,8 +25,8 @@ function summarize(r: { code: number | null; stdout: string; stderr: string; tim
 
 function hasCommand(cmd: string): boolean {
   const r = IS_WIN
-    ? spawnSync('where', [cmd], { windowsHide: true })
-    : spawnSync('/bin/bash', ['-lc', `command -v ${cmd}`], { windowsHide: true })
+    ? spawnSync('where', [cmd], { windowsHide: true, env: envWithPath() })
+    : spawnSync('/bin/bash', ['-lc', `command -v ${cmd}`], { windowsHide: true, env: envWithPath() })
   return r.status === 0
 }
 

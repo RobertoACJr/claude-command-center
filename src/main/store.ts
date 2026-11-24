@@ -23,7 +23,7 @@ function defaults(): AppConfig {
     general: { closeToTray: true, openAtLogin: false, trayHintShown: false, desktopNotifications: true, notifyScriptDone: true },
     projects: [],
     scripts: [],
-    ui: { consoleExpanded: false, consoleMode: 'terminal' },
+    ui: { consoleExpanded: false, consoleMode: 'terminal', ais: { claude: true, gemini: true, codex: true } },
     integrations: {
       github: { enabled: false, readOnly: true },
       jira: { enabled: false, url: '', email: '' },
@@ -96,7 +96,12 @@ function normalize(raw: unknown): AppConfig {
     scripts: Array.isArray(r.scripts) ? (r.scripts as Script[]).filter((s) => s && s.id).map(normScript) : [],
     ui: {
       consoleExpanded: Boolean(r.ui?.consoleExpanded),
-      consoleMode: ['claude', 'gemini', 'codex'].includes(r.ui?.consoleMode as string) ? r.ui!.consoleMode : 'terminal'
+      consoleMode: ['claude', 'gemini', 'codex'].includes(r.ui?.consoleMode as string) ? r.ui!.consoleMode : 'terminal',
+      ais: {
+        claude: r.ui?.ais?.claude !== false,
+        gemini: r.ui?.ais?.gemini !== false,
+        codex: r.ui?.ais?.codex !== false
+      }
     },
     integrations: {
       github: { enabled: bool(gi?.enabled, false), readOnly: bool(gi?.readOnly, true) },
@@ -391,7 +396,9 @@ class ConfigStore {
 
   saveUi(ui: Partial<UiState>): AppConfig {
     return this.update((d) => {
-      d.ui = { ...d.ui, ...ui }
+      d.ui = { ...d.ui, ...ui, ais: { ...d.ui.ais, ...(ui.ais ?? {}) } }
+      // Console num modo de IA que foi desligada: volta para o Terminal
+      if (d.ui.consoleMode !== 'terminal' && !d.ui.ais[d.ui.consoleMode]) d.ui.consoleMode = 'terminal'
     })
   }
 

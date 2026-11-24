@@ -26,6 +26,7 @@ import type { Demand, DemandAi, DemandBusy, DemandQueueCopy, DemandStatus, GitIn
 import { looksLikeRule } from '@shared/text'
 import { ShotsView } from './ShotsView'
 import { cn, uid } from '../lib/utils'
+import { onlyEnabled, useAis } from '../lib/ais'
 import { Button, Modal } from './ui'
 
 export const DEMAND_STATUS: Array<{ id: DemandStatus; label: string; cls: string }> = [
@@ -1259,13 +1260,17 @@ function ReviewTab({
   const [text, setText] = useState(d.review?.text ?? '')
   const [publishing, setPublishing] = useState(false)
   useEffect(() => setText(d.review?.text ?? ''), [d.review?.text])
+  const ais = useAis()
   const rv = d.review
   return (
     <div className="space-y-3">
       <div className="space-y-1.5">
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex overflow-hidden rounded-lg border border-line">
-            {(['claude', 'codex', 'gemini', 'dupla'] as ReviewAi[]).map((a) => (
+            {onlyEnabled(['claude', 'codex', 'gemini', 'dupla'] as ReviewAi[], ais, d.reviewAi)
+              // A revisão dupla usa o ChatGPT e depois o Claude: só aparece com os dois ligados
+              .filter((a) => a !== 'dupla' || d.reviewAi === 'dupla' || (ais.codex && ais.claude))
+              .map((a) => (
               <button
                 key={a}
                 type="button"
@@ -1368,11 +1373,12 @@ function AiRow({
   hint: string
   testid: string
 }) {
+  const ais = useAis()
   return (
     <div className="space-y-1.5">
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex overflow-hidden rounded-lg border border-line">
-          {(['claude', 'codex', 'gemini'] as DemandAi[]).map((a) => (
+          {onlyEnabled(['claude', 'codex', 'gemini'] as DemandAi[], ais, ai).map((a) => (
             <button
               key={a}
               type="button"

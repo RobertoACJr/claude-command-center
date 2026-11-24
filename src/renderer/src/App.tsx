@@ -28,6 +28,7 @@ import { VariablesModal } from './components/VariablesModal'
 import { SettingsModal, type SettingsTab } from './components/SettingsModal'
 import { AlertsBar } from './components/AlertsBar'
 import { AwayBanner, GoOnlineModal, VigiaBanner } from './components/Presence'
+import { setEnabledAis } from './lib/ais'
 import {
   FIXED_TABS,
   TerminalsPanel,
@@ -343,6 +344,9 @@ export default function App() {
       }),
     [goTo]
   )
+
+  // IAs ligadas neste PC: os seletores leem daqui
+  useEffect(() => setEnabledAis(config?.ui.ais), [config?.ui.ais])
 
   // Tema: azul no modo Ausente; rosa com o Vigia ligado e você Online
   const vigiaOn = !!config?.watcher.enabled && watcher.phase !== 'off'
@@ -726,7 +730,9 @@ export default function App() {
         ['gemini', 'Gemini', <Gem key="g" size={14} />],
         ['codex', 'ChatGPT', <Bot key="o" size={14} />]
       ] as const
-    ).map(([m, label, icon]) => ({
+    )
+      .filter(([m]) => m === 'terminal' || config.ui.ais[m])
+      .map(([m, label, icon]) => ({
       id: `mode:${m}`,
       group: 'Console',
       label: `Digitar para: ${label}`,

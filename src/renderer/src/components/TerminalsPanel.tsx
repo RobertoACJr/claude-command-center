@@ -1,5 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useLines } from '../lib/lineStore'
+import { useAis } from '../lib/ais'
 import {
   Ban,
   Bot,
@@ -22,7 +23,7 @@ import {
   X,
   XCircle
 } from 'lucide-react'
-import type { ConsoleMode } from '@shared/types'
+import type { AiId, ConsoleMode } from '@shared/types'
 import { IconButton } from './ui'
 import { cn } from '../lib/utils'
 
@@ -130,6 +131,8 @@ const MODES: Array<{ id: ConsoleMode; label: string; desc: string; Icon: typeof 
 function ModePicker({ mode, onChange }: { mode: ConsoleMode; onChange: (m: ConsoleMode) => void }) {
   const [open, setOpen] = useState(false)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const ais = useAis()
+  const modes = MODES.filter((m) => m.id === 'terminal' || m.id === mode || ais[m.id as AiId])
   const current = MODES.find((m) => m.id === mode) ?? MODES[0]
   const keepOpen = () => {
     if (closeTimer.current) clearTimeout(closeTimer.current)
@@ -154,7 +157,7 @@ function ModePicker({ mode, onChange }: { mode: ConsoleMode; onChange: (m: Conso
       {/* Fica no DOM mesmo fechado (só escondido) */}
       <div className={cn('absolute bottom-full left-0 z-50 pb-1.5', open ? '' : 'hidden')}>
         <div className="w-72 rounded-xl border border-line bg-card p-1 shadow-2xl">
-          {MODES.map((m) => (
+          {modes.map((m) => (
             <button
               key={m.id}
               type="button"

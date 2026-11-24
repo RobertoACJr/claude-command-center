@@ -149,9 +149,17 @@ export interface Script {
 
 export type ConsoleMode = 'terminal' | 'claude' | 'gemini' | 'codex'
 
+/** IAs que o Hélice pode usar */
+export type AiId = 'claude' | 'gemini' | 'codex'
+
 export interface UiState {
   consoleExpanded: boolean
   consoleMode: ConsoleMode
+  /**
+   * Quais IAs aparecem nos seletores (console, scripts, demandas, revisão, Vigia).
+   * É deste PC (não sincroniza): cada computador tem as suas instaladas.
+   */
+  ais: Record<AiId, boolean>
 }
 
 export interface GeneralPrefs {

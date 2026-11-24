@@ -1,4 +1,7 @@
 import { spawn, spawnSync, type ChildProcess, type SpawnOptions } from 'child_process'
+import { existsSync } from 'fs'
+import { homedir } from 'os'
+import { join } from 'path'
 
 export const IS_WIN = process.platform === 'win32'
 
@@ -14,9 +17,39 @@ export function bashQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`
 }
 
+/**
+ * Pastas onde os instaladores costumam pôr os CLIs (claude, gemini, codex) e que às vezes
+ * não entram no PATH (ex.: o instalador do Claude no Windows avisa "not in your PATH").
+ * O app acrescenta as que existem, para funcionar mesmo assim.
+ */
+function extraBinDirs(): string[] {
+  const home = homedir()
+  const dirs = IS_WIN
+    ? [
+        join(home, '.local', 'bin'),
+        process.env.APPDATA ? join(process.env.APPDATA, 'npm') : '',
+        process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet', 'Links') : ''
+      ]
+    : [join(home, '.local', 'bin'), join(home, '.npm-global', 'bin'), join(home, '.bun', 'bin'), join(home, '.volta', 'bin')]
+  return dirs.filter((d) => d && existsSync(d))
+}
+
+/** process.env com as pastas extras no fim do PATH (no Windows a chave costuma ser "Path") */
+export function envWithPath(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH'
+  const sep = IS_WIN ? ';' : ':'
+  const parts = (env[key] ?? '').split(sep).filter(Boolean)
+  const norm = (d: string) => (IS_WIN ? d.toLowerCase().replace(/[\\/]+$/, '') : d.replace(/\/+$/, ''))
+  const have = new Set(parts.map(norm))
+  for (const d of extraBinDirs()) if (!have.has(norm(d))) parts.push(d)
+  env[key] = parts.join(sep)
+  return env
+}
+
 function baseEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
   return {
-    ...process.env,
+    ...envWithPath(),
     FORCE_COLOR: '0',
     NO_COLOR: '1',
     CLICOLOR: '0',

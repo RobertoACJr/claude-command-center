@@ -15,7 +15,7 @@ import type { AppConfig, SecretsStatus, TerminalPreset, ToolCheck } from '@share
 import { Button } from './ui'
 import { cn } from '../lib/utils'
 
-type Os = 'linux' | 'win32' | 'darwin'
+export type Os = 'linux' | 'win32' | 'darwin'
 type GoTo = (tab: 'integrations' | 'telegram' | 'ai' | 'watcher') => void
 
 interface ToolInfo {
@@ -28,7 +28,7 @@ interface ToolInfo {
   link?: string
 }
 
-const TOOLS: ToolInfo[] = [
+export const TOOLS: ToolInfo[] = [
   {
     id: 'claude',
     name: 'Claude Code',
@@ -83,7 +83,7 @@ const TOOLS: ToolInfo[] = [
   }
 ]
 
-function Copy({ text }: { text: string }) {
+export function Copy({ text }: { text: string }) {
   const [ok, setOk] = useState(false)
   return (
     <button

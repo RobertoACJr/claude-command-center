@@ -1,14 +1,14 @@
 import { spawn } from 'child_process'
 import { homedir } from 'os'
 import type { ToolCheck } from '../shared/types'
-import { IS_WIN, powershellExe, stripAnsi } from './proc'
+import { envWithPath, IS_WIN, powershellExe, stripAnsi } from './proc'
 
 /** Roda um comando curto no shell do sistema (com o PATH de login) e devolve a saída */
 function sh(command: string, timeoutMs = 20_000): Promise<{ code: number | null; out: string }> {
   return new Promise((resolve) => {
     const child = IS_WIN
-      ? spawn(powershellExe(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], { cwd: homedir(), windowsHide: true })
-      : spawn('/bin/bash', ['-lc', command], { cwd: homedir() })
+      ? spawn(powershellExe(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], { cwd: homedir(), windowsHide: true, env: envWithPath() })
+      : spawn('/bin/bash', ['-lc', command], { cwd: homedir(), env: envWithPath() })
     let out = ''
     child.stdout?.on('data', (d) => (out += d))
     child.stderr?.on('data', (d) => (out += d))

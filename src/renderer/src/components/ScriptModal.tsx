@@ -3,6 +3,7 @@ import { Bot, Braces, FileCode2, FolderOpen, Gem, Plus, Sparkles, SquareTerminal
 import type { Project, Script, ScriptTarget, ScriptType } from '@shared/types'
 import { Button, Field, Modal, inputCls } from './ui'
 import { cn, extractProjectKeys, extractUserVariables, uid } from '../lib/utils'
+import { useAis } from '../lib/ais'
 
 function encodeTarget(t: ScriptTarget): string {
   return t.kind === 'project' ? `project:${t.projectId}` : t.kind
@@ -26,6 +27,7 @@ export function ScriptModal({
 }) {
   const [name, setName] = useState('')
   const [type, setType] = useState<ScriptType>('terminal')
+  const ais = useAis()
   const [targetKey, setTargetKey] = useState('global')
   const [customPath, setCustomPath] = useState('')
   const [content, setContent] = useState('')
@@ -141,7 +143,9 @@ export function ScriptModal({
               ['gemini', 'Ordem para o Gemini', 'Análise (sem executar)', Gem],
               ['codex', 'Ordem para o ChatGPT', 'Codex CLI, só leitura', Bot]
             ] as const
-          ).map(([value, label, sub, Icon]) => (
+          )
+            .filter(([value]) => value === 'terminal' || value === type || ais[value])
+            .map(([value, label, sub, Icon]) => (
             <button
               key={value}
               type="button"

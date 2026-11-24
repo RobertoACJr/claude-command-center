@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from 'child_process'
 import { existsSync } from 'fs'
 import type { OpResult, TerminalPreset } from '../shared/types'
-import { IS_WIN, bashQuote } from './proc'
+import { bashQuote, envWithPath, IS_WIN } from './proc'
 
 /** Comandos que podem ser abertos num terminal do sistema: lista fechada, nada vindo de texto livre */
 const PRESETS: Record<TerminalPreset, string> = {
@@ -32,8 +32,8 @@ export function openSystemTerminal(cwd: string, preset?: TerminalPreset): OpResu
       const psArgs = ['-NoExit', '-NoLogo', ...(cmd ? ['-Command', cmd] : [])]
       const hasWt = spawnSync('where', ['wt.exe'], { windowsHide: true }).status === 0
       const child = hasWt
-        ? spawn('wt.exe', ['-d', cwd, 'powershell.exe', ...psArgs], { cwd, detached: true, stdio: 'ignore' })
-        : spawn('powershell.exe', psArgs, { cwd, detached: true, stdio: 'ignore', windowsHide: false })
+        ? spawn('wt.exe', ['-d', cwd, 'powershell.exe', ...psArgs], { cwd, detached: true, stdio: 'ignore', env: envWithPath() })
+        : spawn('powershell.exe', psArgs, { cwd, detached: true, stdio: 'ignore', windowsHide: false, env: envWithPath() })
       child.on('error', () => {})
       child.unref()
       return { ok: true, message: 'Terminal aberto.' }
@@ -54,7 +54,7 @@ export function openSystemTerminal(cwd: string, preset?: TerminalPreset): OpResu
     ]
     const found = candidates.find(([bin]) => has(bin))
     if (!found) return { ok: false, message: 'Nenhum terminal encontrado (instale o gnome-terminal ou outro).' }
-    const child = spawn(found[0], found[1], { cwd, detached: true, stdio: 'ignore' })
+    const child = spawn(found[0], found[1], { cwd, detached: true, stdio: 'ignore', env: envWithPath() })
     child.on('error', () => {})
     child.unref()
     return { ok: true, message: `Terminal aberto (${found[0]}).` }

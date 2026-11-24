@@ -1,7 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { AppWindow, ArrowLeftRight, CircleHelp, Bell, Bot, Eye, Gem, Github, KeyRound, Loader2, MessageSquare, MessageSquareReply, Pencil, Plug, Plus, RefreshCw, Rocket, Search, Send, Settings, ShieldCheck, SquareKanban, Trash2, Workflow, X, Zap } from 'lucide-react'
+import { AppWindow, ArrowLeftRight, CheckCircle2, CircleHelp, Bell, Bot, Eye, Gem, Github, KeyRound, Loader2, MessageSquare, MessageSquareReply, Pencil, Plug, Plus, RefreshCw, Rocket, Search, Send, Settings, ShieldCheck, SquareKanban, Trash2, Workflow, X, XCircle, Zap } from 'lucide-react'
 import type {
+  AiId,
   AiProvider,
+  ToolCheck,
   AppConfig,
   AutomationRule,
   ReplyTemplate,
@@ -20,7 +22,8 @@ import { Button, Field, IconButton, Modal, Toggle, inputCls } from './ui'
 import { cn, uid } from '../lib/utils'
 import { isProdEnv } from '@shared/vars'
 import { ClaudePermsEditor } from './ClaudePermsEditor'
-import { SetupTab } from './SetupTab'
+import { Copy, SetupTab, TOOLS, type Os } from './SetupTab'
+import { useAis } from '../lib/ais'
 
 export type SettingsTab = 'setup' | 'general' | 'integrations' | 'ai' | 'telegram' | 'watcher' | 'automation'
 type Tab = SettingsTab
@@ -898,6 +901,7 @@ function TelegramTab({ config, sec, save }: { config: AppConfig; sec: SecretsSta
 function WatcherTab({ config, watcher, save }: { config: AppConfig; watcher: WatcherState; save: SaveFn }) {
   const [w, setW] = useState(config.watcher)
   const [saved, setSaved] = useState(false)
+  const ais = useAis()
   useEffect(() => setW(config.watcher), [config.watcher])
 
   const persist = async () => {
@@ -925,7 +929,9 @@ function WatcherTab({ config, watcher, save }: { config: AppConfig; watcher: Wat
                 ['claude', 'Claude Code', 'claude -p, ferramentas só de leitura'],
                 ['gemini', 'Gemini CLI', 'gemini, política só de leitura']
               ] as Array<[AiProvider, string, string]>
-            ).map(([p, label, sub]) => (
+            )
+              .filter(([p]) => p === w.provider || ais[p])
+              .map(([p, label, sub]) => (
               <button
                 key={p}
                 type="button"
@@ -1118,6 +1124,129 @@ function GeneralTab({ config, save }: { config: AppConfig; save: SaveFn }) {
 
 // ---------------------------------------------------------------- IAs
 
+const AI_ROWS: Array<{ id: AiId; name: string; what: string }> = [
+  { id: 'claude', name: 'Claude', what: 'Desenvolvimento, demandas, fila, Remote Control, Vigia e respostas no chat' },
+  { id: 'gemini', name: 'Gemini', what: 'Análises, revisão e Vigia (poupa o limite do Claude)' },
+  { id: 'codex', name: 'ChatGPT (Codex)', what: 'Análise, desenho e revisão de demandas, console só leitura' }
+]
+
+/**
+ * Escolha simples: liga/desliga cada IA neste PC e mostra se ela está instalada e logada.
+ * Desligada, a IA some dos seletores (console, scripts, demandas, revisão, Vigia).
+ */
+function AiPicker({ config }: { config: AppConfig }) {
+  const [checks, setChecks] = useState<ToolCheck[] | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [os, setOs] = useState<Os>('linux')
+  const [home, setHome] = useState('')
+  const check = async () => {
+    setChecking(true)
+    try {
+      setChecks(await window.api.checkTools())
+    } finally {
+      setChecking(false)
+    }
+  }
+  useEffect(() => {
+    void window.api.platform().then(setOs)
+    void window.api.homeDir().then(setHome)
+    void check()
+  }, [])
+  const ais = config.ui.ais
+  const onCount = AI_ROWS.filter((r) => ais[r.id]).length
+
+  return (
+    <div className="rounded-xl border border-line bg-card-2" data-testid="ai-picker">
+      <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
+        <div>
+          <div className="text-sm font-semibold text-zinc-100">Quais IAs o Hélice usa neste PC</div>
+          <div className="text-[11px] text-zinc-500">Desligada, a IA some de todos os seletores. Vale só para este computador.</div>
+        </div>
+        <Button size="sm" onClick={check} disabled={checking}>
+          {checking ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Verificar
+        </Button>
+      </div>
+      <div className="divide-y divide-line">
+        {AI_ROWS.map((r) => {
+          const c = checks?.find((x) => x.id === r.id)
+          const tool = TOOLS.find((t) => t.id === r.id)
+          const install = tool?.install[os]
+          const on = ais[r.id]
+          return (
+            <div key={r.id} className="flex items-start gap-3 px-4 py-3">
+              <div className="mt-0.5">
+                {!checks ? (
+                  <Loader2 size={15} className="animate-spin text-zinc-500" />
+                ) : c?.installed ? (
+                  <CheckCircle2 size={15} className="text-purple" />
+                ) : (
+                  <XCircle size={15} className="text-zinc-600" />
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm text-zinc-100">{r.name}</div>
+                <div className="text-[11px] text-zinc-500">{r.what}</div>
+                <div className="mt-0.5 text-[11px]">
+                  {!checks ? (
+                    <span className="text-zinc-500">procurando…</span>
+                  ) : c?.installed ? (
+                    <span className="text-zinc-400">
+                      {c.detail}
+                      {c.loggedIn === false && <span className="text-amber-300"> · sem login</span>}
+                    </span>
+                  ) : (
+                    <span className="text-zinc-400">Não encontrado neste PC.</span>
+                  )}
+                </div>
+                {checks && !c?.installed && install && (
+                  <div className="mt-1.5 flex items-center gap-1 rounded-md border border-line bg-bg px-2 py-1 font-mono text-[11px] text-zinc-300">
+                    <span className="selectable min-w-0 flex-1 truncate">{install}</span>
+                    <Copy text={install} />
+                  </div>
+                )}
+                {checks && (!c?.installed || c.loggedIn === false) && tool?.login && (
+                  <button
+                    type="button"
+                    onClick={() => home && window.api.openSystemTerminal(home, tool.login!.preset)}
+                    className="mt-1 cursor-pointer text-[11px] text-purple underline decoration-dotted underline-offset-2"
+                  >
+                    {c?.installed ? 'Fazer login (abre o terminal)' : 'Depois de instalar: fazer login (abre o terminal)'}
+                  </button>
+                )}
+              </div>
+              <Switch
+                checked={on}
+                disabled={on && onCount === 1}
+                title={on && onCount === 1 ? 'Deixe ao menos uma IA ligada' : on ? 'Desligar' : 'Ligar'}
+                onChange={(v) => void window.api.saveUi({ ais: { ...ais, [r.id]: v } })}
+              />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function Switch({ checked, onChange, disabled, title }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; title?: string }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      title={title}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        'relative mt-0.5 h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60',
+        checked ? 'bg-violet' : 'bg-zinc-700'
+      )}
+    >
+      <span className={cn('absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all', checked ? 'left-[18px]' : 'left-0.5')} />
+    </button>
+  )
+}
+
 function AiTab({ config, save }: { config: AppConfig; save: SaveFn }) {
   const [codexCmd, setCodexCmd] = useState(config.ai.codexCommand)
   const [cmd, setCmd] = useState(config.ai.geminiCommand)
@@ -1127,6 +1256,7 @@ function AiTab({ config, save }: { config: AppConfig; save: SaveFn }) {
 
   return (
     <div className="space-y-3">
+      <AiPicker config={config} />
       <Section icon={<Bot size={15} />} title="Claude Code">
         <p className="text-xs text-zinc-500">
           Usa o <code>claude</code> do seu PATH (login feito no próprio Claude Code). Ele cuida das ordens de
