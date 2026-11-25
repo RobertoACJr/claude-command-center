@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   ShotSet,
+  WorkLogState,
   SyncStatus,
   CostGuard,
   QueueState,
@@ -73,6 +74,19 @@ const api: CommandCenterApi = {
   envProfiles: (id) => ipcRenderer.invoke('env:profiles', id),
   envSwitch: (id, file) => ipcRenderer.invoke('env:switch', id, file),
   profileRun: (id) => ipcRenderer.invoke('profiles:run', id),
+  worklogState: () => ipcRenderer.invoke('worklog:state'),
+  worklogStart: (id) => ipcRenderer.invoke('worklog:start', id),
+  worklogStop: () => ipcRenderer.invoke('worklog:stop'),
+  worklogDelete: (id) => ipcRenderer.invoke('worklog:delete', id),
+  worklogEdit: (id, start, end) => ipcRenderer.invoke('worklog:edit', id, start, end),
+  worklogPush: (id, day) => ipcRenderer.invoke('worklog:push', id, day),
+  onWorklog: (cb) => {
+    const h = (_e: unknown, s: WorkLogState) => cb(s)
+    ipcRenderer.on('worklog:update', h)
+    return () => ipcRenderer.removeListener('worklog:update', h)
+  },
+  jiraTransitions: (id) => ipcRenderer.invoke('jira:transitions', id),
+  jiraTransition: (id, t) => ipcRenderer.invoke('jira:transition', id, t),
   projectSuggest: (path, dockerCommand) => ipcRenderer.invoke('project:suggest', path, dockerCommand),
   saveProfiles: (list) => ipcRenderer.invoke('profiles:save', list),
   projectRestart: (id) => ipcRenderer.invoke('project:restart', id),

@@ -516,6 +516,15 @@ export class DemandManager {
     return [...this.busy.values()]
   }
 
+  /** Status do card no Jira mudou por aqui (transição): guarda sem buscar o card de novo */
+  setJiraStatus(id: string, status: string): void {
+    const d = this.get(id)
+    if (!d?.jira) return
+    d.jira = { ...d.jira, status }
+    this.note(d, `Jira: ${status}`)
+    this.persist(d)
+  }
+
   get(id: string): Demand | undefined {
     return this.list.find((d) => d.id === id)
   }

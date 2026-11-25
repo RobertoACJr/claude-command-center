@@ -93,30 +93,8 @@ export class ProjectProcesses {
   private startedWith = new Map<string, string>()
   /** Projetos parados por causa do modo Ausente (para religar na volta) */
   private awayStopped = new Set<string>()
-  /** Espera até o projeto responder antes de subir quem depende dele (pode ser trocada nos testes) */
-  waitReadyMs = 90_000
-
-  /** Projeto responde? Endereço de saúde, senão a porta; sem nenhum dos dois, considera pronto */
-  async isReady(p: Project): Promise<boolean> {
-    if (p.healthUrl) return checkHealth(p.healthUrl)
-    if (p.port) return isPortOpen(p.port)
-    return true
-  }
-
-  private async waitReady(p: Project): Promise<boolean> {
-    if (!p.healthUrl && !p.port) return true
-    const until = Date.now() + this.waitReadyMs
-    while (Date.now() < until) {
-      if (await this.isReady(p)) return true
-      if (!this.runs.isRunning(this.get(p.id).runId)) return false
-      await new Promise((r) => setTimeout(r, 1500))
-    }
-    return false
-  }
-
   /**
-   * Executa o projeto. Com `group`, executa antes os projetos ligados (ex.: o back) e espera eles
-   * responderem (endereço de saúde ou porta), para o front não abrir com a API fora do ar.
+   * Executa o projeto. Com `group`, executa também os projetos ligados (ex.: o back), todos ao mesmo tempo.
    */
   async start(id: string, group = false, seen = new Set<string>()): Promise<OpResult> {
     const p = this.projects.get(id)
@@ -144,16 +122,15 @@ export class ProjectProcesses {
         const lp = this.projects.get(lid)
         if (!lp?.runCommand) continue
         const ls = this.get(lid)
-        if (!this.runs.isRunning(ls.runId) && ls.state !== 'external') {
-          const r = await this.start(lid, true, seen)
-          if (!r.ok) {
-            problems.push(`${lp.name}: ${r.message}`)
-            continue
-          }
-          this.startedWith.set(lid, id)
-          alsoStarted.push(lp.name)
+        if (this.runs.isRunning(ls.runId) || ls.state === 'external') continue
+        // Sobem todos ao mesmo tempo (sem esperar um responder para subir o outro)
+        const r = await this.start(lid, true, seen)
+        if (!r.ok) {
+          problems.push(`${lp.name}: ${r.message}`)
+          continue
         }
-        if (!(await this.waitReady(lp))) problems.push(`${lp.name} não respondeu a tempo; subi mesmo assim`)
+        this.startedWith.set(lid, id)
+        alsoStarted.push(lp.name)
       }
     }
 

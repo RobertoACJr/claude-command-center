@@ -27,6 +27,7 @@ import { looksLikeRule } from '@shared/text'
 import { ShotsView } from './ShotsView'
 import { cn, uid } from '../lib/utils'
 import { onlyEnabled, useAis } from '../lib/ais'
+import { DemandWorkBar } from './Worklog'
 import { Button, Modal } from './ui'
 
 export const DEMAND_STATUS: Array<{ id: DemandStatus; label: string; cls: string }> = [
@@ -353,6 +354,7 @@ export function DemandModal({
           ))}
         </select>
       </div>
+      {!isNew && <DemandWorkBar demandId={d.id} jiraKey={d.key} onResult={setResult} />}
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
         <span>Projeto: {project?.name ?? '?'}</span>
         {d.hours && <span>· estimativa {d.hours}h ({days(d.hours)})</span>}

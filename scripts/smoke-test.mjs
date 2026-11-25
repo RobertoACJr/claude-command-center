@@ -277,6 +277,17 @@ try {
     await sleep(600)
   }
 
+  // 4b4) Jornadas: botão no topo abre a janela
+  if (!(await evaluate(`!!document.querySelector('[data-testid="worklog-open"], [data-testid="worklog-active"]')`))) fail('Botão de Jornadas não apareceu no topo')
+  else {
+    await evaluate(`(document.querySelector('[data-testid="worklog-open"]') || document.querySelector('[data-testid="worklog-active"] button')).click()`)
+    await sleep(800)
+    if (!(await evaluate(`!!document.querySelector('[data-testid="worklog-modal"]')`))) fail('Janela de Jornadas não abriu')
+    else console.log('✓ Janela de Jornadas abriu')
+    await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
+    await sleep(500)
+  }
+
   // 4c) Remote Control com link enorme: não pode criar rolagem horizontal; vira notificação no sino
   const clickRemote = () =>
     evaluate(`(() => {

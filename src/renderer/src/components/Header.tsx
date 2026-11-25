@@ -3,6 +3,7 @@ import { Command, Eye, EyeOff, History, ListTodo, Loader2, Settings, TerminalSqu
 import type { CostGuard, NotificationTarget, PresenceStatus, WatcherState } from '@shared/types'
 import { NotificationBell } from './NotificationBell'
 import { HelixLogo } from './HelixLogo'
+import { WorkTimer } from './Worklog'
 import { cn } from '../lib/utils'
 
 export function Header({
@@ -66,6 +67,7 @@ export function Header({
           <Command size={13} /> <span className="hidden xl:inline">Comandos</span>{' '}
           <kbd className="hidden rounded border border-line px-1 text-[10px] whitespace-nowrap xl:inline">Ctrl K</kbd>
         </button>
+        <WorkTimer />
         <WatcherPill state={watcher} enabled={watcherEnabled} onClick={onToggleWatcher} />
         <button
           type="button"

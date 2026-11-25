@@ -1,8 +1,10 @@
 import { AppLogs, logTail } from './applog'
+import { jiraTransition, jiraTransitions, jiraWorklog } from './jira'
+import { WorkLog } from './worklog'
 import { composeCmd, dockerStatus, execCommand as dockerExecCommand, hasComposeFile, SAFE_SERVICE, shellCommand as dockerShellCommand, suggestions as dockerSuggestions } from './docker'
 import { envProfiles, envSwitch } from './envfiles'
 import { killPortOwner, portOwner } from './ports'
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Notification, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Notification, powerMonitor, shell } from 'electron'
 import { existsSync } from 'fs'
 import { writeFileAtomic } from './fsutil'
 import { homedir } from 'os'
@@ -102,6 +104,19 @@ const runs = new RunManager((e) => {
   if (e.type === 'exit') approvals.runEnded(e.runId)
   send('run:event', e)
 })
+/** Jornadas: tempo em cada demanda */
+const worklog = new WorkLog((st) => send('worklog:update', st))
+worklog.init(app.getPath('userData'))
+// A cada minuto: sinal de vida e pausa se você sumiu do PC
+setInterval(() => {
+  try {
+    const key = worklog.tick(powerMonitor.getSystemIdleTime(), store.get().general.idlePauseMin)
+    if (key) notify(`⏸ Jornada pausada: ${key}`, `Você ficou ${store.get().general.idlePauseMin} min sem mexer no PC; parei de contar no momento em que você saiu.`, undefined, 'demanda', 'never', false)
+  } catch {
+    /* ignora */
+  }
+}, 60_000)
+
 /** Log da aplicação de cada projeto e aviso quando aparece erro */
 const appLogs = new AppLogs(
   runs,
@@ -416,7 +431,8 @@ const tg = new TelegramControl({
   status: () => telegramStatus(),
   log: (text, kind = 'info') => appLog({ kind, text }),
   runProfile: (id) => runProfile(id),
-  logTail: (p) => logTail(p)
+  logTail: (p) => logTail(p),
+  worklog: { state: () => worklog.state(), stop: () => worklog.stop() }
 })
 
 function telegramReady(): boolean {
@@ -613,6 +629,11 @@ function setPresence(status: PresenceStatus, keepRemote = true): AppConfig {
   const before = store.get().status
   const cfg = store.setStatus(status)
   if (status === 'off' && before !== 'off') {
+    const w = worklog.state().active
+    if (w) {
+      worklog.stop('Ausente')
+      notify(`⏸ Jornada pausada: ${w.key}`, 'Você ficou Ausente.', undefined, 'demanda', 'never', false)
+    }
     // Projetos marcados "parar no Ausente" (menos os que a fila está usando)
     const busy = new Set(queue.state().tasks.filter((t) => t.status === 'rodando' || t.status === 'pendente').map((t) => t.projectId))
     void projects.stopForAway(busy).then((names) => {
@@ -1027,6 +1048,36 @@ function registerIpc(): void {
     demands.createPr(String(id), { title: String(pr?.title ?? ''), body: String(pr?.body ?? ''), draft: Boolean(pr?.draft) })
   )
   ipcMain.handle('demands:timings', () => demands.timings())
+  ipcMain.handle('worklog:state', () => worklog.state())
+  ipcMain.handle('worklog:start', (_e, demandId: string) => {
+    const d = demands.get(String(demandId))
+    if (!d) return worklog.state()
+    return worklog.start({ demandId: d.id, key: d.key, title: d.jira?.summary || d.title || d.key, projectId: d.projectId })
+  })
+  ipcMain.handle('worklog:stop', () => worklog.stop())
+  ipcMain.handle('worklog:delete', (_e, id: string) => worklog.remove(String(id)))
+  ipcMain.handle('worklog:edit', (_e, id: string, start: number, end: number) => worklog.edit(String(id), Number(start), Number(end)))
+  ipcMain.handle('worklog:push', async (_e, demandId: string, day: string) => {
+    const d = demands.get(String(demandId))
+    if (!d) return { ok: false, message: 'Demanda não encontrada.' }
+    const list = worklog.pending(d.id, String(day))
+    if (!list.length) return { ok: false, message: 'Nada para lançar nesse dia (ou já foi lançado).' }
+    const secs = list.reduce((t, s) => t + ((s.end ?? Date.now()) - s.start) / 1000, 0)
+    const r = await jiraWorklog(d.key, secs, Math.min(...list.map((s) => s.start)), 'Lançado pelo Hélice')
+    if (r.ok) worklog.markLogged(list.map((s) => s.id))
+    return r
+  })
+  ipcMain.handle('jira:transitions', (_e, demandId: string) => {
+    const d = demands.get(String(demandId))
+    return d ? jiraTransitions(d.key) : { ok: false, message: 'Demanda não encontrada.' }
+  })
+  ipcMain.handle('jira:transition', async (_e, demandId: string, transitionId: string) => {
+    const d = demands.get(String(demandId))
+    if (!d) return { ok: false, message: 'Demanda não encontrada.' }
+    const r = await jiraTransition(d.key, String(transitionId))
+    if (r.ok && r.status) demands.setJiraStatus(d.id, r.status)
+    return r
+  })
   ipcMain.handle('daily:text', () => dailyText())
   ipcMain.handle('sync:status', () => sync.status())
   ipcMain.handle('sync:now', async () => {
@@ -1151,6 +1202,7 @@ if (!gotLock) {
 
   // Encerra tudo que o app abriu: nada de processo órfão/zumbi
   app.on('before-quit', () => {
+    worklog.stop('app fechado')
     quitting = true
     history.flush()
     if (syncTimer) clearInterval(syncTimer)

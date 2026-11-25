@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { AppWindow, ArrowLeftRight, CheckCircle2, CircleHelp, Bell, Bot, Eye, Gem, Github, KeyRound, Loader2, MessageSquare, MessageSquareReply, Pencil, Plug, Plus, RefreshCw, Rocket, Search, Send, Settings, ShieldCheck, SquareKanban, Trash2, Workflow, X, XCircle, Zap } from 'lucide-react'
+import { AppWindow, ArrowLeftRight, CheckCircle2, CircleHelp, Clock, Bell, Bot, Eye, Gem, Github, KeyRound, Loader2, MessageSquare, MessageSquareReply, Pencil, Plug, Plus, RefreshCw, Rocket, Search, Send, Settings, ShieldCheck, SquareKanban, Trash2, Workflow, X, XCircle, Zap } from 'lucide-react'
 import type {
   AiId,
   AiProvider,
@@ -1081,6 +1081,20 @@ function GeneralTab({ config, save }: { config: AppConfig; save: SaveFn }) {
           label="Avisar quando um script terminar"
           hint="Com sucesso ou falha. Clicar leva para a aba do script."
         />
+      </Section>
+
+      <Section icon={<Clock size={15} />} title="Jornadas">
+        <p className="text-xs text-zinc-400">
+          O cronômetro de cada demanda pausa sozinho quando você fica Ausente e depois de um tempo sem mexer no PC (o tempo parado não conta).
+        </p>
+        <Field label="Pausar depois de (minutos sem mexer no PC)" hint="0 = nunca pausar por inatividade.">
+          <input
+            className={inputCls + ' w-28 font-mono text-xs'}
+            defaultValue={String(g.idlePauseMin)}
+            inputMode="numeric"
+            onBlur={(e) => save({ general: { idlePauseMin: Math.max(0, Math.min(240, Number(e.target.value.replace(/\D/g, '')) || 0)) } })}
+          />
+        </Field>
       </Section>
 
       <SyncSection config={config} save={save} />

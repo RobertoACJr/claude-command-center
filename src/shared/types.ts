@@ -248,6 +248,8 @@ export interface GeneralPrefs {
   desktopNotifications: boolean
   /** Avisar quando um script terminar */
   notifyScriptDone: boolean
+  /** Jornadas: pausar o cronômetro depois de tantos minutos sem mexer no PC (0 = nunca) */
+  idlePauseMin: number
 }
 
 export type NotificationKind = 'pedido' | 'permissao' | 'projeto' | 'script' | 'atualizacao' | 'vigia' | 'remote' | 'demanda' | 'fila' | 'custos' | 'sistema'
@@ -745,6 +747,35 @@ export interface PrDraft {
 }
 
 /** Estimado × real de uma demanda */
+/** Um período trabalhando numa demanda (jornada) */
+export interface WorkSession {
+  id: string
+  demandId: string
+  /** Número do card (ex.: MAS-123) */
+  key: string
+  title: string
+  projectId: string
+  start: number
+  /** null = em andamento */
+  end: number | null
+  /** Já lançado como horas no Jira */
+  jiraLogged?: boolean
+  /** Como terminou, quando não foi você (ex.: "Ausente", "15 min sem mexer no PC") */
+  note?: string
+}
+
+export interface WorkLogState {
+  active: WorkSession | null
+  /** Últimos 90 dias, mais recentes primeiro */
+  sessions: WorkSession[]
+}
+
+export interface JiraTransition {
+  id: string
+  name: string
+  to: string
+}
+
 export interface DemandTiming {
   demandId: string
   key: string
@@ -924,6 +955,19 @@ export interface CommandCenterApi {
   demandPrDraft(id: string): Promise<PrDraft | null>
   demandCreatePr(id: string, pr: { title: string; body: string; draft: boolean }): Promise<OpResult>
   demandTimings(): Promise<DemandTiming[]>
+  /** Jornadas: tempo em cada demanda */
+  worklogState(): Promise<WorkLogState>
+  worklogStart(demandId: string): Promise<WorkLogState>
+  worklogStop(): Promise<WorkLogState>
+  worklogDelete(sessionId: string): Promise<WorkLogState>
+  /** Corrige início/fim de um período */
+  worklogEdit(sessionId: string, start: number, end: number): Promise<WorkLogState>
+  /** Lança no Jira o tempo ainda não lançado da demanda naquele dia (AAAA-MM-DD) */
+  worklogPush(demandId: string, day: string): Promise<OpResult>
+  onWorklog(cb: (s: WorkLogState) => void): () => void
+  /** Status atual do card no Jira e para onde pode ir */
+  jiraTransitions(demandId: string): Promise<OpResult & { status?: string; transitions?: JiraTransition[] }>
+  jiraTransition(demandId: string, transitionId: string): Promise<OpResult & { status?: string }>
   /** Resumo para a daily (texto pronto para colar) */
   daily(): Promise<string>
 

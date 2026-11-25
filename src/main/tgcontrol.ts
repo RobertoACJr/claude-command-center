@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto'
 import { homedir } from 'os'
-import type { HistoryEntry, Project, RunEvent, Script } from '../shared/types'
+import type { HistoryEntry, Project, RunEvent, Script, WorkLogState } from '../shared/types'
 import { extractUserVariables, missingProjectKeys, projectValues } from '../shared/vars'
 import type { DemandManager } from './demands'
 import type { History } from './history'
@@ -80,6 +80,8 @@ export class TelegramControl {
       runProfile: (id: string) => Promise<{ ok: boolean; message: string }>
       /** Últimas linhas do log da aplicação do projeto */
       logTail: (p: Project) => Promise<{ ok: boolean; message: string; text?: string }>
+      /** Jornadas (tempo por demanda) */
+      worklog?: { state: () => WorkLogState; stop: () => WorkLogState }
     }
   ) {}
 
@@ -151,6 +153,7 @@ export class TelegramControl {
   readonly help = [
     '<b>Comandos</b>',
     '/projetos · executar, parar, Remote Control e log de cada projeto',
+    '/jornada · tempo em cada demanda hoje e na semana; pausa o cronômetro',
     '/subir · sobe um perfil de trabalho ou um projeto (com os ligados); /subir nome',
     '/parar nome · para o projeto e os ligados (/parar sozinho interrompe o que o Telegram mandou rodar)',
     '/log nome · log da aplicação do projeto (ex.: laravel.log); sem log configurado, a saída da última execução',
@@ -178,6 +181,10 @@ export class TelegramControl {
         return true
       case 'subir':
         await this.upCommand(args)
+        return true
+      case 'jornada':
+      case 'jornadas':
+        await this.sendWorklog()
         return true
 
       case 'rodar':
@@ -325,6 +332,51 @@ export class TelegramControl {
       })
       await this.edit(id, v.html, [...v.buttons, [refresh]])
     }
+  }
+
+  // ------------------------------------------------------------ /jornada
+
+  private async sendWorklog(): Promise<void> {
+    const w = this.d.worklog
+    if (!w) return void (await this.say('Jornadas indisponíveis.'))
+    const st = w.state()
+    const now = Date.now()
+    const d0 = new Date()
+    d0.setHours(0, 0, 0, 0)
+    const week = d0.getTime() - ((d0.getDay() + 6) % 7) * 86_400_000
+    const sum = (from: number) => {
+      const m = new Map<string, number>()
+      for (const s of st.sessions) {
+        const a = Math.max(s.start, from)
+        const b = s.end ?? now
+        if (b > a) m.set(s.key, (m.get(s.key) ?? 0) + (b - a))
+      }
+      return [...m].sort((x, y) => y[1] - x[1])
+    }
+    const hm = (ms: number) => {
+      const t = Math.round(ms / 60000)
+      return `${Math.floor(t / 60)}h${String(t % 60).padStart(2, '0')}`
+    }
+    const today = sum(d0.getTime())
+    const wk = sum(week)
+    const lines = [
+      st.active ? `⏱ <b>${escapeHtml(st.active.key)}</b> em andamento há ${hm(now - st.active.start)}` : '⏸ Nenhum cronômetro rodando.',
+      '',
+      '<b>Hoje</b>',
+      ...(today.length ? today.map(([k, ms]) => `• ${escapeHtml(k)}: ${hm(ms)}`) : ['—']),
+      `Total: ${hm(today.reduce((t, x) => t + x[1], 0))}`,
+      '',
+      '<b>Semana</b>',
+      ...(wk.length ? wk.map(([k, ms]) => `• ${escapeHtml(k)}: ${hm(ms)}`) : ['—']),
+      `Total: ${hm(wk.reduce((t, x) => t + x[1], 0))}`
+    ]
+    const buttons: Buttons = st.active
+      ? [[this.btn('⏸ Pausar', async () => {
+          w.stop()
+          return 'Pausado.'
+        })]]
+      : []
+    await this.say(lines.join('\n'), buttons)
   }
 
   // ------------------------------------------------------------ /subir /parar /log

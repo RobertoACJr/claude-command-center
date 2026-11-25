@@ -59,7 +59,7 @@ function Table({ title, rows, testid }: { title: string; rows: Row[]; testid?: s
               <span className="truncate text-zinc-300">{r.label}</span>
               <span className="shrink-0 text-zinc-400 tabular-nums">
                 {r.usd ? usd(r.usd) : ''}
-                {r.tokens && !r.usd ? `${tk(r.tokens)} tokens` : ''}
+                {r.tokens ? `${r.usd ? ' · ' : ''}${tk(r.tokens)} tok` : ''}
                 <span className="text-zinc-600"> · {r.runs}×</span>
               </span>
             </div>
@@ -109,6 +109,7 @@ export function CostsModal({
   const list = useMemo(() => entries.filter((e) => e.at >= from), [entries, from])
   const total = list.reduce((s, e) => s + (e.usd ?? 0), 0)
   const otherTokens = list.filter((e) => e.ai !== 'claude').reduce((s, e) => s + (e.tokens ?? 0), 0)
+  const tokensBy = (ai: CostEntry['ai']) => list.filter((e) => e.ai === ai).reduce((s, e) => s + (e.tokens ?? 0), 0)
 
   const perDay = Array.from({ length: days }, (_, i) => {
     const start = from + i * 86_400_000
@@ -140,6 +141,11 @@ export function CostsModal({
           <div className="text-[11px] text-zinc-500">Últimos {days} dias</div>
           <div className="text-2xl font-semibold text-zinc-100 tabular-nums">{usd(total)}</div>
           {otherTokens > 0 && <div className="text-[11px] text-zinc-500">+ {tk(otherTokens)} tokens (Gemini/ChatGPT)</div>}
+          <div className="mt-1 text-[11px] text-zinc-400" data-testid="costs-tokens" title="Tokens de entrada + saída + cache que cada IA informou">
+            {tk(tokensBy('claude'))} tokens no Claude
+            {tokensBy('gemini') > 0 && ` · ${tk(tokensBy('gemini'))} no Gemini`}
+            {tokensBy('codex') > 0 && ` · ${tk(tokensBy('codex'))} no ChatGPT`}
+          </div>
         </div>
         <div className="space-y-1.5 rounded-xl border border-line bg-bg/50 p-3">
           <div className="text-[11px] text-zinc-500">Limite diário (US$)</div>
@@ -166,6 +172,7 @@ export function CostsModal({
         </div>
       </div>
       <p className="text-[11px] text-zinc-500">
+        Tokens: o quanto de texto cada IA leu e escreveu (inclui o contexto reaproveitado do cache, que é a maior parte no Claude).
         Valores do Claude são o custo estimado que ele informa (equivalente da API; no plano Pro/Max não é cobrado à parte,
         mas mostra o quanto você usou). Gemini e ChatGPT informam só tokens. Passando do limite, a fila, o Vigia e as regras
         automáticas param até o dia seguinte; o que você manda na mão continua funcionando.

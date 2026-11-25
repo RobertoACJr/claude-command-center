@@ -29,6 +29,7 @@ import { SettingsModal, type SettingsTab } from './components/SettingsModal'
 import { AlertsBar } from './components/AlertsBar'
 import { AwayBanner, GoOnlineModal, VigiaBanner } from './components/Presence'
 import { setEnabledAis } from './lib/ais'
+import { WorklogModal } from './components/Worklog'
 import {
   FIXED_TABS,
   TerminalsPanel,
@@ -47,6 +48,7 @@ import { CostsModal } from './components/CostsModal'
 import { DailyModal } from './components/DailyModal'
 import { ShotsModal } from './components/ShotsView'
 import {
+  Clock,
   Bell,
   Bot,
   ClipboardList,
@@ -767,6 +769,7 @@ export default function App() {
       run: () => window.api.watcherRunNow()
     },
     { id: 'daily', group: 'App', label: 'Resumo para a daily', icon: <MessageSquareText size={14} />, keywords: 'daily standup ontem hoje', run: () => setDailyOpen(true) },
+    { id: 'worklog', group: 'App', label: 'Jornadas: tempo em cada demanda', icon: <Clock size={14} />, keywords: 'jornada horas tempo timesheet worklog', run: () => window.dispatchEvent(new CustomEvent('helice:open-worklog')) },
     { id: 'sync', group: 'App', label: 'Sincronizar entre PCs agora', icon: <RefreshCw size={14} />, keywords: 'sync windows ubuntu', run: async () => {
       const r = await window.api.syncNow()
       if (r.ok) log('success', `[Sincronizar] ${r.message}`)
@@ -998,6 +1001,7 @@ export default function App() {
         )
       })()}
       <DailyModal open={dailyOpen} onClose={() => setDailyOpen(false)} />
+      <WorklogModal onResult={(r) => showToast(r.message)} />
       <ShotsModal project={shotsProject} onClose={() => setShotsProject(null)} />
       <QueueModal
         open={!!queueOpen}
