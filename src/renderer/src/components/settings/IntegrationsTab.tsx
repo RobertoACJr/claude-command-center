@@ -25,6 +25,7 @@ import { isProdEnv } from '@shared/vars'
 import { ClaudePermsEditor } from '../ClaudePermsEditor'
 import { Copy, SetupTab, TOOLS, type Os } from '../SetupTab'
 import { useAis } from '../../lib/ais'
+import { TokenCheck } from './TokenCheck'
 import { HelpTip, Section, SecretInput, Result, useBusy, Spin, CHECK_STYLE, fmtWhen, CheckList, CheckBadge, Switch, IconBtn, type SaveFn } from './shared'
 
 export const CHECKS_KEY = 'helice.testesIntegracoes'
@@ -119,6 +120,7 @@ export function IntegrationsTab({ config, sec, save }: { config: AppConfig; sec:
 
   return (
     <div className="space-y-3">
+      <TokenCheck />
       <p className="text-[11px] text-zinc-500">
         Cada integração é testada de verdade e o resultado fica guardado por um dia (use Testar de novo quando quiser). Passe
         o mouse no <b>?</b> para ver para que serve. As que estão funcionando ficam fechadas; use o lápis para editar.

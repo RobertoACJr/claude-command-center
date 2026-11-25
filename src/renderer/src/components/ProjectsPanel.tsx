@@ -304,6 +304,7 @@ function ProjectCard({
   const [showScripts, setShowScripts] = useState(true)
   const [showDemands, setShowDemands] = useState(true)
   const [showDone, setShowDone] = useState(false)
+  const [syncingJira, setSyncingJira] = useState(false)
   const openDemands = demands.filter((d) => d.status !== 'feita')
   const doneCount = demands.length - openDemands.length
   /** Clique em andamento: mostra "Iniciando…/Parando…" até o estado mudar de verdade */
@@ -593,9 +594,27 @@ function ProjectCard({
             {showDemands ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
             Demandas ({openDemands.length})
           </button>
+          <div className="flex items-center">
+          {demands.length > 0 && (
+            <IconButton
+              title="Sincronizar com o Jira: atualiza o status das demandas e finaliza aqui as concluídas lá"
+              onClick={async () => {
+                setSyncingJira(true)
+                try {
+                  onToolResult(await window.api.jiraSync())
+                } finally {
+                  setSyncingJira(false)
+                }
+              }}
+              data-testid="jira-sync"
+            >
+              {syncingJira ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+            </IconButton>
+          )}
           <IconButton title="Nova demanda (card do Jira)" tone="accent" onClick={() => onNewDemand(p.id)} data-testid="new-demand">
             <Plus size={13} />
           </IconButton>
+          </div>
         </div>
         {showDemands && (
           <div className="mt-1.5 space-y-1">

@@ -288,6 +288,11 @@ try {
     await sleep(500)
   }
 
+  // 4b5) Checagem de tokens em Configurações → Integrações
+  const tc = await evaluate(`window.api.tokenCheck().then((r) => JSON.stringify(r))`)
+  if (!tc || !tc.includes('"plain"')) fail('Checagem de tokens não respondeu: ' + tc)
+  else console.log('✓ Checagem de tokens respondeu')
+
   // 4c) Remote Control com link enorme: não pode criar rolagem horizontal; vira notificação no sino
   const clickRemote = () =>
     evaluate(`(() => {

@@ -461,6 +461,17 @@ export interface CostsConfig {
   dailyLimitUsd: number
 }
 
+/** Token guardado sem proteção na configuração de MCP do Claude Code */
+export interface PlainToken {
+  server: string
+  /** user = ~/.claude.json do seu usuário; local = ~/.claude.json só para uma pasta; project = .mcp.json do projeto */
+  scope: 'user' | 'local' | 'project'
+  projectPath?: string
+  file: string
+  /** Onde está o segredo (nomes, nunca os valores) */
+  fields: string[]
+}
+
 export interface SecretsStatus {
   set: SecretKey[]
   /** false = o SO não oferece cofre (ex: Linux sem keyring): tokens ficam só ofuscados */
@@ -915,6 +926,9 @@ export interface CommandCenterApi {
   envProfiles(projectId: string): Promise<{ files: string[]; active: string | null }>
   envSwitch(projectId: string, file: string): Promise<OpResult>
   profileRun(profileId: string): Promise<OpResult>
+  /** Tokens sem proteção (MCPs do Claude Code) e se o cofre do app está criptografado */
+  tokenCheck(): Promise<{ plain: PlainToken[]; encrypted: boolean }>
+  tokenRemove(t: Pick<PlainToken, 'server' | 'scope' | 'projectPath'>): Promise<OpResult>
   /** Sugestões para o cadastro a partir da pasta (compose, serviços, log do Laravel, comandos) */
   projectSuggest(path: string, dockerCommand?: string): Promise<{ compose: boolean; services: string[]; logPath?: string; commands: Array<{ name: string; command: string }> }>
   saveProfiles(profiles: WorkProfile[]): Promise<AppConfig>
