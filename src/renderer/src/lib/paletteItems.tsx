@@ -118,7 +118,7 @@ export interface PaletteContext {
   setCostsOpen: (v: boolean) => void
   setDailyOpen: (v: boolean) => void
   setHistoryOpen: (v: boolean) => void
-  setQueueOpen: (v: boolean) => void
+  setQueueOpen: (v: { demandId?: string; projectId?: string } | null) => void
 }
 
 /** Itens da paleta de comandos (Ctrl+K): scripts, projetos, demandas, modos do console, janelas e configurações */
