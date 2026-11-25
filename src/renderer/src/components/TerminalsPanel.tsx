@@ -1,5 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
-import { useLines } from '../lib/lineStore'
+import { SHORT_LINES, useLines } from '../lib/lineStore'
 import { useAis } from '../lib/ais'
 import {
   Ban,
@@ -11,6 +11,7 @@ import {
   CircleDashed,
   ClipboardCopy,
   FolderTree,
+  History,
   Loader2,
   Maximize2,
   MessageSquarePlus,
@@ -259,6 +260,7 @@ export function TerminalsPanel({
   onToggleExpand,
   onCloseTab,
   onClearTab,
+  shortHistory = false,
   onStopTab,
   stopping,
   inputTarget,
@@ -282,6 +284,8 @@ export function TerminalsPanel({
   onToggleExpand: () => void
   onCloseTab: (key: string) => void
   onClearTab: (key: string) => void
+  /** Guardar só as últimas linhas de cada aba */
+  shortHistory?: boolean
   onStopTab: (key: string) => void
   /** Parar clicado, esperando o processo terminar */
   stopping: boolean
@@ -437,6 +441,18 @@ export function TerminalsPanel({
               </IconButton>
               <IconButton title="Limpar esta aba" onClick={() => onClearTab(active)}>
                 <Trash2 size={13} />
+              </IconButton>
+              <IconButton
+                title={
+                  shortHistory
+                    ? `Histórico curto: cada aba guarda só as últimas ${SHORT_LINES} linhas. Clique para manter o histórico completo.`
+                    : 'Histórico completo (até 4000 linhas por aba). Clique para guardar só as últimas linhas e economizar memória.'
+                }
+                tone={shortHistory ? 'accent' : 'default'}
+                data-testid="short-history"
+                onClick={() => void window.api.saveUi({ shortHistory: !shortHistory })}
+              >
+                <History size={13} className={shortHistory ? 'text-purple' : ''} />
               </IconButton>
               <IconButton title={expanded ? 'Recolher' : 'Tela cheia'} onClick={onToggleExpand}>
                 {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}

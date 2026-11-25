@@ -14,6 +14,8 @@ export class AppLogs {
   private lastAlert = new Map<string, number>()
   /** Intervalo mínimo entre dois avisos de erro do mesmo projeto */
   alertEveryMs = 60_000
+  /** Logs abertos à mão ao mesmo tempo (os de alerta de erro não contam): abrir mais fecha o mais antigo */
+  maxOpen = 3
 
   constructor(
     private runs: RunManager,
@@ -40,6 +42,9 @@ export class AppLogs {
     if (!c.ok) return { ok: false, message: c.message }
     const old = this.open.get(projectId)
     if (old) void this.runs.stop(old, 500)
+    // Limite de logs abertos: fecha o mais antigo que não é de alerta
+    const manual = [...this.open.keys()].filter((id) => id !== projectId && !this.project(id)?.logAlerts && this.isOpen(id))
+    while (manual.length >= this.maxOpen) void this.stop(manual.shift()!)
     const runId = this.runs.start({
       kind: 'terminal',
       tab,

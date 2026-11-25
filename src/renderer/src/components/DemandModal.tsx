@@ -354,7 +354,7 @@ export function DemandModal({
           ))}
         </select>
       </div>
-      {!isNew && <DemandWorkBar demandId={d.id} jiraKey={d.key} onResult={setResult} />}
+      {!isNew && <DemandWorkBar demandId={d.id} jiraKey={d.key} stage={d.status} onResult={setResult} />}
       <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
         <span>Projeto: {project?.name ?? '?'}</span>
         {d.hours && <span>· estimativa {d.hours}h ({days(d.hours)})</span>}

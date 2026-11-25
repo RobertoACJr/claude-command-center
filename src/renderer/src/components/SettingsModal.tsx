@@ -886,6 +886,12 @@ function TelegramTab({ config, sec, save }: { config: AppConfig; sec: SecretsSta
         hint="Pedidos chegam com Aprovar / Descartar. Comandos: /projetos, /rodar, /claude, /log, /historico, /status, /pendentes, /ausente, /online, /vigia (mande /ajuda no bot). Só o seu Chat ID é obedecido."
       />
       <Toggle
+        checked={config.telegram.weeklyReport}
+        onChange={(v) => save({ telegram: { weeklyReport: v } })}
+        label="Relatório da semana toda sexta às 17h"
+        hint="Horas em cada demanda, estimado x registrado. Também dá para pedir a qualquer hora com /semana."
+      />
+      <Toggle
         checked={config.telegram.forwardNotifications}
         onChange={(v) => save({ telegram: { forwardNotifications: v } })}
         label="No modo Ausente, mandar também os avisos do sino"

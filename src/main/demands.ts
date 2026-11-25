@@ -516,6 +516,34 @@ export class DemandManager {
     return [...this.busy.values()]
   }
 
+  /**
+   * Status que veio do Jira na sincronização. Se o card foi concluído lá, a demanda vira Feita aqui.
+   * Devolve true quando a demanda foi finalizada agora.
+   */
+  applyJiraStatus(id: string, status: string, done: boolean): boolean {
+    const d = this.get(id)
+    if (!d) return false
+    let changed = false
+    if (d.jira && d.jira.status !== status) {
+      d.jira = { ...d.jira, status }
+      changed = true
+    }
+    let finished = false
+    if (done && d.status !== 'feita') {
+      d.status = 'feita'
+      d.statusLog.push({ at: Date.now(), status: 'feita' })
+      this.note(d, `Finalizada no Jira (${status})`)
+      void this.cleanupCopy(d.id)
+      finished = true
+      changed = true
+    }
+    if (changed) {
+      d.updatedAt = Date.now()
+      this.persist(d)
+    }
+    return finished
+  }
+
   /** Status do card no Jira mudou por aqui (transição): guarda sem buscar o card de novo */
   setJiraStatus(id: string, status: string): void {
     const d = this.get(id)

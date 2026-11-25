@@ -235,6 +235,8 @@ export interface UiState {
    * É deste PC (não sincroniza): cada computador tem as suas instaladas.
    */
   ais: Record<AiId, boolean>
+  /** Terminais guardam só as últimas linhas de cada aba (deste PC) */
+  shortHistory: boolean
 }
 
 export interface GeneralPrefs {
@@ -312,6 +314,8 @@ export interface TelegramConfig {
   transcribeCommand: string
   /** No modo Ausente, manda também os avisos do sino (projeto caiu, script terminou, Vigia, atualização) */
   forwardNotifications: boolean
+  /** Manda o relatório da semana (horas por demanda) toda sexta às 17h */
+  weeklyReport: boolean
 }
 
 export interface WatcherConfig {
@@ -957,6 +961,10 @@ export interface CommandCenterApi {
   demandTimings(): Promise<DemandTiming[]>
   /** Jornadas: tempo em cada demanda */
   worklogState(): Promise<WorkLogState>
+  /** Relatório da semana em texto (horas por demanda, estimado x registrado) */
+  worklogWeekly(): Promise<string>
+  /** Confere o status das demandas abertas no Jira e finaliza as concluídas lá */
+  jiraSync(): Promise<OpResult>
   worklogStart(demandId: string): Promise<WorkLogState>
   worklogStop(): Promise<WorkLogState>
   worklogDelete(sessionId: string): Promise<WorkLogState>

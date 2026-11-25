@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowRightLeft, Clock, Loader2, Pause, Play, Send, Trash2 } from 'lucide-react'
-import type { JiraTransition, OpResult, WorkLogState, WorkSession } from '@shared/types'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowRightLeft, Clock, Copy, FileText, Loader2, Pause, Play, Send, Trash2, X } from 'lucide-react'
+import type { DemandStatus, JiraTransition, OpResult, WorkLogState, WorkSession } from '@shared/types'
 import { Button, IconButton, Modal } from './ui'
 import { cn } from '../lib/utils'
 
@@ -89,23 +89,73 @@ export function WorkTimer() {
 
 // ---------------------------------------------------------------- na demanda: cronômetro + status do Jira
 
-export function DemandWorkBar({ demandId, jiraKey, onResult }: { demandId: string; jiraKey: string; onResult: (r: OpResult) => void }) {
+/** Para onde o card costuma ir no Jira quando a etapa muda aqui (pelo nome do status de destino) */
+const STAGE_TO_JIRA: Partial<Record<DemandStatus, RegExp>> = {
+  estimada: /refin|estim|an[aá]lis|to ?do|backlog|pronto para/i,
+  desenhada: /refin|an[aá]lis|pronto para|ready|to ?do/i,
+  dev: /andamento|progress|desenvolv|doing|\bdev\b|fazendo/i,
+  teste: /test|qa|homolog|review|revis|valida/i,
+  beta: /beta|homolog|staging|deploy|libera/i,
+  feita: /done|conclu|feit|finaliz|closed|fechad|resolv|entreg/i
+}
+
+export function DemandWorkBar({
+  demandId,
+  jiraKey,
+  stage,
+  onResult
+}: {
+  demandId: string
+  jiraKey: string
+  /** Etapa da demanda no app: quando muda, sugere mover o card no Jira */
+  stage: DemandStatus
+  onResult: (r: OpResult) => void
+}) {
   const w = useWorklog()
   const mine = w.active?.demandId === demandId
   useTick(mine)
   const total = useMemo(() => w.sessions.filter((s) => s.demandId === demandId).reduce((t, s) => t + dur(s), 0), [w, demandId])
   const [jira, setJira] = useState<{ status?: string; transitions?: JiraTransition[]; error?: string } | null>(null)
   const [busy, setBusy] = useState(false)
+  const [suggest, setSuggest] = useState<JiraTransition | null>(null)
+  const lastStage = useRef(stage)
 
   const loadJira = async () => {
     setBusy(true)
     try {
       const r = await window.api.jiraTransitions(demandId)
       setJira(r.ok ? { status: r.status, transitions: r.transitions } : { error: r.message })
+      return r
     } finally {
       setBusy(false)
     }
   }
+
+  const move = async (t: JiraTransition) => {
+    setBusy(true)
+    try {
+      const r = await window.api.jiraTransition(demandId, t.id)
+      onResult(r)
+      setSuggest(null)
+      if (r.ok) await loadJira()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Etapa mudou aqui: procura a transição do Jira que combina e sugere (você confirma)
+  useEffect(() => {
+    if (lastStage.current === stage) return
+    lastStage.current = stage
+    const re = STAGE_TO_JIRA[stage]
+    if (!re) return
+    void loadJira().then((r) => {
+      if (!r?.ok || !r.transitions) return
+      if (r.status && re.test(r.status)) return
+      setSuggest(r.transitions.find((t) => re.test(t.to)) ?? null)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage])
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-xl border border-line bg-card-2 px-3 py-2" data-testid="demand-workbar">
@@ -148,14 +198,7 @@ export function DemandWorkBar({ demandId, jiraKey, onResult }: { demandId: strin
                 onChange={async (e) => {
                   const t = jira.transitions!.find((x) => x.id === e.target.value)
                   if (!t || !confirm(`Mover ${jiraKey} para "${t.to}" no Jira?`)) return
-                  setBusy(true)
-                  try {
-                    const r = await window.api.jiraTransition(demandId, t.id)
-                    onResult(r)
-                    if (r.ok) await loadJira()
-                  } finally {
-                    setBusy(false)
-                  }
+                  await move(t)
                 }}
               >
                 <option value="">Mover para…</option>
@@ -170,6 +213,20 @@ export function DemandWorkBar({ demandId, jiraKey, onResult }: { demandId: strin
           </>
         )}
       </div>
+      {suggest && (
+        <div className="flex w-full items-center gap-2 rounded-lg border border-violet/40 bg-violet/10 px-2.5 py-1.5 text-xs text-zinc-200" data-testid="jira-suggest">
+          <ArrowRightLeft size={13} className="text-purple" />
+          <span className="flex-1">
+            A etapa mudou aqui. Mover {jiraKey} para <b>{suggest.to}</b> no Jira também?
+          </span>
+          <Button size="sm" variant="primary" disabled={busy} onClick={() => move(suggest)}>
+            Mover
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setSuggest(null)}>
+            Não
+          </Button>
+        </div>
+      )}
     </div>
   )
 }
@@ -242,6 +299,7 @@ export function WorklogModal({ onResult }: { onResult: (r: OpResult) => void }) 
             Pausa sozinho no Ausente e depois de um tempo sem mexer no PC (Configurações → Geral).
           </span>
         </div>
+        <WeeklyReport />
         {!days.length && (
           <div className="rounded-lg border border-line bg-bg p-4 text-center text-xs text-zinc-500">
             Nenhuma jornada ainda. Abra uma demanda e clique em <b>Trabalhar nesta demanda</b>.
@@ -317,5 +375,93 @@ export function WorklogModal({ onResult }: { onResult: (r: OpResult) => void }) 
         })}
       </div>
     </Modal>
+  )
+}
+
+// ---------------------------------------------------------------- relatório da semana
+
+function WeeklyReport() {
+  const [text, setText] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  if (text === null) {
+    return (
+      <Button size="sm" onClick={async () => setText(await window.api.worklogWeekly())} data-testid="weekly-report">
+        <FileText size={12} /> Relatório da semana
+      </Button>
+    )
+  }
+  return (
+    <div className="space-y-1.5 rounded-xl border border-violet/40 bg-violet/5 p-3">
+      <div className="flex items-center justify-between">
+        <b className="text-xs text-purple">Relatório da semana</b>
+        <div className="flex gap-1.5">
+          <Button
+            size="sm"
+            onClick={async () => {
+              await window.api.copyText(text)
+              setCopied(true)
+              setTimeout(() => setCopied(false), 1500)
+            }}
+          >
+            <Copy size={12} /> {copied ? 'Copiado' : 'Copiar'}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setText(null)}>
+            Fechar
+          </Button>
+        </div>
+      </div>
+      <pre className="selectable whitespace-pre-wrap font-mono text-[11.5px] text-zinc-300">{text}</pre>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------- jornada automática ao trocar de branch
+
+/**
+ * Quando um projeto passa para a branch de uma demanda aberta (pelo app ou pelo terminal) e o cronômetro
+ * não está nela, pergunta se quer começar a contar o tempo. Pergunta uma vez por troca.
+ */
+export function BranchJourneyPrompt({
+  branches,
+  demands
+}: {
+  branches: Record<string, string | null | undefined>
+  demands: Array<{ id: string; key: string; projectId: string; status: string; title: string }>
+}) {
+  const w = useWorklog()
+  const [ask, setAsk] = useState<{ id: string; key: string; title: string } | null>(null)
+  const seen = useRef<Record<string, string>>({})
+  useEffect(() => {
+    for (const [pid, br] of Object.entries(branches)) {
+      if (!br) continue
+      const prev = seen.current[pid]
+      seen.current[pid] = br
+      // Primeira leitura (app abrindo) não pergunta: só trocas de verdade
+      if (prev === undefined || prev === br) continue
+      const d = demands.find((x) => x.projectId === pid && x.key === br && x.status !== 'feita')
+      if (d && w.active?.demandId !== d.id) setAsk({ id: d.id, key: d.key, title: d.title })
+    }
+  }, [branches, demands, w.active?.demandId])
+  if (!ask) return null
+  return (
+    <div className="fixed bottom-4 right-4 z-[60] flex max-w-sm items-center gap-2 rounded-xl border border-violet/50 bg-card p-3 text-xs text-zinc-200 shadow-2xl" data-testid="journey-prompt">
+      <Clock size={16} className="shrink-0 text-purple" />
+      <span className="min-w-0 flex-1">
+        Você foi para a branch <b>{ask.key}</b>. Começar a contar o tempo nela?
+      </span>
+      <Button
+        size="sm"
+        variant="primary"
+        onClick={() => {
+          void window.api.worklogStart(ask.id)
+          setAsk(null)
+        }}
+      >
+        <Play size={12} /> Começar
+      </Button>
+      <IconButton title="Agora não" onClick={() => setAsk(null)}>
+        <X size={13} />
+      </IconButton>
+    </div>
   )
 }

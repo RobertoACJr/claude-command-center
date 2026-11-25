@@ -2,6 +2,7 @@ import { randomBytes } from 'crypto'
 import { homedir } from 'os'
 import type { HistoryEntry, Project, RunEvent, Script, WorkLogState } from '../shared/types'
 import { extractUserVariables, missingProjectKeys, projectValues } from '../shared/vars'
+import { dangerReasons } from '../shared/danger'
 import type { DemandManager } from './demands'
 import type { History } from './history'
 import type { QueueManager } from './queue'
@@ -82,6 +83,10 @@ export class TelegramControl {
       logTail: (p: Project) => Promise<{ ok: boolean; message: string; text?: string }>
       /** Jornadas (tempo por demanda) */
       worklog?: { state: () => WorkLogState; stop: () => WorkLogState }
+      /** Relatório da semana em texto */
+      weekly?: () => string
+      /** Sincroniza o status das demandas com o Jira */
+      syncJira?: () => Promise<{ ok: boolean; message: string }>
     }
   ) {}
 
@@ -154,6 +159,8 @@ export class TelegramControl {
     '<b>Comandos</b>',
     '/projetos · executar, parar, Remote Control e log de cada projeto',
     '/jornada · tempo em cada demanda hoje e na semana; pausa o cronômetro',
+    '/semana · relatório da semana (horas por demanda, estimado x registrado)',
+    '/jira · confere o status das demandas no Jira (finaliza as concluídas lá)',
     '/subir · sobe um perfil de trabalho ou um projeto (com os ligados); /subir nome',
     '/parar nome · para o projeto e os ligados (/parar sozinho interrompe o que o Telegram mandou rodar)',
     '/log nome · log da aplicação do projeto (ex.: laravel.log); sem log configurado, a saída da última execução',
@@ -182,6 +189,15 @@ export class TelegramControl {
       case 'subir':
         await this.upCommand(args)
         return true
+      case 'semana':
+        await this.say(this.d.weekly ? `📊 <b>Relatório da semana</b>\n<pre>${escapeHtml(this.d.weekly())}</pre>` : 'Indisponível.')
+        return true
+      case 'jira': {
+        if (!this.d.syncJira) return false
+        const r = await this.d.syncJira()
+        await this.say(`${r.ok ? '🔄' : '⚠️'} ${escapeHtml(r.message)}`)
+        return true
+      }
       case 'jornada':
       case 'jornadas':
         await this.sendWorklog()
@@ -518,9 +534,11 @@ export class TelegramControl {
       .filter(([k]) => !k.startsWith('projeto.'))
       .map(([k, v]) => `${escapeHtml(k)} = <code>${escapeHtml(v)}</code>`)
       .join('\n')
-    await this.say(`▶ Rodar <b>${escapeHtml(title)}</b>?${summary ? '\n\n' + summary : ''}`, [
+    const danger = s.type === 'terminal' ? dangerReasons(s.content) : []
+    const warn = danger.length ? `\n\n⚠️ <b>Comando perigoso:</b> ${danger.map(escapeHtml).join('; ')}` : ''
+    await this.say(`▶ Rodar <b>${escapeHtml(title)}</b>?${summary ? '\n\n' + summary : ''}${warn}`, [
       [
-        this.btn('✅ Rodar', async () => {
+        this.btn(danger.length ? '⚠️ Rodar mesmo assim' : '✅ Rodar', async () => {
           const runId = this.d.runs.start({
             kind: s.type,
             tab: `script:${s.id}`,

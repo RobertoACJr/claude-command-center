@@ -106,3 +106,23 @@ export async function jiraWorklog(key: string, seconds: number, startedAt: numbe
   const m = Math.round((secs % 3600) / 60)
   return { ok: true, message: `Lancei ${h ? `${h}h` : ''}${m ? `${m}min` : ''} em ${key} no Jira.` }
 }
+
+/** Status de vários cards (de 5 em 5, para não estourar o limite do Jira). done = categoria "Concluído" */
+export async function jiraStatuses(keys: string[]): Promise<Map<string, { status: string; done: boolean } | null>> {
+  const out = new Map<string, { status: string; done: boolean } | null>()
+  for (let i = 0; i < keys.length; i += 5) {
+    const part = keys.slice(i, i + 5)
+    const res = await Promise.all(part.map((k) => jira(`issue/${encodeURIComponent(k)}?fields=status`)))
+    part.forEach((k, j) => {
+      const r = res[j]
+      const st = r.ok ? r.data?.fields?.status : null
+      out.set(k, st ? { status: String(st.name ?? ''), done: String(st.statusCategory?.key ?? '') === 'done' } : null)
+    })
+  }
+  return out
+}
+
+export function jiraConfigured(): boolean {
+  const j = store.get().integrations.jira
+  return !!(j.url && j.email && secrets.get('jira.token'))
+}

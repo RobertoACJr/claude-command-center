@@ -24,14 +24,14 @@ function defaults(): AppConfig {
     general: { closeToTray: true, openAtLogin: false, trayHintShown: false, desktopNotifications: true, notifyScriptDone: true, idlePauseMin: 15 },
     projects: [],
     scripts: [],
-    ui: { consoleExpanded: false, consoleMode: 'terminal', ais: { claude: true, gemini: true, codex: true } },
+    ui: { consoleExpanded: false, consoleMode: 'terminal', ais: { claude: true, gemini: true, codex: true }, shortHistory: false },
     integrations: {
       github: { enabled: false, readOnly: true },
       jira: { enabled: false, url: '', email: '' },
       gchat: { enabled: false, mode: 'official', clientId: '', callbackPort: 8765, readTools: '', sendTool: '' },
       lastApplied: {}
     },
-    telegram: { chatId: '', interactive: true, forwardNotifications: true, transcribeCommand: '' },
+    telegram: { chatId: '', interactive: true, forwardNotifications: true, transcribeCommand: '', weeklyReport: false },
     watcher: {
       enabled: false,
       autoWhenOff: true,
@@ -104,7 +104,8 @@ function normalize(raw: unknown): AppConfig {
         claude: r.ui?.ais?.claude !== false,
         gemini: r.ui?.ais?.gemini !== false,
         codex: r.ui?.ais?.codex !== false
-      }
+      },
+      shortHistory: bool(r.ui?.shortHistory, false)
     },
     integrations: {
       github: { enabled: bool(gi?.enabled, false), readOnly: bool(gi?.readOnly, true) },
@@ -125,7 +126,8 @@ function normalize(raw: unknown): AppConfig {
       transcribeCommand: str(r.telegram?.transcribeCommand).trim(),
       chatId: str(r.telegram?.chatId).trim(),
       interactive: bool(r.telegram?.interactive, true),
-      forwardNotifications: bool(r.telegram?.forwardNotifications, true)
+      forwardNotifications: bool(r.telegram?.forwardNotifications, true),
+      weeklyReport: bool(r.telegram?.weeklyReport, false)
     },
     watcher: {
       enabled: bool(w?.enabled, d.watcher.enabled),

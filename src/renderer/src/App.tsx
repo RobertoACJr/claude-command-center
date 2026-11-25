@@ -29,7 +29,8 @@ import { SettingsModal, type SettingsTab } from './components/SettingsModal'
 import { AlertsBar } from './components/AlertsBar'
 import { AwayBanner, GoOnlineModal, VigiaBanner } from './components/Presence'
 import { setEnabledAis } from './lib/ais'
-import { WorklogModal } from './components/Worklog'
+import { dangerQuestion, isDangerous } from '@shared/danger'
+import { BranchJourneyPrompt, WorklogModal } from './components/Worklog'
 import {
   FIXED_TABS,
   TerminalsPanel,
@@ -349,6 +350,8 @@ export default function App() {
 
   // IAs ligadas neste PC: os seletores leem daqui
   useEffect(() => setEnabledAis(config?.ui.ais), [config?.ui.ais])
+  // Histórico curto nos terminais (deste PC)
+  useEffect(() => lineStore.setShort(!!config?.ui.shortHistory), [config?.ui.shortHistory])
 
   // Tema: azul no modo Ausente; rosa com o Vigia ligado e você Online
   const vigiaOn = !!config?.watcher.enabled && watcher.phase !== 'off'
@@ -418,6 +421,8 @@ export default function App() {
     cwd: string,
     opts: { tab: string; title: string; chat?: boolean; projectId?: string }
   ) {
+    // Comando que apaga dados ou derruba coisas: confirma antes (scripts, console, aba do projeto)
+    if (kind === 'terminal' && isDangerous(content) && !confirm(dangerQuestion(content, opts.title))) return
     ensureTab(opts.tab, opts.title)
     const fixed = (FIXED_TABS as readonly string[]).includes(opts.tab)
     append(opts.tab, [
@@ -769,6 +774,15 @@ export default function App() {
       run: () => window.api.watcherRunNow()
     },
     { id: 'daily', group: 'App', label: 'Resumo para a daily', icon: <MessageSquareText size={14} />, keywords: 'daily standup ontem hoje', run: () => setDailyOpen(true) },
+    {
+      id: 'jira-sync',
+      group: 'App',
+      label: 'Sincronizar demandas com o Jira',
+      hint: 'finaliza aqui as concluídas lá',
+      icon: <RefreshCw size={14} />,
+      keywords: 'jira status sincronizar finalizar',
+      run: async () => showToast((await window.api.jiraSync()).message)
+    },
     { id: 'worklog', group: 'App', label: 'Jornadas: tempo em cada demanda', icon: <Clock size={14} />, keywords: 'jornada horas tempo timesheet worklog', run: () => window.dispatchEvent(new CustomEvent('helice:open-worklog')) },
     { id: 'sync', group: 'App', label: 'Sincronizar entre PCs agora', icon: <RefreshCw size={14} />, keywords: 'sync windows ubuntu', run: async () => {
       const r = await window.api.syncNow()
@@ -933,6 +947,7 @@ export default function App() {
         onToggleExpand={toggleExpand}
         onCloseTab={closeTab}
         onClearTab={clearTab}
+        shortHistory={config.ui.shortHistory}
         onStopTab={stopTab}
         stopping={stoppingTabs.has(activeTab)}
         inputTarget={
@@ -1002,6 +1017,7 @@ export default function App() {
       })()}
       <DailyModal open={dailyOpen} onClose={() => setDailyOpen(false)} />
       <WorklogModal onResult={(r) => showToast(r.message)} />
+      <BranchJourneyPrompt branches={branches} demands={demands} />
       <ShotsModal project={shotsProject} onClose={() => setShotsProject(null)} />
       <QueueModal
         open={!!queueOpen}

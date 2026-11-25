@@ -1,5 +1,5 @@
 import { AppLogs, logTail } from './applog'
-import { jiraTransition, jiraTransitions, jiraWorklog } from './jira'
+import { jiraConfigured, jiraStatuses, jiraTransition, jiraTransitions, jiraWorklog } from './jira'
 import { WorkLog } from './worklog'
 import { composeCmd, dockerStatus, execCommand as dockerExecCommand, hasComposeFile, SAFE_SERVICE, shellCommand as dockerShellCommand, suggestions as dockerSuggestions } from './docker'
 import { envProfiles, envSwitch } from './envfiles'
@@ -35,9 +35,9 @@ import { AppTray, applyOpenAtLogin } from './tray'
 import { History } from './history'
 import { TelegramControl } from './tgcontrol'
 import { DemandManager } from './demands'
-import { costs } from './costs'
+import { costs, dayKey } from './costs'
 import { QueueManager, queueSummary } from './queue'
-import { buildDaily } from './daily'
+import { buildDaily, buildWeekly } from './daily'
 import { SyncManager } from './sync'
 import { isUp, ShotManager } from './shots'
 import { captureWithElectron, makeThumb } from './capture'
@@ -110,12 +110,60 @@ worklog.init(app.getPath('userData'))
 // A cada minuto: sinal de vida e pausa se você sumiu do PC
 setInterval(() => {
   try {
+    maybeSendWeekly()
     const key = worklog.tick(powerMonitor.getSystemIdleTime(), store.get().general.idlePauseMin)
     if (key) notify(`⏸ Jornada pausada: ${key}`, `Você ficou ${store.get().general.idlePauseMin} min sem mexer no PC; parei de contar no momento em que você saiu.`, undefined, 'demanda', 'never', false)
   } catch {
     /* ignora */
   }
 }, 60_000)
+
+/**
+ * Sincroniza com o Jira: atualiza o status das demandas abertas e finaliza aqui as que foram concluídas lá.
+ * Roda a cada 20 minutos (com você Online) e quando você pede.
+ */
+async function syncJira(manual = false): Promise<OpResult> {
+  if (!jiraConfigured()) return { ok: false, message: 'Configure o Jira (Configurações → Integrações) para sincronizar.' }
+  const open = demands.all().filter((d) => d.status !== 'feita' && /^[A-Z][A-Z0-9_]*-\d+$/.test(d.key))
+  if (!open.length) return { ok: true, message: 'Nenhuma demanda aberta para sincronizar.' }
+  const st = await jiraStatuses(open.map((d) => d.key))
+  const finished: string[] = []
+  let failed = 0
+  for (const d of open) {
+    const x = st.get(d.key)
+    if (!x) {
+      failed++
+      continue
+    }
+    if (demands.applyJiraStatus(d.id, x.status, x.done)) {
+      finished.push(d.key)
+      if (worklog.state().active?.demandId === d.id) worklog.stop('demanda finalizada no Jira')
+    }
+  }
+  if (finished.length) {
+    notify(`✅ Finalizadas no Jira`, `${finished.join(', ')}: marquei como Feita aqui.`, undefined, 'demanda', manual ? 'never' : 'unfocused', true)
+  }
+  const parts = [`${open.length - failed} demanda(s) conferida(s)`]
+  if (finished.length) parts.push(`finalizada(s): ${finished.join(', ')}`)
+  if (failed) parts.push(`${failed} sem acesso no Jira`)
+  return { ok: true, message: parts.join(' · ') + '.' }
+}
+setInterval(() => {
+  if (store.get().status === 'on') void syncJira().catch(() => {})
+}, 20 * 60_000)
+
+/** Relatório da semana no Telegram: sexta, a partir das 17h, uma vez por semana (se ligado) */
+let weeklySentFor = ''
+function maybeSendWeekly(): void {
+  const cfg = store.get()
+  if (!cfg.telegram.weeklyReport || !telegramReady()) return
+  const now = new Date()
+  if (now.getDay() !== 5 || now.getHours() < 17) return
+  const key = dayKey(now.getTime())
+  if (weeklySentFor === key) return
+  weeklySentFor = key
+  void sendTelegramMessage(cfg.telegram.chatId, `📊 <b>Relatório da semana</b>\n<pre>${escapeHtml(weeklyText())}</pre>`)
+}
 
 /** Log da aplicação de cada projeto e aviso quando aparece erro */
 const appLogs = new AppLogs(
@@ -143,6 +191,13 @@ async function runProfile(id: string): Promise<OpResult> {
 const demands = new DemandManager(app.getPath('userData'), runs, (list, busy, change) => {
   // Só o que mudou vai para a tela (antes ia a lista inteira, com transcrições, a cada tecla)
   send('demands:update', change?.all || !change ? { list, busy } : { upsert: change.upsert, removed: change.removed, busy })
+  // Demanda finalizada (ou excluída) com o cronômetro rodando nela: para de contar
+  try {
+    const act = worklog.state().active
+    if (act && ((change?.upsert?.id === act.demandId && change.upsert.status === 'feita') || change?.removed === act.demandId)) worklog.stop('demanda finalizada')
+  } catch {
+    /* inicializando */
+  }
   refreshTrayActivity()
 })
 /** Hélice da bandeja gira enquanto a fila, o Vigia ou uma demanda trabalham */
@@ -192,7 +247,11 @@ function recordRunCost(e: Extract<RunEvent, { type: 'usage' }>): void {
 // ---------- Daily ----------
 function dailyText(): string {
   const cfg = store.get()
-  return buildDaily({ now: Date.now(), demands: demands.all(), history: history.list(), queue: queue.state().tasks, projects: cfg.projects })
+  return buildDaily({ now: Date.now(), demands: demands.all(), history: history.list(), queue: queue.state().tasks, projects: cfg.projects, sessions: worklog.state().sessions })
+}
+
+function weeklyText(): string {
+  return buildWeekly({ now: Date.now(), demands: demands.all(), sessions: worklog.state().sessions })
 }
 
 // ---------- Sincronizar entre PCs ----------
@@ -432,6 +491,8 @@ const tg = new TelegramControl({
   log: (text, kind = 'info') => appLog({ kind, text }),
   runProfile: (id) => runProfile(id),
   logTail: (p) => logTail(p),
+  weekly: () => weeklyText(),
+  syncJira: () => syncJira(true),
   worklog: { state: () => worklog.state(), stop: () => worklog.stop() }
 })
 
@@ -758,6 +819,12 @@ function createWindow(): void {
       store.markTrayHintShown()
     }
   })
+  // Janela escondida ou minimizada: confere os projetos com menos frequência
+  const watching = (v: boolean) => projects.setWatching(v)
+  mainWindow.on('show', () => watching(true))
+  mainWindow.on('restore', () => watching(true))
+  mainWindow.on('hide', () => watching(false))
+  mainWindow.on('minimize', () => watching(false))
   mainWindow.on('closed', () => {
     mainWindow = null
   })
@@ -1049,6 +1116,8 @@ function registerIpc(): void {
   )
   ipcMain.handle('demands:timings', () => demands.timings())
   ipcMain.handle('worklog:state', () => worklog.state())
+  ipcMain.handle('worklog:weekly', () => weeklyText())
+  ipcMain.handle('jira:sync', () => syncJira(true))
   ipcMain.handle('worklog:start', (_e, demandId: string) => {
     const d = demands.get(String(demandId))
     if (!d) return worklog.state()

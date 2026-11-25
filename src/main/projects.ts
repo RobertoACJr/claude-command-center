@@ -84,7 +84,7 @@ export class ProjectProcesses {
     }
     this.changed()
     if (!this.poller) {
-      this.poller = setInterval(() => void this.pollPorts(), POLL_MS)
+      this.poller = setInterval(() => void this.pollPorts(), this.pollMs)
       void this.pollPorts()
     }
   }
@@ -275,6 +275,23 @@ export class ProjectProcesses {
       })
     )
     if (dirty) this.changed()
+  }
+
+  private pollMs = POLL_MS
+
+  /**
+   * Janela escondida ou minimizada: confere portas e saúde a cada 20s em vez de 4s
+   * (ninguém está olhando; quando a janela volta, confere na hora).
+   */
+  setWatching(visible: boolean): void {
+    const ms = visible ? POLL_MS : POLL_MS * 5
+    if (ms === this.pollMs) return
+    this.pollMs = ms
+    if (this.poller) {
+      clearInterval(this.poller)
+      this.poller = setInterval(() => void this.pollPorts(), ms)
+      if (visible) void this.pollPorts()
+    }
   }
 
   stopPolling(): void {

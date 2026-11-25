@@ -21,6 +21,7 @@ import {
 import type { DockerStatus, OpResult, PortOwner, Project, WorkProfile } from '@shared/types'
 import { Button, IconButton, Modal, Toggle, inputCls } from './ui'
 import { lineStore, useLines } from '../lib/lineStore'
+import { dangerQuestion, isDangerous } from '@shared/danger'
 import { cn, uid } from '../lib/utils'
 
 // ---------------------------------------------------------------- Menu simples (abre ao clicar)
@@ -169,6 +170,13 @@ export function EnvModal({ p, onClose, onResult }: { p: Project | null; onClose:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p?.id])
 
+  /** Comando no container: confirma se for perigoso ou se o .env em uso parece de produção */
+  const runIn = (key: string, service: string, command: string) => {
+    const prodEnv = env?.active && /prod|production/i.test(env.active)
+    if (isDangerous(command) && !confirm(dangerQuestion(command, `${p?.name} · ${service}`))) return
+    if (prodEnv && !confirm(`Atenção: o .env em uso é o ${env!.active} (produção?).\n\nRodar "${command}" mesmo assim?`)) return
+    void act(key, () => window.api.dockerExec(p!.id, service, command))
+  }
   const act = async (key: string, fn: () => Promise<OpResult>, reload = false) => {
     setBusy(key)
     try {
@@ -260,7 +268,7 @@ export function EnvModal({ p, onClose, onResult }: { p: Project | null; onClose:
                     size="sm"
                     disabled={!!busy}
                     title={`${c.service || svc}: ${c.command}`}
-                    onClick={() => act(`c:${c.id}`, () => window.api.dockerExec(p.id, c.service || svc, c.command))}
+                    onClick={() => runIn(`c:${c.id}`, c.service || svc, c.command)}
                   >
                     <Zap size={12} /> {c.name}
                   </Button>
@@ -279,11 +287,11 @@ export function EnvModal({ p, onClose, onResult }: { p: Project | null; onClose:
                 className={inputCls + ' h-8 flex-1 font-mono text-xs'}
                 value={cmd}
                 onChange={(e) => setCmd(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && cmd.trim() && act('cmd', () => window.api.dockerExec(p.id, svc, cmd.trim()))}
+                onKeyDown={(e) => e.key === 'Enter' && cmd.trim() && runIn('cmd', svc, cmd.trim())}
                 placeholder="comando (ex.: php artisan migrate:status)"
                 spellCheck={false}
               />
-              <Button size="sm" variant="primary" disabled={!cmd.trim() || !svc || !!busy} onClick={() => act('cmd', () => window.api.dockerExec(p.id, svc, cmd.trim()))}>
+              <Button size="sm" variant="primary" disabled={!cmd.trim() || !svc || !!busy} onClick={() => runIn('cmd', svc, cmd.trim())}>
                 <Play size={12} /> Rodar
               </Button>
             </div>

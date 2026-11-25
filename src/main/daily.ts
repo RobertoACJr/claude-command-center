@@ -1,4 +1,4 @@
-import type { Demand, HistoryEntry, Project, QueueTask } from '../shared/types'
+import type { Demand, HistoryEntry, Project, QueueTask, WorkSession } from '../shared/types'
 import { demandTiming } from './demands'
 
 const STATUS: Record<Demand['status'], string> = {
@@ -53,8 +53,11 @@ export function buildDaily(input: {
   history: HistoryEntry[]
   queue: QueueTask[]
   projects: Project[]
+  /** Jornadas: tempo em cada demanda (opcional) */
+  sessions?: WorkSession[]
 }): string {
   const { now, demands, history, queue, projects } = input
+  const sessions = input.sessions ?? []
   const { from, to, label } = previousWorkday(now)
   const inRange = (t?: number) => !!t && t >= from && t < to
   const name = (d: Demand) => `${d.key}${d.title || d.jira?.summary ? ` (${d.title || d.jira?.summary})` : ''}`
@@ -68,7 +71,14 @@ export function buildDaily(input: {
     if (!notes.length && !runs && !tasks) continue
     let what = summarizeNotes(notes) || 'implementação'
     if (tasks) what += `; a fila fez ${tasks} tarefa(s)`
-    did.push(`- ${name(d)}: ${what}`)
+    const t = timeIn(sessions, d.id, from, to)
+    did.push(`- ${name(d)}: ${what}${t ? ` (${fmtHours(t)})` : ''}`)
+  }
+  // Demanda com tempo registrado mas sem nada na linha do tempo também entra
+  for (const d of demands) {
+    if (did.some((l) => l.startsWith(`- ${name(d)}:`))) continue
+    const t = timeIn(sessions, d.id, from, to)
+    if (t >= 5 * 60_000) did.push(`- ${name(d)}: implementação (${fmtHours(t)})`)
   }
   const scripts = new Map<string, number>()
   for (const h of history) {
@@ -112,6 +122,8 @@ export function buildDaily(input: {
   }
 
   const fmtDay = new Date(now).toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit' })
+  const totalYesterday = sessions.reduce((t, s) => t + overlap(s, from, to, now), 0)
+  if (totalYesterday >= 60_000) did.push(`Tempo registrado: ${fmtHours(totalYesterday)}`)
   return [
     `Daily · ${fmtDay}`,
     '',
@@ -124,4 +136,63 @@ export function buildDaily(input: {
     'Impedimentos:',
     ...(blocks.length ? blocks : ['- nenhum'])
   ].join('\n')
+}
+
+// ---------------------------------------------------------------- tempo (jornadas)
+
+/** Quanto do período cai entre from e to (o período aberto conta até agora) */
+export function overlap(s: WorkSession, from: number, to: number, now = Date.now()): number {
+  const a = Math.max(s.start, from)
+  const b = Math.min(s.end ?? now, to)
+  return Math.max(0, b - a)
+}
+
+export function timeIn(sessions: WorkSession[], demandId: string, from: number, to: number, now = Date.now()): number {
+  return sessions.filter((s) => s.demandId === demandId).reduce((t, s) => t + overlap(s, from, to, now), 0)
+}
+
+export function fmtHours(ms: number): string {
+  const m = Math.round(ms / 60_000)
+  const h = Math.floor(m / 60)
+  return h ? `${h}h${String(m % 60).padStart(2, '0')}` : `${m}min`
+}
+
+/** Segunda-feira 00:00 da semana de `now` */
+export function weekStart(now: number): number {
+  const d = new Date(now)
+  d.setHours(0, 0, 0, 0)
+  return d.getTime() - ((d.getDay() + 6) % 7) * 86_400_000
+}
+
+/**
+ * Relatório da semana: horas em cada demanda, estimado contra o tempo registrado, etapa atual e o total.
+ * Texto puro, pronto para colar no Jira, no chat ou mandar para o líder.
+ */
+export function buildWeekly(input: { now: number; demands: Demand[]; sessions: WorkSession[] }): string {
+  const { now, demands, sessions } = input
+  const from = weekStart(now)
+  const to = now
+  const rows: Array<{ d: Demand; ms: number; all: number }> = []
+  for (const d of demands) {
+    const ms = timeIn(sessions, d.id, from, to, now)
+    if (ms < 60_000 && !(d.statusLog ?? []).some((x) => x.at >= from)) continue
+    rows.push({ d, ms, all: timeIn(sessions, d.id, 0, now, now) })
+  }
+  rows.sort((a, b) => b.ms - a.ms)
+  const total = sessions.reduce((t, s) => t + overlap(s, from, to, now), 0)
+  // Dias com tempo registrado
+  const perDay: string[] = []
+  for (let t = from; t < to; t += 86_400_000) {
+    const ms = sessions.reduce((acc, s) => acc + overlap(s, t, t + 86_400_000, now), 0)
+    if (ms >= 60_000) perDay.push(`${new Date(t).toLocaleDateString('pt-BR', { weekday: 'short' })} ${fmtHours(ms)}`)
+  }
+  const fmt = (t: number) => new Date(t).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
+  const lines = [`Semana ${fmt(from)} a ${fmt(now)} · ${fmtHours(total)} registradas`, '']
+  if (!rows.length) lines.push('- (nenhuma demanda com tempo registrado nesta semana)')
+  for (const { d, ms, all } of rows) {
+    const est = d.hours ? ` · estimado ${d.hours}h, total até agora ${fmtHours(all)}${all > d.hours * 3_600_000 ? ' (passou da estimativa)' : ''}` : ''
+    lines.push(`- ${d.key}${d.title || d.jira?.summary ? ` (${d.title || d.jira?.summary})` : ''}: ${fmtHours(ms)} · ${STATUS[d.status]}${est}`)
+  }
+  if (perDay.length) lines.push('', `Por dia: ${perDay.join(' · ')}`)
+  return lines.join('\n')
 }
