@@ -76,6 +76,10 @@ export class TelegramControl {
       history: History
       status: () => Promise<string>
       log: (text: string, kind?: 'info' | 'error') => void
+      /** Sobe um perfil de trabalho */
+      runProfile: (id: string) => Promise<{ ok: boolean; message: string }>
+      /** Últimas linhas do log da aplicação do projeto */
+      logTail: (p: Project) => Promise<{ ok: boolean; message: string; text?: string }>
     }
   ) {}
 
@@ -147,14 +151,15 @@ export class TelegramControl {
   readonly help = [
     '<b>Comandos</b>',
     '/projetos · executar, parar, Remote Control e log de cada projeto',
+    '/subir · sobe um perfil de trabalho ou um projeto (com os ligados); /subir nome',
+    '/parar nome · para o projeto e os ligados (/parar sozinho interrompe o que o Telegram mandou rodar)',
+    '/log nome · log da aplicação do projeto (ex.: laravel.log); sem log configurado, a saída da última execução',
     '/rodar · scripts e ações globais (pergunta as variáveis aqui)',
     '/claude · escolhe o projeto; depois é só mandar texto que vira ordem para o Claude',
     '/demandas · escolhe uma demanda; o texto vai para a conversa do Claude dela (ou /demanda WEB-482 texto)',
     '/fila · tarefas na fila; /fila WEB-482 texto (ou /fila NomeDoProjeto texto) põe uma tarefa na fila',
     '/daily · resumo de ontem/hoje/impedimentos para a daily',
     '/novo · começa uma conversa nova com o Claude',
-    '/parar · interrompe o que o Telegram mandou rodar',
-    '/log [nome] · últimas linhas de um projeto ou script',
     '/historico · últimas execuções',
     '/status · como está o PC',
     '/pendentes · pedidos aguardando você',
@@ -171,6 +176,10 @@ export class TelegramControl {
       case 'p':
         await this.sendProjects()
         return true
+      case 'subir':
+        await this.upCommand(args)
+        return true
+
       case 'rodar':
       case 'r':
         await this.sendScripts(args)
@@ -204,10 +213,12 @@ export class TelegramControl {
         await this.say('🆕 Próxima mensagem começa uma conversa nova com o Claude.')
         return true
       case 'parar':
-        await this.stopMine()
+        // /parar nome: para o projeto (e os ligados); /parar sozinho: interrompe o que o Telegram mandou rodar
+        if (args.trim()) await this.stopCommand(args)
+        else await this.stopMine()
         return true
       case 'log':
-        await this.sendLog(args)
+        await this.logCommand(args)
         return true
       case 'historico':
       case 'histórico':
@@ -314,6 +325,83 @@ export class TelegramControl {
       })
       await this.edit(id, v.html, [...v.buttons, [refresh]])
     }
+  }
+
+  // ------------------------------------------------------------ /subir /parar /log
+
+  private async upCommand(args: string): Promise<void> {
+    const cfg = store.get()
+    const q = norm(args.trim())
+    if (q) {
+      const pr = cfg.profiles.find((x) => norm(x.name) === q) ?? cfg.profiles.find((x) => norm(x.name).includes(q))
+      if (pr) {
+        const r = await this.d.runProfile(pr.id)
+        await this.say(`${r.ok ? '▶' : '⚠️'} <b>${escapeHtml(pr.name)}</b>\n${escapeHtml(r.message)}`)
+        return
+      }
+      const p = this.findProject(args)
+      if (!p) return void (await this.say('Não achei perfil nem projeto com esse nome. Mande /subir para ver a lista.'))
+      const r = await this.d.projects.start(p.id, true)
+      await this.say(`${r.ok ? '▶' : '⚠️'} <b>${escapeHtml(p.name)}</b>: ${escapeHtml(r.message)}`)
+      return
+    }
+    const buttons: Buttons = []
+    for (const pr of cfg.profiles.slice(0, 10)) {
+      buttons.push([
+        this.btn(`⭐ ${pr.name}`.slice(0, 40), async () => {
+          const r = await this.d.runProfile(pr.id)
+          await this.say(`${r.ok ? '▶' : '⚠️'} <b>${escapeHtml(pr.name)}</b>\n${escapeHtml(r.message)}`)
+          return pr.name
+        })
+      ])
+    }
+    const runnable = cfg.projects.filter((p) => p.runCommand).slice(0, 20)
+    for (let i = 0; i < runnable.length; i += 2) {
+      buttons.push(
+        runnable.slice(i, i + 2).map((p) =>
+          this.btn(`▶ ${p.name}`.slice(0, 30), async () => {
+            const r = await this.d.projects.start(p.id, true)
+            await this.say(`${r.ok ? '▶' : '⚠️'} <b>${escapeHtml(p.name)}</b>: ${escapeHtml(r.message)}`)
+            return p.name
+          })
+        )
+      )
+    }
+    if (!buttons.length) return void (await this.say('Nenhum perfil nem projeto com "Como executar" cadastrado.'))
+    await this.say('<b>Subir o quê?</b> (projetos sobem junto com os ligados)', buttons)
+  }
+
+  private async stopCommand(args: string): Promise<void> {
+    const p = this.findProject(args)
+    if (!p) return void (await this.say('Não achei esse projeto.'))
+    const r = await this.d.projects.stop(p.id, true)
+    await this.say(`⏹ <b>${escapeHtml(p.name)}</b>: ${escapeHtml(r.message)}`)
+  }
+
+  private async logCommand(args: string): Promise<void> {
+    const cfg = store.get()
+    const withLog = cfg.projects.filter((p) => p.logSource && p.logSource.kind !== 'none')
+    if (args.trim()) {
+      const found = this.findProject(args)
+      if (!found || !found.logSource || found.logSource.kind === 'none') return this.sendLog(args)
+    }
+    const p = args.trim() ? this.findProject(args) : withLog.length === 1 ? withLog[0] : undefined
+    if (!p) {
+      if (!withLog.length) return this.sendHistory()
+      await this.say(
+        '<b>Log de qual projeto?</b>',
+        withLog.slice(0, 20).map((x) => [
+          this.btn(x.name.slice(0, 40), async () => {
+            void this.logCommand(x.name)
+            return x.name
+          })
+        ])
+      )
+      return
+    }
+    const r = await this.d.logTail(p)
+    if (!r.ok || !r.text) return void (await this.say(`⚠️ ${escapeHtml(r.message || 'Log vazio.')}`))
+    await this.say(`📜 <b>${escapeHtml(p.name)}</b>\n<pre>${escapeHtml(tailText(r.text.split('\n'), 3500))}</pre>`)
   }
 
   // ------------------------------------------------------------ /rodar

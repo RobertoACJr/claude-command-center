@@ -882,6 +882,7 @@ export default function App() {
           onOpenTerminal={openProjectTerminal}
           onError={showToast}
           scriptActions={scriptActions}
+          profiles={config.profiles}
           demands={demands}
           demandsBusy={demandsBusy}
           onOpenDemand={(d) => setDemandOpen({ id: d.id })}

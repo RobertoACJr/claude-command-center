@@ -1,8 +1,24 @@
 import { createConnection } from 'net'
 import type { AppConfig, OpResult, Project, ProjectRunState, RunEvent } from '../shared/types'
 import type { RunManager } from './runner'
+import { shellCapture } from './proc'
 
 const POLL_MS = 4000
+
+/** O endereço de saúde respondeu (qualquer status abaixo de 500)? */
+export async function checkHealth(url: string, timeoutMs = 2500): Promise<boolean> {
+  if (!/^https?:\/\//i.test(url)) return false
+  const ctl = new AbortController()
+  const t = setTimeout(() => ctl.abort(), timeoutMs)
+  try {
+    const r = await fetch(url, { signal: ctl.signal, redirect: 'manual' })
+    return r.status < 500
+  } catch {
+    return false
+  } finally {
+    clearTimeout(t)
+  }
+}
 
 /** Testa se há algo escutando na porta (IPv4 e IPv6: o Vite costuma ouvir só em ::1) */
 export function isPortOpen(port: number, timeoutMs = 500): Promise<boolean> {
@@ -73,14 +89,36 @@ export class ProjectProcesses {
     }
   }
 
-  /** Projeto ligado -> projeto que o ligou junto (para desligar junto também) */
+  /** Projeto ligado -> projeto que o ligou junto */
   private startedWith = new Map<string, string>()
+  /** Projetos parados por causa do modo Ausente (para religar na volta) */
+  private awayStopped = new Set<string>()
+  /** Espera até o projeto responder antes de subir quem depende dele (pode ser trocada nos testes) */
+  waitReadyMs = 90_000
+
+  /** Projeto responde? Endereço de saúde, senão a porta; sem nenhum dos dois, considera pronto */
+  async isReady(p: Project): Promise<boolean> {
+    if (p.healthUrl) return checkHealth(p.healthUrl)
+    if (p.port) return isPortOpen(p.port)
+    return true
+  }
+
+  private async waitReady(p: Project): Promise<boolean> {
+    if (!p.healthUrl && !p.port) return true
+    const until = Date.now() + this.waitReadyMs
+    while (Date.now() < until) {
+      if (await this.isReady(p)) return true
+      if (!this.runs.isRunning(this.get(p.id).runId)) return false
+      await new Promise((r) => setTimeout(r, 1500))
+    }
+    return false
+  }
 
   /**
-   * Executa o projeto. Com `cascade`, também executa os projetos ligados a ele
-   * (ex.: ligar o front liga o back), antes dele, para a API já estar subindo.
+   * Executa o projeto. Com `group`, executa antes os projetos ligados (ex.: o back) e espera eles
+   * responderem (endereço de saúde ou porta), para o front não abrir com a API fora do ar.
    */
-  async start(id: string, cascade = true, seen = new Set<string>()): Promise<OpResult> {
+  async start(id: string, group = false, seen = new Set<string>()): Promise<OpResult> {
     const p = this.projects.get(id)
     if (!p) return { ok: false, message: 'Projeto não encontrado.' }
     if (!p.runCommand) return { ok: false, message: 'Defina "Como executar" no cadastro do projeto.' }
@@ -94,24 +132,28 @@ export class ProjectProcesses {
       this.changed()
       return {
         ok: false,
-        message: `A porta ${p.port} já está em uso: o projeto parece estar rodando fora do app. Feche o outro processo e tente de novo.`
+        message: `A porta ${p.port} já está em uso: o projeto parece estar rodando fora do app. Veja quem está usando a porta no card ou feche o outro processo.`
       }
     }
 
     const alsoStarted: string[] = []
     const problems: string[] = []
-    if (cascade) {
+    if (group) {
       for (const lid of p.linkedProjectIds ?? []) {
         if (seen.has(lid)) continue
         const lp = this.projects.get(lid)
         if (!lp?.runCommand) continue
         const ls = this.get(lid)
-        if (this.runs.isRunning(ls.runId) || ls.state === 'external') continue
-        const r = await this.start(lid, true, seen)
-        if (r.ok) {
+        if (!this.runs.isRunning(ls.runId) && ls.state !== 'external') {
+          const r = await this.start(lid, true, seen)
+          if (!r.ok) {
+            problems.push(`${lp.name}: ${r.message}`)
+            continue
+          }
           this.startedWith.set(lid, id)
           alsoStarted.push(lp.name)
-        } else problems.push(`${lp.name}: ${r.message}`)
+        }
+        if (!(await this.waitReady(lp))) problems.push(`${lp.name} não respondeu a tempo; subi mesmo assim`)
       }
     }
 
@@ -137,20 +179,42 @@ export class ProjectProcesses {
     }, p.port ? 60_000 : 2000)
     let message = 'Iniciado.'
     if (alsoStarted.length) message = `Iniciado junto com ${alsoStarted.join(', ')}.`
-    if (problems.length) message += ` Não deu para ligar: ${problems.join('; ')}`
+    if (problems.length) message += ` Atenção: ${problems.join('; ')}`
     return { ok: true, message }
   }
 
-  /** Para o projeto e, com `cascade`, os ligados que subiram junto com ele */
-  async stop(id: string, cascade = true): Promise<void> {
+  /**
+   * Para o projeto: interrompe o processo (esperando o tempo do cadastro antes de forçar) e roda o
+   * comando de parar, se houver (ex.: docker compose stop), mesmo quando ele roda fora do app.
+   * Com `group`, para também os projetos ligados.
+   */
+  async stop(id: string, group = false, seen = new Set<string>()): Promise<OpResult> {
+    seen.add(id)
+    const p = this.projects.get(id)
     const s = this.states.get(id)
-    if (s?.runId && this.runs.isRunning(s.runId)) await this.runs.stop(s.runId)
-    if (!cascade) return
-    const mine = [...this.startedWith].filter(([, by]) => by === id).map(([lid]) => lid)
-    for (const lid of mine) {
-      this.startedWith.delete(lid)
-      await this.stop(lid, true)
+    const notes: string[] = []
+    if (s?.runId && this.runs.isRunning(s.runId)) await this.runs.stop(s.runId, (p?.stopTimeoutSec ?? 10) * 1000)
+    if (p?.stopCommand && p.path) {
+      const r = await shellCapture(p.stopCommand, p.path, 120_000)
+      if (r.code !== 0) notes.push(`o comando de parar falhou: ${(r.err || r.out).trim().split('\n').slice(-1)[0] ?? ''}`)
+      if (s && s.state === 'external') {
+        s.state = 'stopped'
+        this.changed()
+      }
     }
+    this.startedWith.delete(id)
+    if (group && p) {
+      const others = new Set([
+        ...(p.linkedProjectIds ?? []),
+        ...[...this.startedWith].filter(([, by]) => by === id).map(([lid]) => lid)
+      ])
+      for (const lid of others) {
+        if (seen.has(lid)) continue
+        const r = await this.stop(lid, true, seen)
+        if (!r.ok) notes.push(r.message)
+      }
+    }
+    return notes.length ? { ok: false, message: `Parado, mas ${notes.join('; ')}` } : { ok: true, message: 'Parado.' }
   }
 
   /** Reinicia só este projeto (os ligados continuam rodando) */
@@ -159,6 +223,37 @@ export class ProjectProcesses {
     // Dá um respiro para a porta ser liberada
     await new Promise((r) => setTimeout(r, 600))
     return this.start(id, false)
+  }
+
+  /**
+   * Modo Ausente: para os projetos marcados "parar no Ausente" que estão no ar,
+   * menos os que a fila está usando (`busy`). Guarda quais foram para religar na volta.
+   */
+  async stopForAway(busy: Set<string>): Promise<string[]> {
+    const done: string[] = []
+    for (const p of this.projects.values()) {
+      if (!p.awayStop || busy.has(p.id)) continue
+      const s = this.get(p.id)
+      const up = this.runs.isRunning(s.runId) || (s.state === 'external' && !!p.stopCommand)
+      if (!up) continue
+      await this.stop(p.id, false)
+      this.awayStopped.add(p.id)
+      done.push(p.name)
+    }
+    return done
+  }
+
+  /** Volta do Ausente: religa o que foi parado por causa dele */
+  async restoreAfterAway(): Promise<string[]> {
+    const done: string[] = []
+    for (const id of [...this.awayStopped]) {
+      this.awayStopped.delete(id)
+      const p = this.projects.get(id)
+      if (!p?.runCommand) continue
+      const r = await this.start(id, false)
+      if (r.ok) done.push(p.name)
+    }
+    return done
   }
 
   /** Recebe todos os eventos de execução; só interessa a saída dos projetos */
@@ -177,17 +272,27 @@ export class ProjectProcesses {
     let dirty = false
     await Promise.all(
       [...this.projects.values()].map(async (p) => {
-        if (!p.port) return
         const s = this.get(p.id)
+        if (!p.port) {
+          // Sem porta: só a saúde, enquanto o processo é nosso
+          const h = p.healthUrl && this.runs.isRunning(s.runId) ? await checkHealth(p.healthUrl) : undefined
+          if (h !== s.healthy) {
+            s.healthy = h
+            dirty = true
+          }
+          return
+        }
         const open = await isPortOpen(p.port)
         const ours = this.runs.isRunning(s.runId)
         let next = s.state
         if (ours && open && s.state === 'starting') next = 'running'
         if (!ours && open && (s.state === 'stopped' || s.state === 'crashed')) next = 'external'
         if (!ours && !open && s.state === 'external') next = 'stopped'
-        if (open !== s.portOpen || next !== s.state) {
+        const healthy = p.healthUrl && (open || ours) ? await checkHealth(p.healthUrl) : undefined
+        if (open !== s.portOpen || next !== s.state || healthy !== s.healthy) {
           s.portOpen = open
           s.state = next
+          s.healthy = healthy
           dirty = true
         }
       })

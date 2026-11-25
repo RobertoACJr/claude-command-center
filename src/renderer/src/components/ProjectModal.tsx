@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { FolderGit2, FolderOpen, Link2, Plus, X } from 'lucide-react'
 import type { ClaudePerms, Project, ProjectKind, ProjectVar } from '@shared/types'
 import { cn } from '../lib/utils'
+import { RuntimeFields, emptyRuntime, runtimeOf, type Runtime } from './ProjectRuntime'
 import { ClaudePermsEditor } from './ClaudePermsEditor'
 import { Button, Field, IconButton, Modal, Toggle, inputCls } from './ui'
 import { uid } from '../lib/utils'
@@ -59,6 +60,7 @@ export function ProjectModal({
   const [memoryFile, setMemoryFile] = useState('CLAUDE.md')
   const [guideOk, setGuideOk] = useState<boolean[]>([])
   const [linked, setLinked] = useState<string[]>([])
+  const [runtime, setRuntime] = useState<Runtime>(emptyRuntime())
 
   useEffect(() => {
     if (!open) return
@@ -77,6 +79,7 @@ export function ProjectModal({
     setMobileShots(initial?.mobileShots ?? false)
     setMemoryFile(initial?.memoryFile || 'CLAUDE.md')
     setLinked(initial?.linkedProjectIds ?? [])
+    setRuntime(runtimeOf(initial))
   }, [open, initial])
 
   const guideList = guides
@@ -142,7 +145,12 @@ export function ProjectModal({
         .filter(Boolean),
       mobileShots,
       memoryFile: memoryFile.trim() || 'CLAUDE.md',
-      linkedProjectIds: linked.filter((id) => projects.some((o) => o.id === id))
+      linkedProjectIds: linked.filter((id) => projects.some((o) => o.id === id)),
+      ...runtime,
+      stopCommand: runtime.stopCommand.trim(),
+      healthUrl: runtime.healthUrl.trim(),
+      dockerCommand: runtime.dockerCommand.trim() || 'docker compose',
+      dockerCommands: runtime.dockerCommands.filter((c) => c.command.trim())
     })
     onClose()
   }
@@ -225,6 +233,8 @@ export function ProjectModal({
           />
         </Field>
       </div>
+
+      <RuntimeFields value={runtime} onChange={setRuntime} path={path} />
 
       <Field
         label="Variáveis do projeto"

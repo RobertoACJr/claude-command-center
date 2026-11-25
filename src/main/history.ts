@@ -43,6 +43,8 @@ export class History {
   }
 
   handle(e: RunEvent): void {
+    // Log da aplicação fica correndo o tempo todo: não é uma "execução" para o histórico
+    if (e.tab.startsWith('applog:')) return
     if (e.type === 'start') {
       this.entries.unshift({
         id: e.runId,

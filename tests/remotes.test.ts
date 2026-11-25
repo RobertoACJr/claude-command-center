@@ -118,19 +118,29 @@ test('projetos ligados: valem nos dois sentidos', () => {
   assert.deepEqual(linkedProjectsOf(other, all), [])
 })
 
-test('executar o front liga o back junto; parar o front desliga só o que subiu junto', async () => {
+test('executar só este ou o grupo; parar só este ou os dois; comando de parar', async () => {
   const runs = fakeRuns()
   const pp = new ProjectProcesses(runs as any, () => {})
   const dir = tempDir()
   mkdirSync(join(dir, 'f'))
   mkdirSync(join(dir, 'b'))
-  const front = { ...project(join(dir, 'f')), id: 'f', name: 'front', runCommand: 'npm run dev', port: null, linkedProjectIds: ['b'] }
-  const back = { ...project(join(dir, 'b')), id: 'b', name: 'back', runCommand: 'docker compose up', port: null }
+  const marker = join(dir, 'b', 'parou.txt')
+  const stopCmd = process.platform === 'win32' ? `Set-Content -Path '${marker}' -Value ok` : `echo ok > '${marker}'`
+  const front = { ...project(join(dir, 'f')), id: 'f', name: 'front', runCommand: 'npm run dev', port: null, linkedProjectIds: ['b'], stopCommand: '', stopTimeoutSec: 5, healthUrl: '' }
+  const back = { ...project(join(dir, 'b')), id: 'b', name: 'back', runCommand: 'docker compose up', port: null, stopCommand: stopCmd, stopTimeoutSec: 5, healthUrl: '' }
   pp.sync({ projects: [front, back] } as any)
   pp.stopPolling()
   try {
-    const r = await pp.start('f')
-    assert.equal(r.ok, true)
+    // Só este: o back não sobe
+    assert.equal((await pp.start('f')).ok, true)
+    assert.deepEqual(runs.started.map((s) => s.req.tab), ['project:f'])
+    await pp.stop('f')
+
+    // Os dois: o back sobe antes
+    runs.reset()
+    runs.started.length = 0
+    runs.stopped.length = 0
+    const r = await pp.start('f', true)
     assert.match(r.message, /junto com back/)
     assert.deepEqual(runs.started.map((s) => s.req.tab), ['project:b', 'project:f'], 'o back sobe antes')
 
@@ -138,17 +148,73 @@ test('executar o front liga o back junto; parar o front desliga só o que subiu 
     await pp.restart('f')
     assert.equal(runs.stopped.length, 1)
 
+    // Parar só o front: o back continua
     await pp.stop('f')
-    assert.ok(runs.stopped.includes('run1'), 'parou o back que subiu junto')
+    assert.equal(runs.stopped.length, 2)
+    assert.ok(!existsSync(marker))
 
-    // Back já rodando por conta própria: parar o front não derruba ele
-    runs.reset()
-    runs.stopped.length = 0
-    await pp.start('b')
-    await pp.start('f')
-    await pp.stop('f')
-    assert.equal(runs.stopped.length, 1, 'só o front parou')
+    // Parar os dois: o back para e roda o comando de parar dele
+    const st = await pp.stop('f', true)
+    assert.equal(st.ok, true, st.message)
+    assert.ok(runs.stopped.includes('run1'), 'parou o back')
+    assert.ok(existsSync(marker), 'rodou o comando de parar do back')
   } finally {
     pp.stopPolling()
   }
+})
+
+test('Ausente: para os marcados (menos os da fila) e religa na volta', async () => {
+  const runs = fakeRuns()
+  const pp = new ProjectProcesses(runs as any, () => {})
+  const dir = tempDir()
+  const mk = (id: string, awayStop: boolean) => ({ ...project(dir), id, name: id, runCommand: 'x', port: null, awayStop, stopCommand: '', stopTimeoutSec: 5, healthUrl: '' })
+  pp.sync({ projects: [mk('a', true), mk('b', true), mk('c', false)] } as any)
+  pp.stopPolling()
+  try {
+    for (const id of ['a', 'b', 'c']) await pp.start(id)
+    const stopped = await pp.stopForAway(new Set(['b']))
+    assert.deepEqual(stopped, ['a'], 'b está na fila e c não é marcado')
+    runs.started.length = 0
+    const back = await pp.restoreAfterAway()
+    assert.deepEqual(back, ['a'])
+    assert.deepEqual(runs.started.map((s) => s.req.tab), ['project:a'])
+  } finally {
+    pp.stopPolling()
+  }
+})
+
+test('sincronizar com o remoto da empresa: branch de mesmo nome e principal', async () => {
+  const { syncWithRemote } = await import('../src/main/git')
+  const { company, work, p } = forkSetup()
+  assert.equal((await goToDemandBranch(p, 'MAS-7', { createOnCompany: true })).ok, true)
+  const o = company.other()
+  sh(o, 'fetch', '-q')
+  sh(o, 'checkout', '-q', 'MAS-7')
+  writeFileSync(join(o, 'colega.txt'), 'x')
+  sh(o, 'add', '.')
+  sh(o, 'commit', '-q', '-m', 'colega')
+  sh(o, 'push', '-q', 'origin', 'MAS-7')
+  sh(o, 'checkout', '-q', 'master')
+  writeFileSync(join(o, 'prod.txt'), 'x')
+  sh(o, 'add', '.')
+  sh(o, 'commit', '-q', '-m', 'prod')
+  sh(o, 'push', '-q', 'origin', 'master')
+
+  const b = await syncWithRemote(p, 'branch')
+  assert.equal(b.ok, true, b.message)
+  assert.ok(existsSync(join(work, 'colega.txt')))
+  assert.ok(!existsSync(join(work, 'prod.txt')), 'a principal ainda não veio')
+  const m = await syncWithRemote(p, 'main')
+  assert.equal(m.ok, true, m.message)
+  assert.ok(existsSync(join(work, 'prod.txt')))
+  assert.match((await syncWithRemote(p, 'main')).message, /em dia/)
+
+  // Branch que não existe na empresa: não faz nada
+  sh(work, 'checkout', '-q', '-b', 'so-local')
+  const s = await syncWithRemote(p, 'branch')
+  assert.equal(s.skipped, true)
+
+  // Com alteração pendente: recusa
+  writeFileSync(join(work, 'sujo.txt'), 'x')
+  assert.equal((await syncWithRemote(p, 'main')).ok, false)
 })

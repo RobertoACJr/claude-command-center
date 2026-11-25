@@ -42,7 +42,9 @@ test('Telegram: projetos, scripts com variável, Claude contínuo, demanda, fila
     remote: { list: () => [], setManual: (id: string) => (remoteOn = id) } as any,
     history,
     status: async () => '',
-    log: () => {}
+    log: () => {},
+    runProfile: async () => ({ ok: true, message: '' }),
+    logTail: async () => ({ ok: false, message: '' })
   })
   const last = () => sent.filter((s) => s.method === 'sendMessage').at(-1)!.body
   const click = async (label: string) => {

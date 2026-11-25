@@ -22,9 +22,13 @@ function has(cmd: string): boolean {
  * Linux: gnome-terminal, konsole, xfce4-terminal, tilix, kitty, alacritty, x-terminal-emulator ou xterm.
  * Windows: Windows Terminal (wt) se houver, senão uma janela do PowerShell.
  */
-export function openSystemTerminal(cwd: string, preset?: TerminalPreset): OpResult {
+/**
+ * Abre o terminal do sistema na pasta. `preset` vem da interface (lista fechada);
+ * `command` só é montado aqui no processo principal (ex.: entrar num container), nunca vem pronto da tela.
+ */
+export function openSystemTerminal(cwd: string, preset?: TerminalPreset, command?: string): OpResult {
   if (!cwd || !existsSync(cwd)) return { ok: false, message: `Pasta não encontrada: ${cwd}` }
-  const cmd = preset ? PRESETS[preset] : ''
+  const cmd = command ?? (preset ? PRESETS[preset] : '')
   if (preset && !cmd) return { ok: false, message: 'Comando desconhecido.' }
 
   try {

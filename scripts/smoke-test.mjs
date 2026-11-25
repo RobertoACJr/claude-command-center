@@ -246,6 +246,37 @@ try {
   else console.log('✓ Card do projeto recolhe e expande')
   if (!(await evaluate(`!!document.querySelector('[data-testid="folder-picker"]')`))) fail('Seletor de pasta do terminal não encontrado')
 
+  // 4b3) Log da aplicação (arquivo) e janela de Ambiente
+  const appLog = join(home, 'app.log')
+  writeFileSync(appLog, 'linha comum\n[2026-11-25 10:00:00] local.ERROR: smoke-erro-xyz\n')
+  await evaluate(`window.api.saveProject({
+    id: 'smoke', name: 'Projeto Smoke', path: ${JSON.stringify(process.cwd())}, remoteEnabled: false, createdAt: Date.now(),
+    runCommand: ${JSON.stringify(`node -e "process.stdin.on('data', d => console.log('eco:' + String(d).trim())); console.log('pronto')"`)},
+    port: null, vars: [{ key: 'remote', value: 'origin' }], claudeMode: 'ask', allowedTools: [], guides: ['README.md'],
+    logSource: { kind: 'file', service: '', path: ${JSON.stringify(appLog)}, command: '' }
+  })`)
+  await sleep(1200)
+  if (!(await evaluate(`!!document.querySelector('[data-testid="project-log"]')`))) fail('Botão Log do projeto não apareceu')
+  else {
+    await evaluate(`document.querySelector('[data-testid="project-log"]').click()`)
+    await sleep(4000)
+    const lt = await evaluate(`document.querySelector('[data-testid="log-modal"]')?.innerText ?? ''`)
+    if (!lt.includes('smoke-erro-xyz')) fail('Log da aplicação não mostrou o arquivo: ' + JSON.stringify(lt.slice(0, 200)))
+    else console.log('✓ Log da aplicação mostrou o arquivo ao vivo')
+    await evaluate(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
+    await sleep(600)
+  }
+  if (!(await evaluate(`!!document.querySelector('[data-testid="project-env"]')`))) fail('Botão Ambiente não apareceu')
+  else {
+    await evaluate(`document.querySelector('[data-testid="project-env"]').click()`)
+    await sleep(5000)
+    const et = await evaluate(`document.querySelector('[data-testid="env-modal"]')?.innerText ?? ''`)
+    if (!/Containers/i.test(et) || !/\.env/.test(et)) fail('Janela de Ambiente não abriu direito: ' + JSON.stringify(et.slice(0, 200)))
+    else console.log('✓ Janela de Ambiente abriu (Docker e .env)')
+    await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
+    await sleep(600)
+  }
+
   // 4c) Remote Control com link enorme: não pode criar rolagem horizontal; vira notificação no sino
   const clickRemote = () =>
     evaluate(`(() => {

@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, copyFileSync } from 'fs'
 import { join } from 'path'
 import type {
+  WorkProfile,
   ClaudePerms,
   AlertStatus,
   AppConfig,
@@ -59,6 +60,7 @@ function defaults(): AppConfig {
       }
     ],
     rules: [],
+    profiles: [],
     queue: { onlyAway: true, paused: false, useWorktree: true },
     costs: { dailyLimitUsd: 0 },
     sync: { enabled: false, repoUrl: '' }
@@ -142,6 +144,17 @@ function normalize(raw: unknown): AppConfig {
     claudeGlobal: normPerms(r.claudeGlobal),
     replies: Array.isArray(r.replies) ? (r.replies as ReplyTemplate[]).filter((x) => x && x.id).map(normReply) : d.replies,
     rules: Array.isArray(r.rules) ? (r.rules as AutomationRule[]).filter((x) => x && x.id).map(normRule) : [],
+    profiles: Array.isArray(r.profiles)
+      ? (r.profiles as WorkProfile[])
+          .filter((x) => x && typeof x.id === 'string' && x.id)
+          .map((x) => ({
+            id: x.id,
+            name: str(x.name).trim() || 'Perfil',
+            projectIds: Array.isArray(x.projectIds) ? x.projectIds.filter((y) => typeof y === 'string').slice(0, 20) : [],
+            withLinked: bool(x.withLinked, true)
+          }))
+          .slice(0, 20)
+      : [],
     queue: { onlyAway: bool(r.queue?.onlyAway, true), paused: bool(r.queue?.paused, false), useWorktree: bool(r.queue?.useWorktree, true) },
     costs: { dailyLimitUsd: num(r.costs?.dailyLimitUsd, 0, 0, 10_000) },
     sync: { enabled: bool(r.sync?.enabled, false), repoUrl: str(r.sync?.repoUrl).trim() }
@@ -219,7 +232,30 @@ function normProject(p: Project): Project {
       : [],
     guides: Array.isArray(p.guides)
       ? [...new Set(p.guides.filter((g) => typeof g === 'string').map((g) => g.trim().replace(/\\/g, '/')).filter(Boolean))].slice(0, 10)
-      : []
+      : [],
+    stopCommand: str(p.stopCommand).trim(),
+    stopTimeoutSec: num(p.stopTimeoutSec, 10, 1, 300),
+    awayStop: bool(p.awayStop, false),
+    healthUrl: str(p.healthUrl).trim(),
+    dockerCommand: str(p.dockerCommand).trim() || 'docker compose',
+    dockerCommands: Array.isArray(p.dockerCommands)
+      ? p.dockerCommands
+          .filter((c) => c && typeof c.command === 'string' && c.command.trim())
+          .map((c) => ({
+            id: str(c.id) || Math.random().toString(36).slice(2, 10),
+            name: str(c.name).trim() || c.command.trim().slice(0, 40),
+            service: str(c.service).trim(),
+            command: c.command.trim()
+          }))
+          .slice(0, 30)
+      : [],
+    logSource: {
+      kind: (['none', 'docker', 'file', 'command'] as const).includes(p.logSource?.kind as never) ? p.logSource.kind : 'none',
+      service: str(p.logSource?.service).trim(),
+      path: str(p.logSource?.path).trim(),
+      command: str(p.logSource?.command).trim()
+    },
+    logAlerts: bool(p.logAlerts, false)
   }
 }
 
@@ -322,7 +358,8 @@ class ConfigStore {
       ai: c.ai,
       claudeGlobal: c.claudeGlobal,
       replies: c.replies,
-      rules: c.rules
+      rules: c.rules,
+      profiles: c.profiles
     }
   }
 
@@ -345,7 +382,7 @@ class ConfigStore {
     const localPath = new Map(cur.projects.map((p) => [p.id, p.path]))
     const incoming = normalize({ ...cur, ...merged })
     return this.update((d) => {
-      for (const k of ['projects', 'scripts', 'replies', 'rules', 'general', 'integrations', 'telegram', 'ai', 'claudeGlobal', 'queue', 'costs'] as const) {
+      for (const k of ['projects', 'scripts', 'replies', 'rules', 'profiles', 'general', 'integrations', 'telegram', 'ai', 'claudeGlobal', 'queue', 'costs'] as const) {
         ;(d as unknown as Record<string, unknown>)[k] = incoming[k]
       }
       d.projects = incoming.projects.map((p) => ({ ...p, path: localPath.get(p.id) || paths[p.id] || '' }))
@@ -416,6 +453,7 @@ class ConfigStore {
       if (patch.claudeGlobal) d.claudeGlobal = { ...d.claudeGlobal, ...patch.claudeGlobal }
       if (patch.replies) d.replies = patch.replies
       if (patch.rules) d.rules = patch.rules
+      if (patch.profiles) d.profiles = patch.profiles
       if (patch.queue) d.queue = { ...d.queue, ...patch.queue }
       if (patch.costs) d.costs = { ...d.costs, ...patch.costs }
       if (patch.sync) d.sync = { ...d.sync, ...patch.sync }

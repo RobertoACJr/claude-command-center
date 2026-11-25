@@ -91,6 +91,35 @@ export async function baseBranch(p: Project): Promise<string> {
   return 'master'
 }
 
+/**
+ * Atualiza a branch atual do projeto com o remoto da empresa, por merge (sem push):
+ * - 'branch': com a branch de mesmo nome lá (ex.: empresa/MAS-123)
+ * - 'main': com a principal (ex.: empresa/master)
+ * Precisa da árvore limpa. Em conflito, deixa o merge aberto e lista os arquivos.
+ */
+export async function syncWithRemote(p: Project, target: 'branch' | 'main'): Promise<OpResult & { skipped?: boolean }> {
+  const info = await gitInfo(p)
+  if (!info) return { ok: false, message: 'não é um repositório git.' }
+  if (!info.branch) return { ok: false, message: 'não está em nenhuma branch (HEAD solto).' }
+  if (info.conflicts) return { ok: false, message: 'já tem um merge com conflito em andamento.' }
+  if (info.changed) return { ok: false, message: `tem ${info.changed} arquivo(s) sem commit; faça commit ou stash antes.` }
+  const { company } = remotesOf(p)
+  const name = target === 'branch' ? info.branch : info.base
+  if (!(await fetchRemoteBranch(p, company, name))) {
+    return { ok: true, skipped: true, message: `${name} não existe em ${company}: ficou como estava.` }
+  }
+  const ref = `${company}/${name}`
+  const behind = await git(p.path, ['rev-list', '--count', `HEAD..${ref}`], 8000)
+  const n = behind.ok ? Number(behind.out.trim()) : NaN
+  if (n === 0) return { ok: true, message: `${info.branch} já estava em dia com ${ref}.` }
+  const m = await git(p.path, ['merge', '--no-edit', ref], 120_000)
+  if (m.ok) return { ok: true, message: `${info.branch} atualizada com ${ref} (${Number.isNaN(n) ? '?' : n} commit(s)). Ainda sem push.` }
+  const files = await git(p.path, ['diff', '--name-only', '--diff-filter=U'])
+  const list = files.ok ? files.out.split('\n').filter(Boolean) : []
+  if (list.length) return { ok: false, message: `conflito ao trazer ${ref}: ${list.slice(0, 5).join(', ')}${list.length > 5 ? '…' : ''}. Resolva no editor.` }
+  return { ok: false, message: `o merge com ${ref} falhou: ${m.out.split('\n').slice(-2).join(' ')}` }
+}
+
 /** Projetos ligados a este, nos dois sentidos (front liga o back; a demanda do back também leva o front) */
 export function linkedProjectsOf(p: Project, all: Project[]): Project[] {
   const ids = new Set(p.linkedProjectIds ?? [])

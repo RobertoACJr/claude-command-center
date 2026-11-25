@@ -1,3 +1,7 @@
+import { AppLogs, logTail } from './applog'
+import { composeCmd, dockerStatus, execCommand as dockerExecCommand, hasComposeFile, SAFE_SERVICE, shellCommand as dockerShellCommand, suggestions as dockerSuggestions } from './docker'
+import { envProfiles, envSwitch } from './envfiles'
+import { killPortOwner, portOwner } from './ports'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Notification, shell } from 'electron'
 import { existsSync } from 'fs'
 import { writeFileAtomic } from './fsutil'
@@ -8,7 +12,7 @@ import { randomUUID } from 'crypto'
 import appIcon from '../../build/icons/512x512.png?asset'
 import trayIcon from '../../build/icons/64x64.png?asset'
 import { configFilePath, store } from './store'
-import { getGitBranch, gitBranches, gitCheckout, gitInfo, gitPull } from './git'
+import { getGitBranch, gitBranches, gitCheckout, gitInfo, gitPull, linkedProjectsOf, syncWithRemote } from './git'
 import { checkGuides, guidesInstruction } from './guides'
 import { RunManager } from './runner'
 import { RemoteManager } from './remote'
@@ -17,7 +21,7 @@ import { applyIntegration, integrationCheck, integrationLogin, integrationStatus
 import { detectChatId, editTelegramMessage, escapeHtml, formatAlert, registerBot, sendTelegram, sendTelegramMessage, sendTelegramPhoto, TelegramBot } from './telegram'
 import { Automation } from './automation'
 import { geminiCheck, geminiSetup } from './gemini'
-import { setCodexCommand, setGeminiCommand } from './proc'
+import { setCodexCommand, setGeminiCommand, shellCapture } from './proc'
 import { openSystemTerminal } from './systerm'
 import { ApprovalServer } from './approval'
 import { checkTools } from './setup'
@@ -57,7 +61,10 @@ import type {
   SecretKey,
   SettingsPatch,
   TerminalPreset,
-  UiState
+  UiState,
+  LogSource,
+  OpResult,
+  WorkProfile
 } from '../shared/types'
 
 let mainWindow: BrowserWindow | null = null
@@ -90,10 +97,34 @@ const runs = new RunManager((e) => {
   demands.handleRunEvent(e)
   tg.handleRunEvent(e)
   projects.handleRunEvent(e)
+  appLogs.handleRunEvent(e)
   automation.handleRunEvent(e)
   if (e.type === 'exit') approvals.runEnded(e.runId)
   send('run:event', e)
 })
+/** Log da aplicação de cada projeto e aviso quando aparece erro */
+const appLogs = new AppLogs(
+  runs,
+  (id) => store.get().projects.find((p) => p.id === id),
+  (p, line, tab) => notify(`🐞 Erro no log: ${p.name}`, line, `tab:${tab}`, 'projeto', 'unfocused', true)
+)
+/** Perfil de trabalho: sobe os projetos dele (com os ligados, se marcado) */
+async function runProfile(id: string): Promise<OpResult> {
+  const cfg = store.get()
+  const pr = cfg.profiles.find((x) => x.id === id)
+  if (!pr) return { ok: false, message: 'Perfil não encontrado.' }
+  const lines: string[] = []
+  let ok = true
+  for (const pid of pr.projectIds) {
+    const p = cfg.projects.find((x) => x.id === pid)
+    if (!p) continue
+    const r = await projects.start(pid, pr.withLinked)
+    if (!r.ok) ok = false
+    lines.push(`${p.name}: ${r.message}`)
+  }
+  return { ok, message: lines.join('\n') || 'O perfil não tem projetos.' }
+}
+
 const demands = new DemandManager(app.getPath('userData'), runs, (list, busy, change) => {
   // Só o que mudou vai para a tela (antes ia a lista inteira, com transcrições, a cada tecla)
   send('demands:update', change?.all || !change ? { list, busy } : { upsert: change.upsert, removed: change.removed, busy })
@@ -243,6 +274,13 @@ const projects = new ProjectProcesses(runs, (states) => {
     }
     if (s.state !== 'crashed') notifiedCrash.delete(s.projectId)
   }
+  // Projetos com alerta de erro no log: mantém o log correndo enquanto estão no ar
+  try {
+    const up = new Set(states.filter((s) => s.state === 'running' || s.state === 'external' || s.state === 'starting').map((s) => s.projectId))
+    appLogs.keepAlive(store.get().projects, (id) => up.has(id))
+  } catch {
+    /* ainda inicializando */
+  }
 })
 const notifiedCrash = new Set<string>()
 /** Sessões que já avisaram "ativa" (para notificar só na primeira vez que o link aparece) */
@@ -376,7 +414,9 @@ const tg = new TelegramControl({
   remote,
   history,
   status: () => telegramStatus(),
-  log: (text, kind = 'info') => appLog({ kind, text })
+  log: (text, kind = 'info') => appLog({ kind, text }),
+  runProfile: (id) => runProfile(id),
+  logTail: (p) => logTail(p)
 })
 
 function telegramReady(): boolean {
@@ -570,7 +610,20 @@ function notify(
 /** Mudança de presença. Indo para Ausente, o que já roda continua; voltando, o renderer pergunta. */
 function setPresence(status: PresenceStatus, keepRemote = true): AppConfig {
   remote.presenceChanged(status === 'off' ? true : keepRemote)
+  const before = store.get().status
   const cfg = store.setStatus(status)
+  if (status === 'off' && before !== 'off') {
+    // Projetos marcados "parar no Ausente" (menos os que a fila está usando)
+    const busy = new Set(queue.state().tasks.filter((t) => t.status === 'rodando' || t.status === 'pendente').map((t) => t.projectId))
+    void projects.stopForAway(busy).then((names) => {
+      if (names.length) notify('⏸ Projetos parados no Ausente', `${names.join(', ')}: religo quando você voltar.`, 'terminals', 'projeto', 'never', false)
+    })
+  }
+  if (status === 'on' && before === 'off') {
+    void projects.restoreAfterAway().then((names) => {
+      if (names.length) notify('▶ Projetos religados', names.join(', '), 'terminals', 'projeto', 'never', false)
+    })
+  }
   if (status === 'off') void queue.tick()
   else {
     // Voltou: resumo do que a fila fez enquanto você estava fora
@@ -738,8 +791,100 @@ function registerIpc(): void {
   ipcMain.handle('sys:configPath', () => configFilePath())
 
   // Fase 5: projetos executáveis, Remote Control por projeto
-  ipcMain.handle('project:start', (_e, id: string) => projects.start(id))
-  ipcMain.handle('project:stop', (_e, id: string) => projects.stop(id))
+  ipcMain.handle('project:start', (_e, id: string, opts?: { group?: boolean }) => projects.start(String(id), opts?.group === true))
+  ipcMain.handle('project:stop', (_e, id: string, opts?: { group?: boolean }) => projects.stop(String(id), opts?.group === true))
+  ipcMain.handle('projects:syncBranches', async (_e, id: string, target: 'branch' | 'main') => {
+    const all = store.get().projects
+    const p = all.find((x) => x.id === id)
+    if (!p) return { ok: false, message: 'Projeto não encontrado.' }
+    const t = target === 'main' ? 'main' : 'branch'
+    const lines: string[] = []
+    let ok = true
+    for (const q of [p, ...linkedProjectsOf(p, all)]) {
+      if (!q.path) continue
+      const r = await syncWithRemote(q, t)
+      if (!r.ok) ok = false
+      lines.push(`${q.name}: ${r.message}`)
+    }
+    return { ok, message: lines.join('\n') }
+  })
+  const projOf = (id: string) => store.get().projects.find((x) => x.id === id)
+  ipcMain.handle('docker:status', (_e, id: string) => {
+    const p = projOf(String(id))
+    return p ? dockerStatus(p) : { compose: false, ok: false, message: 'Projeto não encontrado.', services: [] }
+  })
+  ipcMain.handle('docker:shell', (_e, id: string, service: string) => {
+    const p = projOf(String(id))
+    if (!p || !SAFE_SERVICE.test(String(service))) return { ok: false, message: 'Serviço inválido.' }
+    return openSystemTerminal(p.path, undefined, dockerShellCommand(p, String(service)))
+  })
+  ipcMain.handle('docker:restart', async (_e, id: string, service: string) => {
+    const p = projOf(String(id))
+    if (!p || !SAFE_SERVICE.test(String(service))) return { ok: false, message: 'Serviço inválido.' }
+    const r = await shellCapture(`${composeCmd(p)} restart ${service}`, p.path, 120_000)
+    return r.code === 0 ? { ok: true, message: `${service} reiniciado.` } : { ok: false, message: (r.err || r.out).trim().split('\n').slice(-2).join(' ') }
+  })
+  ipcMain.handle('docker:exec', (_e, id: string, service: string, command: string) => {
+    const p = projOf(String(id))
+    if (!p || !SAFE_SERVICE.test(String(service)) || !String(command ?? '').trim()) return { ok: false, message: 'Serviço ou comando inválido.' }
+    runs.start({
+      kind: 'terminal',
+      tab: `project:${p.id}`,
+      title: p.name,
+      content: dockerExecCommand(p, String(service), String(command).trim()),
+      cwd: p.path,
+      projectId: p.id,
+      origin: 'projeto'
+    })
+    return { ok: true, message: 'Rodando: a saída aparece no terminal do projeto.' }
+  })
+  ipcMain.handle('log:open', (_e, id: string, override?: Partial<LogSource>) => appLogs.start(String(id), override))
+  ipcMain.handle('log:close', (_e, id: string) => appLogs.stop(String(id)))
+  ipcMain.handle('log:analyze', (_e, id: string, text: string) => {
+    const p = projOf(String(id))
+    if (!p) return { ok: false, message: 'Projeto não encontrado.' }
+    const trecho = String(text ?? '').slice(-12_000)
+    if (!trecho.trim()) return { ok: false, message: 'Nada para analisar.' }
+    runs.start({
+      kind: 'claude',
+      tab: 'claude',
+      title: `Erro no log: ${p.name}`,
+      content:
+        `Este é um trecho do log da aplicação do projeto "${p.name}". Explique em português a causa provável do erro, ` +
+        `onde olhar no código (arquivos e linhas, se aparecerem) e como corrigir. Não altere nenhum arquivo.\n\n` +
+        '```\n' + trecho + '\n```',
+      cwd: p.path,
+      projectId: p.id,
+      readOnly: true,
+      origin: 'app'
+    })
+    return { ok: true, message: 'Mandei para o Claude: a resposta aparece na aba Claude do terminal.' }
+  })
+  ipcMain.handle('port:owner', (_e, port: number) => portOwner(Number(port)))
+  ipcMain.handle('port:kill', (_e, port: number) => killPortOwner(Number(port)))
+  ipcMain.handle('env:profiles', (_e, id: string) => {
+    const p = projOf(String(id))
+    return p ? envProfiles(p) : { files: [], active: null }
+  })
+  ipcMain.handle('env:switch', (_e, id: string, file: string) => {
+    const p = projOf(String(id))
+    return p ? envSwitch(p, String(file)) : { ok: false, message: 'Projeto não encontrado.' }
+  })
+  ipcMain.handle('profiles:save', (_e, list: WorkProfile[]) => store.saveSettings({ profiles: Array.isArray(list) ? list : [] }))
+  ipcMain.handle('profiles:run', (_e, id: string) => runProfile(String(id)))
+  ipcMain.handle('project:suggest', async (_e, path: string, dockerCommand?: string) => {
+    const dir = String(path ?? '')
+    if (!dir || !existsSync(dir)) return { compose: false, services: [], commands: [] }
+    const fake = { path: dir, dockerCommand: String(dockerCommand ?? '') || 'docker compose' } as Project
+    const sug = dockerSuggestions(fake)
+    const compose = hasComposeFile(fake)
+    let services: string[] = []
+    if (compose) {
+      const r = await shellCapture(`${composeCmd(fake)} config --services`, dir, 20_000)
+      services = r.code === 0 ? r.out.split('\n').map((x) => x.trim()).filter((x) => SAFE_SERVICE.test(x)) : []
+    }
+    return { compose, services, ...sug }
+  })
   ipcMain.handle('project:restart', (_e, id: string) => projects.restart(id))
   ipcMain.handle('project:states', () => projects.list())
   ipcMain.handle('remote:setManual', (_e, id: string, on: boolean) => remote.setManual(id, Boolean(on)))

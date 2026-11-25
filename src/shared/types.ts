@@ -41,6 +41,81 @@ export interface Project {
    * os que subiram junto. A branch da demanda também vai para eles quando existir lá.
    */
   linkedProjectIds: string[]
+  /**
+   * Comando para derrubar o projeto, rodado depois de parar o processo (ex.: docker compose stop).
+   * Vazio = só interrompe o processo. Também vale quando o projeto está rodando fora do app.
+   */
+  stopCommand: string
+  /** Quanto esperar o processo sair sozinho antes de forçar (segundos) */
+  stopTimeoutSec: number
+  /** Ao ficar Ausente, parar este projeto (se a fila não estiver usando) e religar ao voltar */
+  awayStop: boolean
+  /** Endereço que diz se o projeto está saudável (ex.: http://localhost:8000/up). Vazio = só a porta */
+  healthUrl: string
+  /** Comando do Compose (ex.: "docker compose", "docker compose -f docker/dev.yml") */
+  dockerCommand: string
+  /** Atalhos de comando dentro dos containers (ex.: php artisan migrate no serviço app) */
+  dockerCommands: DockerCommand[]
+  /** Onde fica o log da aplicação, para o botão Log e os alertas de erro */
+  logSource: LogSource
+  /** Avisar (sino e, no Ausente, Telegram) quando aparecer erro no log */
+  logAlerts: boolean
+}
+
+export interface DockerCommand {
+  id: string
+  name: string
+  /** Serviço do compose onde roda */
+  service: string
+  command: string
+}
+
+export type LogSourceKind = 'none' | 'docker' | 'file' | 'command'
+
+export interface LogSource {
+  kind: LogSourceKind
+  /** docker: serviço do compose */
+  service: string
+  /** file: caminho do arquivo (relativo à pasta do projeto ou absoluto) */
+  path: string
+  /** command: comando que fica mostrando o log */
+  command: string
+}
+
+/** Um serviço do docker compose do projeto */
+export interface DockerService {
+  name: string
+  /** running, exited, created, restarting, paused, … ou 'none' (nunca criado) */
+  state: string
+  /** Texto do docker (ex.: "Up 3 minutes (healthy)") */
+  status: string
+  container: string
+  ports: string
+  cpu?: string
+  mem?: string
+}
+
+export interface DockerStatus {
+  /** Tem arquivo do compose (ou o comando do compose respondeu) */
+  compose: boolean
+  ok: boolean
+  message?: string
+  services: DockerService[]
+}
+
+/** Perfil de trabalho: um clique sobe vários projetos */
+export interface WorkProfile {
+  id: string
+  name: string
+  projectIds: string[]
+  /** Subir também os projetos ligados a cada um */
+  withLinked: boolean
+}
+
+/** Quem está usando uma porta */
+export interface PortOwner {
+  pid: number
+  name: string
 }
 
 export type ProjectKind = 'front' | 'back' | 'fullstack' | 'outro'
@@ -344,6 +419,8 @@ export interface AppConfig {
   claudeGlobal: ClaudePerms
   replies: ReplyTemplate[]
   rules: AutomationRule[]
+  /** Perfis de trabalho (ex.: "Bom dia" sobe back e front) */
+  profiles: WorkProfile[]
   queue: QueueConfig
   costs: CostsConfig
   sync: SyncConfig
@@ -393,6 +470,7 @@ export interface SettingsPatch {
   claudeGlobal?: Partial<ClaudePerms>
   replies?: ReplyTemplate[]
   rules?: AutomationRule[]
+  profiles?: WorkProfile[]
   queue?: Partial<QueueConfig>
   costs?: Partial<CostsConfig>
   sync?: Partial<SyncConfig>
@@ -731,6 +809,8 @@ export interface ProjectRunState {
   exitCode?: number | null
   /** true/false se o projeto tem porta configurada; null = sem porta */
   portOpen: boolean | null
+  /** Resposta do endereço de saúde: true = respondeu, false = não, undefined = sem endereço */
+  healthy?: boolean
 }
 
 export type RemoteState = 'starting' | 'active' | 'needs-setup' | 'error' | 'stopping'
@@ -777,8 +857,32 @@ export interface CommandCenterApi {
   geminiSetup(): Promise<OpResult>
 
   // Fase 5
-  projectStart(projectId: string): Promise<OpResult>
-  projectStop(projectId: string): Promise<void>
+  /** group: sobe também os projetos ligados (o back antes, esperando ele responder) */
+  projectStart(projectId: string, opts?: { group?: boolean }): Promise<OpResult>
+  /** group: para também os ligados */
+  projectStop(projectId: string, opts?: { group?: boolean }): Promise<OpResult>
+  /** Atualiza este projeto e os ligados: com a branch de mesmo nome no remoto da empresa, ou com a principal */
+  projectsSyncBranches(projectId: string, target: 'branch' | 'main'): Promise<OpResult>
+  dockerStatus(projectId: string): Promise<DockerStatus>
+  /** Abre o terminal do sistema dentro do container */
+  dockerShell(projectId: string, service: string): Promise<OpResult>
+  dockerRestart(projectId: string, service: string): Promise<OpResult>
+  /** Roda um comando no container; a saída vai para a aba do projeto */
+  dockerExec(projectId: string, service: string, command: string): Promise<OpResult>
+  /** Começa a mostrar o log da aplicação (aba applog:<id>) */
+  logOpen(projectId: string, override?: Partial<LogSource>): Promise<OpResult & { tab?: string }>
+  logClose(projectId: string): Promise<void>
+  /** Manda um trecho do log para o Claude explicar (só leitura); a resposta vai para a aba claude */
+  logAnalyze(projectId: string, text: string): Promise<OpResult>
+  portOwner(port: number): Promise<PortOwner | null>
+  portKill(port: number): Promise<OpResult>
+  /** Arquivos .env.* do projeto e qual está em uso */
+  envProfiles(projectId: string): Promise<{ files: string[]; active: string | null }>
+  envSwitch(projectId: string, file: string): Promise<OpResult>
+  profileRun(profileId: string): Promise<OpResult>
+  /** Sugestões para o cadastro a partir da pasta (compose, serviços, log do Laravel, comandos) */
+  projectSuggest(path: string, dockerCommand?: string): Promise<{ compose: boolean; services: string[]; logPath?: string; commands: Array<{ name: string; command: string }> }>
+  saveProfiles(profiles: WorkProfile[]): Promise<AppConfig>
   projectRestart(projectId: string): Promise<OpResult>
   projectStates(): Promise<ProjectRunState[]>
   onProjectStates(cb: (s: ProjectRunState[]) => void): () => void

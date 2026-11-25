@@ -15,7 +15,7 @@ import { git } from './git'
  */
 
 /** Partes da configuração que viajam */
-const LISTS = ['projects', 'scripts', 'replies', 'rules'] as const
+const LISTS = ['projects', 'scripts', 'replies', 'rules', 'profiles'] as const
 const SECTIONS = ['general', 'integrations', 'telegram', 'watcher', 'ai', 'claudeGlobal', 'queue', 'costs'] as const
 
 type Shared = Record<string, unknown>
@@ -31,6 +31,7 @@ export function sharedConfig(c: AppConfig): Shared {
     scripts: c.scripts,
     replies: c.replies,
     rules: c.rules,
+    profiles: c.profiles,
     general: { ...c.general, trayHintShown: false, openAtLogin: false },
     integrations: { ...c.integrations, lastApplied: {} },
     telegram: c.telegram,

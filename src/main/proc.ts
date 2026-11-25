@@ -299,3 +299,35 @@ function runCapture(
     }
   })
 }
+
+/**
+ * Roda um comando curto no shell do sistema (bash no Linux, PowerShell no Windows) e devolve a saída.
+ * Para comandos rápidos do app (docker compose ps, comando de parar, quem usa a porta…).
+ */
+export function shellCapture(
+  command: string,
+  cwd: string,
+  timeoutMs = 30_000
+): Promise<{ code: number | null; out: string; err: string }> {
+  return new Promise((resolve) => {
+    let child: ChildProcess
+    try {
+      child = spawnShell(command, cwd)
+    } catch (e) {
+      return resolve({ code: -1, out: '', err: (e as Error).message })
+    }
+    let out = ''
+    let err = ''
+    child.stdout?.on('data', (d) => (out += d))
+    child.stderr?.on('data', (d) => (err += d))
+    const timer = setTimeout(() => void killTree(child, 500), timeoutMs)
+    child.on('error', (e) => {
+      clearTimeout(timer)
+      resolve({ code: -1, out, err: err || e.message })
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      resolve({ code, out: stripAnsi(out), err: stripAnsi(err) })
+    })
+  })
+}

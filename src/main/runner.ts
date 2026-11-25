@@ -388,11 +388,12 @@ export class RunManager {
     return child
   }
 
-  async stop(runId: string): Promise<void> {
+  /** Para a execução: pede para sair e força depois de `graceMs` */
+  async stop(runId: string, graceMs?: number): Promise<void> {
     const child = this.runs.get(runId)
     if (!child) return
     this.stopped.add(runId)
-    await killTree(child)
+    await killTree(child, graceMs)
   }
 
   stopAllSync(): void {

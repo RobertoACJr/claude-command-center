@@ -1,5 +1,7 @@
 import {
   Activity,
+  Boxes,
+  ScrollText,
   AlertTriangle,
   AppWindow,
   Camera,
@@ -26,7 +28,8 @@ import {
   Trash2
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import type { Demand, DemandBusy, GitInfo, OpResult, Project, ProjectRunState, RemoteSession, Script } from '@shared/types'
+import type { Demand, DemandBusy, GitInfo, OpResult, Project, ProjectRunState, RemoteSession, Script, WorkProfile } from '@shared/types'
+import { EnvModal, LogModal, PortOwnerChip, ProfilesMenu, SyncLinkedMenu } from './ProjectTools'
 import { statusInfo } from './DemandModal'
 import { Button, EmptyState, IconButton } from './ui'
 import { ScriptRow, type ScriptActions } from './ScriptsPanel'
@@ -47,6 +50,7 @@ export function ProjectsPanel({
   onOpenTerminal,
   onError,
   scriptActions,
+  profiles,
   demands,
   demandsBusy,
   onOpenDemand,
@@ -79,8 +83,18 @@ export function ProjectsPanel({
   onOpenTerminal: (projectId: string) => void
   onError: (msg: string) => void
   scriptActions: ScriptActions
+  /** Perfis de trabalho (estrela no topo do painel) */
+  profiles: WorkProfile[]
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed)
+  const [envFor, setEnvFor] = useState<string | null>(null)
+  const [logFor, setLogFor] = useState<string | null>(null)
+  useEffect(() => {
+    const h = (e: Event) => setLogFor(String((e as CustomEvent).detail))
+    window.addEventListener('helice:open-log', h)
+    return () => window.removeEventListener('helice:open-log', h)
+  }, [])
+  const toolResult = (r: OpResult) => (r.ok ? onGitResult(r) : onError(r.message))
   const toggle = (id: string) =>
     setCollapsed((c) => {
       const n = new Set(c)
@@ -104,6 +118,7 @@ export function ProjectsPanel({
           <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-zinc-500">{projects.length}</span>
         </div>
         <div className="flex items-center gap-1">
+          <ProfilesMenu profiles={profiles} projects={projects} onResult={toolResult} />
           {projects.length > 1 && (
             <IconButton title={allCollapsed ? 'Expandir todos os projetos' : 'Recolher todos os projetos'} onClick={toggleAll} data-testid="collapse-all">
               {allCollapsed ? <ChevronsUpDown size={14} /> : <ChevronsDownUp size={14} />}
@@ -153,8 +168,13 @@ export function ProjectsPanel({
             onOpenShots={onOpenShots}
             collapsed={collapsed.has(p.id)}
             onToggleCollapse={() => toggle(p.id)}
+            onOpenEnv={() => setEnvFor(p.id)}
+            onOpenLog={() => setLogFor(p.id)}
+            onToolResult={toolResult}
           />
         ))}
+        <EnvModal p={projects.find((x) => x.id === envFor) ?? null} onClose={() => setEnvFor(null)} onResult={toolResult} />
+        <LogModal p={projects.find((x) => x.id === logFor) ?? null} onClose={() => setLogFor(null)} onResult={toolResult} />
       </div>
     </section>
   )
@@ -192,7 +212,7 @@ function useTick(active: boolean) {
 function RunChip({ p, run }: { p: Project; run: ProjectRunState | undefined }) {
   const state = run?.state ?? 'stopped'
   useTick(state === 'running')
-  if (!p.runCommand && state !== 'external') return null
+  if (!p.runCommand && state !== 'external' && run?.healthy === undefined) return null
   const port = p.port ? `:${p.port}` : ''
   const look = {
     stopped: { cls: 'border-line text-zinc-500', dot: 'bg-zinc-600', label: 'Parado' },
@@ -217,6 +237,11 @@ function RunChip({ p, run }: { p: Project; run: ProjectRunState | undefined }) {
     <span className={cn('inline-flex items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-[11px]', look.cls)}>
       <span className={cn('h-1.5 w-1.5 rounded-full', look.dot)} />
       {look.label}
+      {run?.healthy !== undefined && (
+        <span title={p.healthUrl} className={run.healthy ? 'text-purple' : 'text-red-300'}>
+          · {run.healthy ? 'respondendo' : 'sem resposta'}
+        </span>
+      )}
     </span>
   )
 }
@@ -244,10 +269,16 @@ function ProjectCard({
   onGitResult,
   onOpenShots,
   collapsed,
-  onToggleCollapse
+  onToggleCollapse,
+  onOpenEnv,
+  onOpenLog,
+  onToolResult
 }: {
   collapsed: boolean
   onToggleCollapse: () => void
+  onOpenEnv: () => void
+  onOpenLog: () => void
+  onToolResult: (r: OpResult) => void
   demands: Demand[]
   demandsBusy: DemandBusy[]
   onOpenDemand: (d: Demand) => void
@@ -298,7 +329,7 @@ function ProjectCard({
       const r = await fn()
       if (r && !r.ok) onError(`${p.name}: ${r.message}`)
       else if (kind !== 'stop') {
-        if (r && /Não deu para ligar/.test(r.message)) onError(`${p.name}: ${r.message}`)
+        if (r && /Atenção:/.test(r.message)) onError(`${p.name}: ${r.message}`)
         onOpenTerminal(p.id)
       }
     } finally {
@@ -314,25 +345,59 @@ function ProjectCard({
   }
 
   const links = (p.linkedProjectIds ?? []).map((id) => projects.find((o) => o.id === id)?.name).filter(Boolean) as string[]
-  const runButton =
-    p.runCommand &&
-    (alive ? (
-      <Button size="sm" variant="danger" disabled={!!busy && busy !== 'remote'} onClick={() => act('stop', () => window.api.projectStop(p.id))}>
-        {busy === 'stop' ? <Loader2 size={11} className="animate-spin" /> : <Square size={10} fill="currentColor" />}
-        {busy === 'stop' ? 'Parando…' : 'Parar'}
-      </Button>
+  const external = state === 'external'
+  const canStop = alive || (external && !!p.stopCommand)
+  const runButton = p.runCommand || (external && p.stopCommand) ? (
+    canStop ? (
+      <>
+        <Button
+          size="sm"
+          variant="danger"
+          disabled={!!busy && busy !== 'remote'}
+          title={p.stopCommand ? `Para o processo e roda: ${p.stopCommand}` : 'Para este projeto'}
+          onClick={() => act('stop', () => window.api.projectStop(p.id))}
+        >
+          {busy === 'stop' ? <Loader2 size={11} className="animate-spin" /> : <Square size={10} fill="currentColor" />}
+          {busy === 'stop' ? 'Parando…' : 'Parar'}
+        </Button>
+        {links.length > 0 && !collapsed && (
+          <Button
+            size="sm"
+            disabled={!!busy && busy !== 'remote'}
+            data-testid="stop-group"
+            title={`Para ${p.name} e ${links.join(', ')}`}
+            onClick={() => act('stop', () => window.api.projectStop(p.id, { group: true }))}
+          >
+            <Square size={10} fill="currentColor" /> Parar os {links.length + 1}
+          </Button>
+        )}
+      </>
     ) : (
-      <Button
-        size="sm"
-        variant="primary"
-        disabled={busy === 'start'}
-        onClick={() => act('start', () => window.api.projectStart(p.id))}
-        title={links.length ? `${p.runCommand}\nLiga junto: ${links.join(', ')}` : p.runCommand}
-      >
-        {busy === 'start' ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
-        {busy === 'start' ? 'Iniciando…' : 'Executar'}
-      </Button>
-    ))
+      <>
+        <Button
+          size="sm"
+          variant="primary"
+          disabled={busy === 'start' || !p.runCommand}
+          onClick={() => act('start', () => window.api.projectStart(p.id))}
+          title={links.length ? `Só ${p.name}: ${p.runCommand}` : p.runCommand}
+        >
+          {busy === 'start' ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+          {busy === 'start' ? 'Iniciando…' : 'Executar'}
+        </Button>
+        {links.length > 0 && !collapsed && p.runCommand && (
+          <Button
+            size="sm"
+            disabled={busy === 'start'}
+            data-testid="start-group"
+            title={`Sobe ${links.join(', ')} primeiro (esperando responder) e depois ${p.name}`}
+            onClick={() => act('start', () => window.api.projectStart(p.id, { group: true }))}
+          >
+            <Link2 size={12} /> Executar os {links.length + 1}
+          </Button>
+        )}
+      </>
+    )
+  ) : null
 
   if (collapsed) {
     return (
@@ -434,12 +499,14 @@ function ProjectCard({
         <RunChip p={p} run={run} />
         {links.length > 0 && (
           <span
-            title="Executar este projeto também executa os ligados; parar desliga os que subiram junto"
+            title="Projetos ligados: dá para subir, parar e sincronizar as branches juntos"
             className="inline-flex items-center gap-1 rounded-md border border-line px-1.5 py-0.5 text-[11px] text-zinc-400"
           >
-            <Link2 size={11} /> liga junto: {links.join(', ')}
+            <Link2 size={11} /> ligado a {links.join(', ')}
           </span>
         )}
+        {links.length > 0 && p.path && <SyncLinkedMenu p={p} names={links} onResult={onToolResult} />}
+        {state === 'external' && p.port && <PortOwnerChip port={p.port} onResult={onToolResult} />}
       </div>
 
       {/* Variáveis do projeto (clique para editar) */}
@@ -473,6 +540,16 @@ function ProjectCard({
         <Button size="sm" onClick={() => onOpenTerminal(p.id)} title="Abrir o terminal deste projeto">
           <SquareTerminal size={12} /> Terminal
         </Button>
+        {p.path && (
+          <Button size="sm" onClick={onOpenEnv} title="Containers do Docker (shell, log, reiniciar, comandos) e troca de .env" data-testid="project-env">
+            <Boxes size={12} /> Ambiente
+          </Button>
+        )}
+        {p.logSource && p.logSource.kind !== 'none' && (
+          <Button size="sm" onClick={onOpenLog} title="Log da aplicação ao vivo, com filtro e análise pelo Claude" data-testid="project-log">
+            <ScrollText size={12} /> Log
+          </Button>
+        )}
         <button
           type="button"
           role="switch"

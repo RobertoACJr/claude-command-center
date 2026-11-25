@@ -99,6 +99,7 @@ export function fakeRuns() {
     },
     async stop(id: string) {
       stopped.push(id)
+      running.delete(id)
     },
     isRunning: (id: string) => running.has(id),
     done(id: string) {
