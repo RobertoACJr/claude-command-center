@@ -63,13 +63,19 @@ export function WorkTimer() {
   useTick(!!w.active)
   if (!w.active) {
     return (
-      <IconButton title="Jornadas: tempo em cada demanda" onClick={openWorklog} data-testid="worklog-open">
-        <Clock size={15} />
-      </IconButton>
+      <button
+        type="button"
+        title="Jornadas: tempo em cada demanda"
+        onClick={openWorklog}
+        data-testid="worklog-open"
+        className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border border-line bg-card text-zinc-400 transition-colors hover:border-violet/60 hover:text-white"
+      >
+        <Clock size={16} />
+      </button>
     )
   }
   return (
-    <div className="inline-flex h-8 items-center overflow-hidden rounded-lg border border-violet/50 bg-violet/10 text-xs" data-testid="worklog-active">
+    <div className="inline-flex h-9 items-center overflow-hidden rounded-lg border border-violet/50 bg-violet/10 text-xs" data-testid="worklog-active">
       <button type="button" onClick={openWorklog} title="Ver as jornadas" className="flex h-full cursor-pointer items-center gap-1.5 px-2.5 text-purple hover:bg-violet/15">
         <Clock size={13} className="animate-pulse" />
         <span className="font-medium">{w.active.key}</span>
