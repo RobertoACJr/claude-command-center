@@ -1,6 +1,8 @@
 import { AppLogs, logTail } from './applog'
 import { jiraConfigured, jiraStatuses, jiraTransition, jiraTransitions, jiraWorklog } from './jira'
 import { WorkLog } from './worklog'
+import { registerProjectToolsIpc } from './ipc/projectTools'
+import { registerWorklogIpc } from './ipc/worklog'
 import { composeCmd, dockerStatus, execCommand as dockerExecCommand, hasComposeFile, SAFE_SERVICE, shellCommand as dockerShellCommand, suggestions as dockerSuggestions } from './docker'
 import { envProfiles, envSwitch } from './envfiles'
 import { killPortOwner, portOwner } from './ports'
@@ -881,98 +883,7 @@ function registerIpc(): void {
   // Fase 5: projetos executáveis, Remote Control por projeto
   ipcMain.handle('project:start', (_e, id: string, opts?: { group?: boolean }) => projects.start(String(id), opts?.group === true))
   ipcMain.handle('project:stop', (_e, id: string, opts?: { group?: boolean }) => projects.stop(String(id), opts?.group === true))
-  ipcMain.handle('projects:syncBranches', async (_e, id: string, target: 'branch' | 'main') => {
-    const all = store.get().projects
-    const p = all.find((x) => x.id === id)
-    if (!p) return { ok: false, message: 'Projeto não encontrado.' }
-    const t = target === 'main' ? 'main' : 'branch'
-    const lines: string[] = []
-    let ok = true
-    for (const q of [p, ...linkedProjectsOf(p, all)]) {
-      if (!q.path) continue
-      const r = await syncWithRemote(q, t)
-      if (!r.ok) ok = false
-      lines.push(`${q.name}: ${r.message}`)
-    }
-    return { ok, message: lines.join('\n') }
-  })
-  const projOf = (id: string) => store.get().projects.find((x) => x.id === id)
-  ipcMain.handle('docker:status', (_e, id: string) => {
-    const p = projOf(String(id))
-    return p ? dockerStatus(p) : { compose: false, ok: false, message: 'Projeto não encontrado.', services: [] }
-  })
-  ipcMain.handle('docker:shell', (_e, id: string, service: string) => {
-    const p = projOf(String(id))
-    if (!p || !SAFE_SERVICE.test(String(service))) return { ok: false, message: 'Serviço inválido.' }
-    return openSystemTerminal(p.path, undefined, dockerShellCommand(p, String(service)))
-  })
-  ipcMain.handle('docker:restart', async (_e, id: string, service: string) => {
-    const p = projOf(String(id))
-    if (!p || !SAFE_SERVICE.test(String(service))) return { ok: false, message: 'Serviço inválido.' }
-    const r = await shellCapture(`${composeCmd(p)} restart ${service}`, p.path, 120_000)
-    return r.code === 0 ? { ok: true, message: `${service} reiniciado.` } : { ok: false, message: (r.err || r.out).trim().split('\n').slice(-2).join(' ') }
-  })
-  ipcMain.handle('docker:exec', (_e, id: string, service: string, command: string) => {
-    const p = projOf(String(id))
-    if (!p || !SAFE_SERVICE.test(String(service)) || !String(command ?? '').trim()) return { ok: false, message: 'Serviço ou comando inválido.' }
-    runs.start({
-      kind: 'terminal',
-      tab: `project:${p.id}`,
-      title: p.name,
-      content: dockerExecCommand(p, String(service), String(command).trim()),
-      cwd: p.path,
-      projectId: p.id,
-      origin: 'projeto'
-    })
-    return { ok: true, message: 'Rodando: a saída aparece no terminal do projeto.' }
-  })
-  ipcMain.handle('log:open', (_e, id: string, override?: Partial<LogSource>) => appLogs.start(String(id), override))
-  ipcMain.handle('log:close', (_e, id: string) => appLogs.stop(String(id)))
-  ipcMain.handle('log:analyze', (_e, id: string, text: string) => {
-    const p = projOf(String(id))
-    if (!p) return { ok: false, message: 'Projeto não encontrado.' }
-    const trecho = String(text ?? '').slice(-12_000)
-    if (!trecho.trim()) return { ok: false, message: 'Nada para analisar.' }
-    runs.start({
-      kind: 'claude',
-      tab: 'claude',
-      title: `Erro no log: ${p.name}`,
-      content:
-        `Este é um trecho do log da aplicação do projeto "${p.name}". Explique em português a causa provável do erro, ` +
-        `onde olhar no código (arquivos e linhas, se aparecerem) e como corrigir. Não altere nenhum arquivo.\n\n` +
-        '```\n' + trecho + '\n```',
-      cwd: p.path,
-      projectId: p.id,
-      readOnly: true,
-      origin: 'app'
-    })
-    return { ok: true, message: 'Mandei para o Claude: a resposta aparece na aba Claude do terminal.' }
-  })
-  ipcMain.handle('port:owner', (_e, port: number) => portOwner(Number(port)))
-  ipcMain.handle('port:kill', (_e, port: number) => killPortOwner(Number(port)))
-  ipcMain.handle('env:profiles', (_e, id: string) => {
-    const p = projOf(String(id))
-    return p ? envProfiles(p) : { files: [], active: null }
-  })
-  ipcMain.handle('env:switch', (_e, id: string, file: string) => {
-    const p = projOf(String(id))
-    return p ? envSwitch(p, String(file)) : { ok: false, message: 'Projeto não encontrado.' }
-  })
-  ipcMain.handle('profiles:save', (_e, list: WorkProfile[]) => store.saveSettings({ profiles: Array.isArray(list) ? list : [] }))
-  ipcMain.handle('profiles:run', (_e, id: string) => runProfile(String(id)))
-  ipcMain.handle('project:suggest', async (_e, path: string, dockerCommand?: string) => {
-    const dir = String(path ?? '')
-    if (!dir || !existsSync(dir)) return { compose: false, services: [], commands: [] }
-    const fake = { path: dir, dockerCommand: String(dockerCommand ?? '') || 'docker compose' } as Project
-    const sug = dockerSuggestions(fake)
-    const compose = hasComposeFile(fake)
-    let services: string[] = []
-    if (compose) {
-      const r = await shellCapture(`${composeCmd(fake)} config --services`, dir, 20_000)
-      services = r.code === 0 ? r.out.split('\n').map((x) => x.trim()).filter((x) => SAFE_SERVICE.test(x)) : []
-    }
-    return { compose, services, ...sug }
-  })
+  registerProjectToolsIpc({ store, runs, projects, appLogs, runProfile })
   ipcMain.handle('project:restart', (_e, id: string) => projects.restart(id))
   ipcMain.handle('project:states', () => projects.list())
   ipcMain.handle('remote:setManual', (_e, id: string, on: boolean) => remote.setManual(id, Boolean(on)))
@@ -1115,38 +1026,7 @@ function registerIpc(): void {
     demands.createPr(String(id), { title: String(pr?.title ?? ''), body: String(pr?.body ?? ''), draft: Boolean(pr?.draft) })
   )
   ipcMain.handle('demands:timings', () => demands.timings())
-  ipcMain.handle('worklog:state', () => worklog.state())
-  ipcMain.handle('worklog:weekly', () => weeklyText())
-  ipcMain.handle('jira:sync', () => syncJira(true))
-  ipcMain.handle('worklog:start', (_e, demandId: string) => {
-    const d = demands.get(String(demandId))
-    if (!d) return worklog.state()
-    return worklog.start({ demandId: d.id, key: d.key, title: d.jira?.summary || d.title || d.key, projectId: d.projectId })
-  })
-  ipcMain.handle('worklog:stop', () => worklog.stop())
-  ipcMain.handle('worklog:delete', (_e, id: string) => worklog.remove(String(id)))
-  ipcMain.handle('worklog:edit', (_e, id: string, start: number, end: number) => worklog.edit(String(id), Number(start), Number(end)))
-  ipcMain.handle('worklog:push', async (_e, demandId: string, day: string) => {
-    const d = demands.get(String(demandId))
-    if (!d) return { ok: false, message: 'Demanda não encontrada.' }
-    const list = worklog.pending(d.id, String(day))
-    if (!list.length) return { ok: false, message: 'Nada para lançar nesse dia (ou já foi lançado).' }
-    const secs = list.reduce((t, s) => t + ((s.end ?? Date.now()) - s.start) / 1000, 0)
-    const r = await jiraWorklog(d.key, secs, Math.min(...list.map((s) => s.start)), 'Lançado pelo Hélice')
-    if (r.ok) worklog.markLogged(list.map((s) => s.id))
-    return r
-  })
-  ipcMain.handle('jira:transitions', (_e, demandId: string) => {
-    const d = demands.get(String(demandId))
-    return d ? jiraTransitions(d.key) : { ok: false, message: 'Demanda não encontrada.' }
-  })
-  ipcMain.handle('jira:transition', async (_e, demandId: string, transitionId: string) => {
-    const d = demands.get(String(demandId))
-    if (!d) return { ok: false, message: 'Demanda não encontrada.' }
-    const r = await jiraTransition(d.key, String(transitionId))
-    if (r.ok && r.status) demands.setJiraStatus(d.id, r.status)
-    return r
-  })
+  registerWorklogIpc({ worklog, demands, weeklyText, syncJira })
   ipcMain.handle('daily:text', () => dailyText())
   ipcMain.handle('sync:status', () => sync.status())
   ipcMain.handle('sync:now', async () => {
