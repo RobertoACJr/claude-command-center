@@ -10,8 +10,6 @@ import { cn } from '../lib/utils'
 export function Header({
   status,
   onToggle,
-  remoteCount,
-  remoteActive,
   watcher,
   watcherEnabled,
   onToggleWatcher,
@@ -35,8 +33,6 @@ export function Header({
   costGuard: CostGuard | null
   status: PresenceStatus
   onToggle: () => void
-  remoteCount: number
-  remoteActive: number
   watcher: WatcherState
   watcherEnabled: boolean
   onToggleWatcher: () => void
@@ -117,12 +113,6 @@ export function Header({
         >
           <Settings size={16} />
         </button>
-        <div className="hidden text-right text-xs leading-tight sm:block">
-          <div className={on ? 'text-zinc-400' : 'text-purple'}>{on ? 'Você está no PC' : 'Modo ausente'}</div>
-          <div className="text-zinc-600">
-            {remoteActive > 0 ? `Remote Control ativo em ${remoteActive}` : `${remoteCount} projeto(s) com Remote automático`}
-          </div>
-        </div>
 
         <button
           type="button"

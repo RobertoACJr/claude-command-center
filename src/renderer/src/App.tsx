@@ -644,7 +644,6 @@ export default function App() {
     setShotsProject, setDemandOpen, setCostsOpen, setDailyOpen, setHistoryOpen, setQueueOpen
   })
 
-  const remoteAuto = config.projects.filter((p) => p.remoteEnabled).length
   const runningTabs = new Set(order.filter((k) => tabs[k]?.running.length))
   const globalScripts = config.scripts.filter((s) => s.target.kind !== 'project')
 
@@ -653,8 +652,6 @@ export default function App() {
       <Header
         status={config.status}
         onToggle={togglePresence}
-        remoteCount={remoteAuto}
-        remoteActive={activeRemote.length}
         watcher={watcher}
         watcherEnabled={config.watcher.enabled}
         onToggleWatcher={async () => {

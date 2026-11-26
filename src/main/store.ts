@@ -26,7 +26,7 @@ function defaults(): AppConfig {
     general: { closeToTray: true, openAtLogin: false, trayHintShown: false, desktopNotifications: true, notifyScriptDone: true, idlePauseMin: 15 },
     projects: [],
     scripts: [],
-    ui: { consoleExpanded: false, consoleMode: 'terminal', ais: { claude: true, gemini: true, codex: true }, shortHistory: false },
+    ui: { consoleExpanded: false, consoleMode: 'terminal', ais: { claude: true, gemini: true, codex: true }, shortHistory: true, histV: 2 },
     integrations: {
       github: { enabled: false, readOnly: true },
       jira: { enabled: false, url: '', email: '' },
@@ -128,7 +128,9 @@ function normalize(raw: unknown): AppConfig {
         gemini: r.ui?.ais?.gemini !== false,
         codex: r.ui?.ais?.codex !== false
       },
-      shortHistory: bool(r.ui?.shortHistory, false)
+      // Curto passou a ser o padrão (v2): quem vinha do padrão antigo ganha o curto uma vez
+      shortHistory: r.ui?.histV === 2 ? bool(r.ui?.shortHistory, true) : true,
+      histV: 2
     },
     integrations: {
       github: { enabled: bool(gi?.enabled, false), readOnly: bool(gi?.readOnly, true) },

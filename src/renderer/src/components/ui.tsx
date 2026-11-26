@@ -193,9 +193,10 @@ export function ConfirmModal({
   )
 }
 
+/** Estado vazio: ocupa toda a altura da lista, com o texto centralizado */
 export function EmptyState({ icon, title, text }: { icon: ReactNode; title: string; text: string }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-line px-6 py-12 text-center">
+    <div className="flex h-full min-h-48 flex-col items-center justify-center rounded-xl border border-dashed border-line px-6 py-12 text-center">
       <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-violet/10 text-purple">{icon}</div>
       <div className="text-sm font-medium text-zinc-300">{title}</div>
       <div className="mt-1 max-w-xs text-xs text-zinc-500">{text}</div>

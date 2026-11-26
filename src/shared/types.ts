@@ -237,6 +237,8 @@ export interface UiState {
   ais: Record<AiId, boolean>
   /** Terminais guardam só as últimas linhas de cada aba (deste PC) */
   shortHistory: boolean
+  /** Versão do padrão do histórico curto (2 = curto por padrão) */
+  histV?: number
 }
 
 export interface GeneralPrefs {

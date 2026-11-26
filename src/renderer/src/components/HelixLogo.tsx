@@ -10,22 +10,37 @@ import { LOGO_PROMPT, LOGO_RINGS, LOGO_TILE } from './logoLayers'
 export type HelixTone = 'online' | 'away' | 'vigia'
 
 export function HelixLogo({ size = 36, tone = 'online', spin = false }: { size?: number; tone?: HelixTone; spin?: boolean }) {
-  // `turning` segue `spin` para ligar, mas só desliga no fim de uma volta completa
+  // Gira trabalhando (`spin`) ou com o mouse em cima; ao parar, termina a volta (para na mesma posição)
+  const [hover, setHover] = useState(false)
+  const want = spin || hover
   const [turning, setTurning] = useState(spin)
+  // Só do mouse: volta mais rápida. A velocidade é escolhida ao começar, para não dar tranco no meio.
+  const [fast, setFast] = useState(false)
   useEffect(() => {
-    if (spin) setTurning(true)
-  }, [spin])
+    if (want && !turning) {
+      setFast(!spin)
+      setTurning(true)
+    }
+  }, [want, turning, spin])
   const layer = 'pointer-events-none absolute inset-0 h-full w-full select-none'
   return (
-    <span role="img" aria-label="Hélice" className="relative inline-block shrink-0" style={{ width: size, height: size }}>
+    <span
+      role="img"
+      aria-label="Hélice"
+      className="relative inline-block shrink-0 transition-transform duration-300 hover:scale-105"
+      style={{ width: size, height: size }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+    >
       <img src={LOGO_TILE} alt="" draggable={false} className={layer} />
       <img
         src={LOGO_RINGS[tone]}
         alt=""
         draggable={false}
-        className={layer + (turning ? ' animate-[spin_2.4s_linear_infinite]' : '')}
+        className={layer + (turning ? (fast ? ' animate-[spin_1.2s_ease-in-out_infinite]' : ' animate-[spin_2.4s_linear_infinite]') : '')}
         onAnimationIteration={() => {
-          if (!spin) setTurning(false)
+          if (!want) setTurning(false)
+          else if (fast && spin) setFast(false)
         }}
       />
       <img src={LOGO_PROMPT} alt="" draggable={false} className={layer} />

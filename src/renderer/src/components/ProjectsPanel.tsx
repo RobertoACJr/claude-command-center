@@ -1,32 +1,4 @@
-import {
-  Activity,
-  Boxes,
-  ScrollText,
-  AlertTriangle,
-  AppWindow,
-  Camera,
-  ChevronsDownUp,
-  ChevronsUpDown,
-  Link2,
-  Braces,
-  ChevronDown,
-  ChevronRight,
-  Copy,
-  ExternalLink,
-  FolderGit2,
-  GitBranch,
-  Loader2,
-  Pencil,
-  Play,
-  Plus,
-  Radio,
-  RefreshCw,
-  RotateCcw,
-  RotateCw,
-  Square,
-  SquareTerminal,
-  Trash2
-} from 'lucide-react'
+import { Activity, Boxes, ScrollText, AlertTriangle, AppWindow, Camera, ChevronsDownUp, ChevronsUpDown, Link2, Braces, ChevronDown, ChevronRight, Copy, ExternalLink, FolderGit2, GitBranch, Loader2, Pencil, Play, Plus, Radio, RefreshCw, RotateCcw, RotateCw, Square, SquareTerminal, Trash2, Smartphone } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { Demand, DemandBusy, GitInfo, OpResult, Project, ProjectRunState, RemoteSession, Script, WorkProfile } from '@shared/types'
 import { EnvModal, LogModal, PortOwnerChip, ProfilesMenu, SyncLinkedMenu } from './ProjectTools'
@@ -116,6 +88,7 @@ export function ProjectsPanel({
           <FolderGit2 size={16} className="text-purple" />
           <h2 className="text-sm font-semibold text-zinc-100">Projetos</h2>
           <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-zinc-500">{projects.length}</span>
+          <RemoteBadge projects={projects} remote={remote} />
         </div>
         <div className="flex items-center gap-1">
           <ProfilesMenu profiles={profiles} projects={projects} onResult={toolResult} />
@@ -854,5 +827,28 @@ function RemotePanel({ session, projectPath }: { session: RemoteSession | undefi
         </div>
       )}
     </div>
+  )
+}
+
+/** Sessões de Remote Control abertas: só aparece quando tem alguma */
+function RemoteBadge({ projects, remote }: { projects: Project[]; remote: Record<string, RemoteSession | undefined> }) {
+  const active = projects.filter((p) => {
+    const st = remote[p.id]?.state
+    return st === 'active' || st === 'starting'
+  })
+  if (!active.length) return null
+  return (
+    <span
+      data-testid="remote-badge"
+      title={`Remote Control aberto (dá para usar pelo celular):\n${active.map((p) => `• ${p.name}`).join('\n')}`}
+      className="inline-flex items-center gap-1 rounded-full border border-violet/40 bg-violet/10 px-2 py-0.5 text-[11px] text-purple"
+    >
+      <span className="relative flex h-1.5 w-1.5">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-purple opacity-60" />
+        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-purple" />
+      </span>
+      <Smartphone size={11} />
+      {active.length}
+    </span>
   )
 }
