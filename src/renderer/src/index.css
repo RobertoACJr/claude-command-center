@@ -5,8 +5,9 @@
   --color-card: #131318;
   --color-card-2: #18181f;
   --color-line: #27272a;
-  --color-violet: #8b5cf6;
-  --color-purple: #a855f7;
+  /* Destaque = as cores do ícone: roxo da hélice (#865cf8) e, para textos e ícones, o meio entre ele e o lavanda (#c2b3fd) */
+  --color-violet: #865cf8;
+  --color-purple: #a487fa;
   --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, 'Ubuntu', sans-serif;
   --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Ubuntu Mono', Consolas, monospace;
 }
@@ -60,13 +61,13 @@ textarea,
 
 /* Modo Ausente: o destaque vira azul (o fio azul do ícone) em todo o app */
 [data-mode='away'] {
-  --color-violet: #2563eb;
-  --color-purple: #60a5fa;
+  --color-violet: #3f83f2;
+  --color-purple: #8fb5f7;
 }
 /* Vigia ligado (Online): o destaque vira lavanda (o fio lavanda do ícone) */
 [data-mode='vigia'] {
   --color-violet: #7c6fd6;
-  --color-purple: #c4b5fd;
+  --color-purple: #c2b3fd;
 }
 ::selection {
   background: color-mix(in srgb, var(--color-violet) 45%, transparent);
