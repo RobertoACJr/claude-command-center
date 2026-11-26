@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { join } from 'node:path'
 import { gitScope, parseClaudeAccount, parseCodexAccount, parseGeminiAccount, remoteInfo } from '../src/main/accounts'
 
 test('conta do Claude: e-mail, organização e plano, sem token', () => {
@@ -49,7 +50,7 @@ test('conta do projeto: pasta de login vira variável de ambiente', async () => 
   assert.equal(accountOf(cfg, 'p2'), null)
   assert.equal(accountOf(cfg, 'p3'), null, 'conta apagada cai na padrão')
   assert.equal(accountOf(cfg, undefined), null)
-  assert.deepEqual(accountEnv(accountOf(cfg, 'p1'), '/home/r'), { CLAUDE_CONFIG_DIR: '/home/r/.claude-pessoal' })
+  assert.deepEqual(accountEnv(accountOf(cfg, 'p1'), '/home/r'), { CLAUDE_CONFIG_DIR: join('/home/r', '.claude-pessoal') })
   assert.deepEqual(accountEnv(null), {})
   assert.equal(expandHome('/abs/dir', '/home/r'), '/abs/dir')
 })
