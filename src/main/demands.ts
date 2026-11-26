@@ -2,11 +2,12 @@ import { randomUUID } from 'crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { writeFileAtomic } from './fsutil'
 import { join } from 'path'
-import type { Demand, DemandAi, DemandBusy, DemandJira, DemandQueueCopy, DemandReview, DemandStatus, DemandTiming, OpResult, PrComment, PrDraft, Project, ReviewAi, RunEvent } from '../shared/types'
+import type { Demand, DemandAi, DemandPlan, DemandBusy, DemandJira, DemandQueueCopy, DemandReview, DemandStatus, DemandTiming, OpResult, PrComment, PrDraft, Project, ReviewAi, RunEvent, TaskTier } from '../shared/types'
 import { spawn } from 'child_process'
 import { baseBranch, bringQueueToBranch, dirSize, fetchRemoteBranch, git, gitInfo, githubRepoOf, goToDemandBranch, linkedProjectsOf, queueAhead, remotesOf, remoteUrl, removeWorktree, updateWithBase, type DemandBranchResult } from './git'
 import { readGuides } from './guides'
 import type { RunManager } from './runner'
+import { normPlan, parsePlan, planPrompt } from './plan'
 import { secrets } from './secrets'
 import { store } from './store'
 
@@ -54,6 +55,7 @@ export function normDemand(r: Partial<Demand>): Demand {
     images: Array.isArray(r.images) ? r.images.filter((x) => typeof x === 'string').slice(0, 20) : [],
     prCommentsDone: Array.isArray(r.prCommentsDone) ? r.prCommentsDone.filter((x) => typeof x === 'string').slice(-500) : [],
     timeline: Array.isArray(r.timeline) ? r.timeline.slice(-200) : [],
+    plan: normPlan(r.plan),
     createdAt: num(r.createdAt) ?? now,
     updatedAt: num(r.updatedAt) ?? now
   }
@@ -468,7 +470,7 @@ export class DemandManager {
     string,
     {
       demandId: string
-      what: 'analysis' | 'design' | 'dev' | 'review' | 'review1'
+      what: 'analysis' | 'design' | 'dev' | 'review' | 'review1' | 'plan'
       text: string[]
       /** Revisão: dados para guardar no fim (e para a segunda passada da revisão dupla) */
       review?: { base: string; commit: string; scope: string; diff: string; truncated: boolean; ai: ReviewAi }
@@ -618,6 +620,8 @@ export class DemandManager {
       d.prCommentsDone = old.prCommentsDone
       d.prUrl = old.prUrl
       d.statusLog = old.statusLog
+      // O plano por fases muda só pelos botões dele (o estado das fases vem da fila)
+      d.plan = old.plan
       if (old.status !== d.status) {
         this.note(d, `Etapa: ${d.status}`)
         d.statusLog.push({ at: Date.now(), status: d.status })
@@ -711,6 +715,43 @@ export class DemandManager {
     return { ok: true, message: what === 'analysis' ? 'Analisando a demanda…' : 'Desenhando a solução…' }
   }
 
+  /** A IA divide a demanda em fases com custo estimado (plano por fases) */
+  planPhases(id: string): OpResult {
+    const d = this.get(id)
+    if (!d) return { ok: false, message: 'Demanda não encontrada.' }
+    if (this.busy.has(id)) return { ok: false, message: 'Essa demanda já está com uma tarefa em andamento.' }
+    if (d.plan?.running) return { ok: false, message: 'Pause o plano atual antes de planejar de novo.' }
+    const p = this.projectOf(d)
+    if (!p) return { ok: false, message: 'O projeto desta demanda não existe mais.' }
+    if (!d.design.trim() && !d.analysis.trim() && !d.context.trim() && !d.jira) {
+      return { ok: false, message: 'Sem contexto: faça a análise ou o desenho antes de planejar as fases.' }
+    }
+    const runId = this.runs.start({
+      kind: 'claude',
+      tab: `demand:${d.id}`,
+      title: `${d.key} · plano por fases`,
+      content: planPrompt(demandContext(d, p, this.refs(d)), d),
+      cwd: p.path,
+      projectId: p.id,
+      origin: 'demanda',
+      readOnly: true,
+      addDirs: this.extraDirs(d)
+    })
+    this.running.set(runId, { demandId: id, what: 'plan', text: [] })
+    this.setBusy(id, { demandId: id, what: 'plan', runId })
+    return { ok: true, message: 'Dividindo a demanda em fases…' }
+  }
+
+  /** Grava o plano por fases (vem do PlanRunner) */
+  setPlan(id: string, plan: DemandPlan | null, note?: string): void {
+    const d = this.get(id)
+    if (!d) return
+    d.plan = plan
+    if (note) this.note(d, note)
+    d.updatedAt = Date.now()
+    this.persist(d)
+  }
+
   /** Conversa do Claude da demanda: a primeira mensagem leva todo o contexto e o desenho */
   implement(
     id: string,
@@ -718,7 +759,7 @@ export class DemandManager {
     fresh = false,
     origin: 'app' | 'telegram' | 'fila' = 'app',
     /** Fila na cópia separada: outra pasta e outra conversa */
-    opts: { cwd?: string; queueCopy?: boolean } = {}
+    opts: { cwd?: string; queueCopy?: boolean; tier?: TaskTier } = {}
   ): OpResult & { runId?: string } {
     const d = this.get(id)
     if (!d) return { ok: false, message: 'Demanda não encontrada.' }
@@ -743,7 +784,8 @@ export class DemandManager {
       projectId: p.id,
       origin: origin === 'app' ? 'demanda' : origin,
       resumeSessionId: session ?? undefined,
-      addDirs: this.extraDirs(d)
+      addDirs: this.extraDirs(d),
+      tier: opts.tier
     })
     this.running.set(runId, { demandId: id, what: 'dev', text: [], sessionField: field })
     this.setBusy(id, { demandId: id, what: 'dev', runId })
@@ -1181,6 +1223,15 @@ export class DemandManager {
         d.review = { at: Date.now(), ai: rv.ai, base: rv.base, commit: rv.commit, scope: rv.scope, text: extractResult(text) }
         this.note(d, `Revisão pronta (${rv.scope})`)
       }
+      this.persist(d)
+      return
+    }
+    if (r.what === 'plan') {
+      const phases = ok ? parsePlan(text) : []
+      if (phases.length) {
+        d.plan = { phases, mode: d.plan?.mode ?? 'manual', running: false, createdAt: Date.now() }
+        this.note(d, `Plano por fases pronto: ${phases.length} fase(s), ~${phases.reduce((a, p) => a + p.estPct, 0)}% da janela de 5h no total`)
+      } else this.note(d, `Plano por fases ${e.killed ? 'interrompido' : 'falhou'}: a IA não devolveu as fases (veja a aba da demanda nos terminais)`)
       this.persist(d)
       return
     }

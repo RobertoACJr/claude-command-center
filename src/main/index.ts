@@ -4,6 +4,9 @@ import { WorkLog } from './worklog'
 import { findPlainTokens, removeMcp } from './tokencheck'
 import { registerProjectToolsIpc } from './ipc/projectTools'
 import { registerWorklogIpc } from './ipc/worklog'
+import { registerLimitsIpc } from './ipc/limits'
+import { LimitsTracker, claudeTierArgs, fmtReset } from './limits'
+import { PlanRunner } from './plan'
 import { registerDemandsIpc } from './ipc/demands'
 import { composeCmd, dockerStatus, execCommand as dockerExecCommand, hasComposeFile, SAFE_SERVICE, shellCommand as dockerShellCommand, suggestions as dockerSuggestions } from './docker'
 import { envProfiles, envSwitch } from './envfiles'
@@ -97,6 +100,7 @@ const runs = new RunManager((e) => {
     }
   }
   if (e.type === 'usage') recordRunCost(e)
+  if (e.type === 'limit') limits.update([{ window: e.window, status: e.status, resetsAt: e.resetsAt, pct: e.pct }])
   history.handle(e)
   queue.handleRunEvent(e)
   demandsDoneNotice(e)
@@ -328,7 +332,37 @@ const queue = new QueueManager(app.getPath('userData'), {
     }
   },
   log: (text, kind = 'info') => appLog({ kind, text }),
-  shots: queueShots
+  shots: queueShots,
+  blockedUntil: () => limits.blockedUntil(),
+  onTaskStart: (t) => plans.taskStarted(t),
+  onTaskDone: (t) => plans.taskDone(t)
+})
+
+// ---------- Limites do Claude e plano por fases ----------
+const limits = new LimitsTracker(app.getPath('userData'), {
+  config: () => store.get().ai,
+  onChange: (s) => {
+    send('limits:update', s)
+    void queue.tick()
+  },
+  onPace: (pct, resetsAt) => {
+    const left = resetsAt ? Math.max(0, resetsAt - Date.now()) : null
+    const h = left !== null ? `${Math.floor(left / 3600_000)}h${String(Math.round((left % 3600_000) / 60_000)).padStart(2, '0')}` : ''
+    const body = `Você já usou ${Math.round(pct)}% da janela de 5h do Claude${left !== null ? ` e faltam ${h} para resetar (${fmtReset(resetsAt)})` : ''}.`
+    notify('⏳ Ritmo do Claude', body, undefined, 'sistema', 'always', true)
+  }
+})
+limits.watchStatusline(store.get().ai.statusLine)
+const plans = new PlanRunner({
+  get: (id) => demands.get(id),
+  all: () => demands.all(),
+  setPlan: (id, plan, note) => demands.setPlan(id, plan, note),
+  queue,
+  limits: () => limits.state(),
+  notify: (title, body, demandId) => notify(title, body, `demand:${demandId}`, 'demanda', 'unfocused', false),
+  askRelease: (d, ph, text) => {
+    if (telegramReady()) tg.askRelease(d, ph, text, () => plans.release(d.id))
+  }
 })
 /** Avisa no sino quando a análise/desenho/resposta do Claude de uma demanda fica pronta */
 function demandsDoneNotice(e: RunEvent): void {
@@ -432,6 +466,8 @@ runs.setClaudeArgsProvider((runId, req) => {
   // Guias do projeto (ex: docs/STYLE_GUIDE.md): o Claude lê e segue em tudo que fizer ali
   const g = guidesInstruction(cfg.projects.find((p) => p.id === req.projectId))
   if (g) args.push('--append-system-prompt', g)
+  // Modelo e esforço (Configurações → IAs); tarefas leves usam os econômicos se ligado
+  args.push(...claudeTierArgs(cfg.ai, req.tier ?? (req.readOnly ? 'light' : 'heavy')))
   return args
 })
 
@@ -496,8 +532,22 @@ const tg = new TelegramControl({
   logTail: (p) => logTail(p),
   weekly: () => weeklyText(),
   syncJira: () => syncJira(true),
-  worklog: { state: () => worklog.state(), stop: () => worklog.stop() }
+  worklog: { state: () => worklog.state(), stop: () => worklog.stop() },
+  limitsText: () => limitsText(),
+  plansWaiting: () => plans.waiting(),
+  releasePlan: (id) => plans.release(id),
+  pausePlan: (id) => plans.pause(id)
 })
+
+/** Uso do Claude em texto (Telegram) */
+function limitsText(): string {
+  const s = limits.state()
+  const w = (name: string, x: typeof s.fiveHour) =>
+    x ? `${name}: ${x.pct !== null ? Math.round(x.pct) + '%' : '?'}${x.resetsAt ? ` · reseta ${fmtReset(x.resetsAt)}` : ''}${x.status === 'bloqueado' ? ' · ESTOUROU' : ''}` : `${name}: sem dados ainda`
+  const lines = ['📊 Uso do Claude', w('Janela de 5h', s.fiveHour), w('Semana', s.sevenDay)]
+  if (s.blockedUntil) lines.push(`A fila espera até ${fmtReset(s.blockedUntil)} (teto ${s.capPct}%).`)
+  return lines.join('\n')
+}
 
 function telegramReady(): boolean {
   return !!store.get().telegram.chatId && !!secrets.get('telegram.token')
@@ -913,6 +963,11 @@ function registerIpc(): void {
       void queue.tick()
       send('costs:update', costs.guard())
     }
+    if (patch.ai) {
+      if (patch.ai.statusLine !== undefined) limits.watchStatusline(patch.ai.statusLine)
+      send('limits:update', limits.state())
+      void queue.tick()
+    }
     return out
   })
   ipcMain.handle('secrets:status', () => secrets.status())
@@ -968,6 +1023,7 @@ function registerIpc(): void {
     saveNotificationsSoon()
   })
   registerWorklogIpc({ worklog, demands, weeklyText, syncJira })
+  registerLimitsIpc({ limits, plans, demands })
   ipcMain.handle('tokens:check', () => ({ plain: findPlainTokens(store.get().projects), encrypted: secrets.status().encrypted }))
   ipcMain.handle('tokens:remove', async (_e, t: { server: string; scope: 'user' | 'local' | 'project'; projectPath?: string }) => {
     const scope = (['user', 'local', 'project'] as const).includes(t?.scope) ? t.scope : 'user'

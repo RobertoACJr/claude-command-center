@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { LOGO_PROMPT, LOGO_RINGS, LOGO_TILE } from './logoLayers'
 
 /**
- * Logo da Hélice: três anéis entrelaçados (azul, roxo, rosa) com o >_ no meio, a mesma arte do ícone.
- * Cada modo acende a sua cor: Online = os três; Ausente = o azul; Vigia = o rosa.
+ * Logo da Hélice: três anéis entrelaçados (azul, roxo, lavanda) com o >_ no meio, a mesma arte do ícone.
+ * Cada modo acende a sua cor: Online = os três; Ausente = o azul; Vigia = o lavanda.
  * Trabalhando (fila, Vigia, demanda): só os anéis giram; o fundo e o >_ ficam parados.
  * Ao parar, a volta em andamento termina: os anéis param exatamente onde começaram (sem pulo).
  */

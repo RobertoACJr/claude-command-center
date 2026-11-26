@@ -63,10 +63,10 @@ textarea,
   --color-violet: #2563eb;
   --color-purple: #60a5fa;
 }
-/* Vigia ligado (Online): o destaque vira rosa (o fio rosa do ícone) */
+/* Vigia ligado (Online): o destaque vira lavanda (o fio lavanda do ícone) */
 [data-mode='vigia'] {
-  --color-violet: #db2777;
-  --color-purple: #f472b6;
+  --color-violet: #7c6fd6;
+  --color-purple: #c4b5fd;
 }
 ::selection {
   background: color-mix(in srgb, var(--color-violet) 45%, transparent);

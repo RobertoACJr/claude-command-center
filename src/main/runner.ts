@@ -1,6 +1,7 @@
 import type { ChildProcess } from 'child_process'
 import { existsSync } from 'fs'
 import { randomUUID } from 'crypto'
+import { isLimitError, parseRateLimitEvent } from './limits'
 import type { RunEvent, RunLineKind, RunRequest } from '../shared/types'
 import { IS_WIN, LineSplitter, killTree, killTreeSync, spawnClaude, spawnCodex, spawnGemini, spawnShell } from './proc'
 
@@ -229,7 +230,12 @@ export class RunManager {
           }
           break
         }
+        case 'rate_limit_event': {
+          for (const u of parseRateLimitEvent(msg)) this.emit({ runId, type: 'limit', ...u })
+          break
+        }
         case 'result': {
+          if (isLimitError(msg)) this.emit({ runId, type: 'limit', window: null, status: 'bloqueado', resetsAt: null, pct: null })
           const secs = msg.duration_ms ? (msg.duration_ms / 1000).toFixed(1) + 's' : ''
           const cost = typeof msg.total_cost_usd === 'number' ? ` · US$ ${msg.total_cost_usd.toFixed(4)}` : ''
           const turns = msg.num_turns ? ` · ${msg.num_turns} turno(s)` : ''

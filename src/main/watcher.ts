@@ -1,4 +1,5 @@
 import { homedir } from 'os'
+import { claudeTierArgs } from './limits'
 import { createHash, randomUUID } from 'crypto'
 import { MCP_NAMES, type AppConfig, type AppLog, type DeployAlert, type WatcherState } from '../shared/types'
 import { findRule, matchProject } from '../shared/vars'
@@ -147,6 +148,8 @@ export class Watcher {
           '1'
         ]
         if (disallowed.length) args.push('--disallowedTools', disallowed.join(','))
+        // Economia automática: o Vigia é tarefa leve
+        args.push(...claudeTierArgs(cfg.ai, 'light'))
         if (cfg.watcher.model && /^[\w.-]+$/.test(cfg.watcher.model)) args.push('--model', cfg.watcher.model)
 
         const r = await runClaudeCapture(args, { cwd: homedir(), stdin: prompt, timeoutMs: CYCLE_TIMEOUT_MS })

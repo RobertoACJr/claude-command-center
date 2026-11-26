@@ -1,4 +1,5 @@
 import { homedir } from 'os'
+import { claudeTierArgs } from './limits'
 import {
   MCP_NAMES,
   type AppConfig,
@@ -240,6 +241,7 @@ export class Automation {
     const deny = cfg.integrations.gchat.mode === 'official' ? GCHAT_OFFICIAL_WRITE_TOOLS.filter((t) => t !== sendTool) : []
     const args = ['-p', '--output-format', 'json', '--tools', '', '--permission-mode', 'default', '--allowedTools', full, '--max-budget-usd', '0.3']
     if (deny.length) args.push('--disallowedTools', deny.map((t) => `mcp__${MCP_NAMES.gchat}__${t}`).join(','))
+    args.push(...claudeTierArgs(cfg.ai, 'light'))
     const prompt = [
       `Use a ferramenta ${full} UMA vez para enviar a mensagem abaixo, sem alterar nada no texto.`,
       `Espaço: ${a.spaceId}`,

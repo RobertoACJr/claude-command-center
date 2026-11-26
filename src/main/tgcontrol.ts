@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto'
 import { homedir } from 'os'
-import type { HistoryEntry, Project, RunEvent, Script, WorkLogState } from '../shared/types'
+import type { Demand, HistoryEntry, PlanPhase, Project, RunEvent, Script, WorkLogState } from '../shared/types'
 import { extractUserVariables, missingProjectKeys, projectValues } from '../shared/vars'
 import { dangerReasons } from '../shared/danger'
 import type { DemandManager } from './demands'
@@ -87,8 +87,26 @@ export class TelegramControl {
       weekly?: () => string
       /** Sincroniza o status das demandas com o Jira */
       syncJira?: () => Promise<{ ok: boolean; message: string }>
+      /** Uso do Claude (janela de 5h e semana) em texto */
+      limitsText?: () => string
+      /** Planos por fases esperando você liberar */
+      plansWaiting?: () => Array<{ demand: Demand; phase: PlanPhase }>
+      releasePlan?: (demandId: string) => { ok: boolean; message: string }
+      pausePlan?: (demandId: string) => { ok: boolean; message: string }
     }
   ) {}
+
+  /** Plano por fases no modo manual: pergunta se libera a próxima fase */
+  askRelease(d: Demand, ph: PlanPhase, text: string, release: () => { ok: boolean; message: string }): void {
+    const cfg = store.get()
+    if (!cfg.telegram.chatId || !cfg.telegram.interactive) return
+    void this.say(`⏸ <b>${escapeHtml(d.key)}</b>: liberar a próxima fase?\n${escapeHtml(text)}`, [
+      [
+        this.btn('▶ Liberar fase', async () => release().message),
+        this.btn('⏸ Pausar plano', async () => this.d.pausePlan?.(d.id).message ?? 'Indisponível.')
+      ]
+    ])
+  }
 
   // ------------------------------------------------------------ infraestrutura
 
@@ -173,6 +191,7 @@ export class TelegramControl {
     '/historico · últimas execuções',
     '/status · como está o PC',
     '/pendentes · pedidos aguardando você',
+    '/limite · uso do Claude (janela de 5h e semana) e fases esperando liberação',
     '/vigia · liga o Vigia (ou mostra o estado, com Olhar agora / Desligar); /vigia off desliga',
     '/ausente · /online'
   ].join('\n')
@@ -196,6 +215,16 @@ export class TelegramControl {
         if (!this.d.syncJira) return false
         const r = await this.d.syncJira()
         await this.say(`${r.ok ? '🔄' : '⚠️'} ${escapeHtml(r.message)}`)
+        return true
+      }
+      case 'limite':
+      case 'limites':
+      case 'fases': {
+        const lines = [this.d.limitsText?.() ?? 'Indisponível.']
+        const wait = this.d.plansWaiting?.() ?? []
+        const buttons = wait.map((w) => [this.btn(`▶ ${w.demand.key}: ${w.phase.title}`.slice(0, 60), async () => this.d.releasePlan?.(w.demand.id).message ?? 'Indisponível.')])
+        if (wait.length) lines.push('', 'Fases esperando você liberar:')
+        await this.say(escapeHtml(lines.join('\n')), buttons)
         return true
       }
       case 'jornada':

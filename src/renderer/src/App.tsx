@@ -354,7 +354,7 @@ export default function App() {
   // Histórico curto nos terminais (deste PC)
   useEffect(() => lineStore.setShort(!!config?.ui.shortHistory), [config?.ui.shortHistory])
 
-  // Tema: azul no modo Ausente; rosa com o Vigia ligado e você Online
+  // Tema: azul no modo Ausente; lavanda com o Vigia ligado e você Online
   const vigiaOn = !!config?.watcher.enabled && watcher.phase !== 'off'
   useEffect(() => {
     document.documentElement.dataset.mode = config?.status === 'off' ? 'away' : vigiaOn ? 'vigia' : 'online'

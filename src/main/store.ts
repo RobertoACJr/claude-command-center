@@ -2,6 +2,8 @@ import { app } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, copyFileSync } from 'fs'
 import { join } from 'path'
 import type {
+  ClaudeEffort,
+  ClaudeModel,
   WorkProfile,
   ClaudePerms,
   AlertStatus,
@@ -43,7 +45,18 @@ function defaults(): AppConfig {
       seen: []
     },
     alerts: [],
-    ai: { geminiCommand: 'gemini', codexCommand: 'codex' },
+    ai: {
+      geminiCommand: 'gemini',
+      codexCommand: 'codex',
+      claudeModel: '',
+      claudeEffort: '',
+      economy: false,
+      lightModel: 'sonnet',
+      lightEffort: 'low',
+      sessionCapPct: 90,
+      paceWarnPct: 80,
+      statusLine: false
+    },
     claudeGlobal: { claudeMode: 'ask', allowedTools: [] },
     replies: [
       {
@@ -72,6 +85,16 @@ export function configFilePath(): string {
 }
 
 const str = (v: unknown, d = '') => (typeof v === 'string' ? v : d)
+const MODELS: ClaudeModel[] = ['', 'opus', 'sonnet', 'haiku', 'fable']
+const EFFORTS: ClaudeEffort[] = ['', 'low', 'medium', 'high', 'xhigh', 'max']
+function oneOf<T extends string>(v: unknown, list: T[], d: T): T {
+  return list.includes(v as T) ? (v as T) : d
+}
+/** Porcentagem inteira entre min e 100 */
+function pctOr(v: unknown, d: number, min: number): number {
+  const n = Number(v)
+  return Number.isFinite(n) && v !== null && v !== '' ? Math.max(min, Math.min(100, Math.round(n))) : d
+}
 const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d)
 const num = (v: unknown, d: number, min: number, max: number) =>
   typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : d
@@ -142,7 +165,15 @@ function normalize(raw: unknown): AppConfig {
     alerts: Array.isArray(r.alerts) ? (r.alerts as DeployAlert[]).filter((a) => a && a.id).map(normAlert).slice(-200) : [],
     ai: {
       geminiCommand: str(r.ai?.geminiCommand, 'gemini').trim() || 'gemini',
-      codexCommand: str(r.ai?.codexCommand, 'codex').trim() || 'codex'
+      codexCommand: str(r.ai?.codexCommand, 'codex').trim() || 'codex',
+      claudeModel: oneOf(r.ai?.claudeModel, MODELS, ''),
+      claudeEffort: oneOf(r.ai?.claudeEffort, EFFORTS, ''),
+      economy: r.ai?.economy === true,
+      lightModel: oneOf(r.ai?.lightModel, MODELS, 'sonnet'),
+      lightEffort: oneOf(r.ai?.lightEffort, EFFORTS, 'low'),
+      sessionCapPct: pctOr(r.ai?.sessionCapPct, 90, 10),
+      paceWarnPct: pctOr(r.ai?.paceWarnPct, 80, 0),
+      statusLine: r.ai?.statusLine === true
     },
     claudeGlobal: normPerms(r.claudeGlobal),
     replies: Array.isArray(r.replies) ? (r.replies as ReplyTemplate[]).filter((x) => x && x.id).map(normReply) : d.replies,

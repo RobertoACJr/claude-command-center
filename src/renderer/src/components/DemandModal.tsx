@@ -176,7 +176,8 @@ export function DemandModal({
         design: `${AI_LABEL[d.ai]} desenhando…`,
         dev: 'Claude trabalhando…',
         branch: 'Mexendo no git…',
-        review: 'Revisando o código…'
+        review: 'Revisando o código…',
+        plan: 'Dividindo em fases…'
       }[busy.what]
     : ''
 

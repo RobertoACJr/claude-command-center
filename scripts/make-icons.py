@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Gera os ícones da Hélice a partir da arte em build/icon-source.png (1024x1024):
-três anéis entrelaçados (azul, roxo, rosa) com o >_ no meio.
+três anéis entrelaçados (azul, roxo, lavanda) com o >_ no meio.
 
 - App (.png de vários tamanhos e .ico): a arte com os cantos transparentes.
 - Bandeja e logo do app: os anéis são separados do fundo para girar sozinhos,
-  e cada modo acende a sua cor: Online = os três; Ausente = o azul; Vigia = o rosa.
+  e cada modo acende a sua cor: Online = os três; Ausente = o azul; Vigia = o lavanda.
 Precisa de Pillow e numpy. Uso: python3 scripts/make-icons.py"""
 import base64, io, os
 import numpy as np
@@ -32,6 +32,39 @@ r, g, b = src[..., 0], src[..., 1], src[..., 2]
 d = np.where(mx - mn == 0, 1, mx - mn)
 hue = np.where(mx == r, ((g - b) / d) % 6, np.where(mx == g, (b - r) / d + 2, (r - g) / d + 4)) * 60
 group = np.where((hue >= 195) & (hue < 240), 'blue', np.where((hue >= 240) & (hue < 300), 'purple', 'pink'))
+
+# Paleta: a arte original tem azul, roxo claro e rosa. Mantemos a mesma arte e só recolorimos:
+# azul fica (#3b82f6), roxo fica mais forte (#8b5cf6) e o rosa vira lavanda (#c4b5fd).
+# As máscaras acima já foram calculadas com a arte original, então nada muda de forma.
+RECOLOR = {  # grupo: (matiz nova, fator de saturação, fator de brilho)
+    'purple': (256.0, 1.42, 1.0),
+    'pink': (252.0, 0.42, 1.07),
+}
+
+
+def recolor(rgb):
+    out = rgb.copy()
+    s = np.where(mx == 0, 0, (mx - mn) / np.maximum(mx, 1))
+    v = mx / 255
+    # suaviza a transição com o fundo escuro (só pixels com cor de verdade mudam por completo)
+    w = np.clip(((mx - mn) - 20) / 40, 0, 1)[..., None]
+    for grp, (h2, sf, vf) in RECOLOR.items():
+        m = group == grp
+        if not m.any():
+            continue
+        s2, v2 = np.clip(s * sf, 0, 1), np.clip(v * vf, 0, 1)
+        hh = h2 / 60
+        i = np.floor(hh) % 6
+        f = hh - np.floor(hh)
+        p, q, t = v2 * (1 - s2), v2 * (1 - s2 * f), v2 * (1 - s2 * (1 - f))
+        table = [(v2, t, p), (q, v2, p), (p, v2, t), (p, q, v2), (t, p, v2), (v2, p, q)]
+        new = np.dstack(table[int(i)]) * 255
+        mix = new * w + rgb * (1 - w)
+        out[m] = mix[m]
+    return out
+
+
+src = recolor(src)
 
 
 def tone_rgb(tone):

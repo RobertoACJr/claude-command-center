@@ -50,7 +50,7 @@ export class AppTray {
   }
 
   /**
-   * Gira a hélice enquanto a fila ou o Vigia trabalham; acende o azul no Ausente e o rosa com o Vigia.
+   * Gira a hélice enquanto a fila ou o Vigia trabalham; acende o azul no Ausente e o lavanda com o Vigia.
    * Ao parar, termina a volta até o quadro inicial (sem pulo de volta para a posição de partida).
    */
   setActivity(busy: boolean, state: TrayTone): void {

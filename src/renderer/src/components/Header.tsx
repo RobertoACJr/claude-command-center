@@ -4,6 +4,7 @@ import type { CostGuard, NotificationTarget, PresenceStatus, WatcherState } from
 import { NotificationBell } from './NotificationBell'
 import { HelixLogo } from './HelixLogo'
 import { WorkTimer } from './Worklog'
+import { LimitsPill } from './LimitsPill'
 import { cn } from '../lib/utils'
 
 export function Header({
@@ -68,6 +69,7 @@ export function Header({
           <kbd className="hidden rounded border border-line px-1 text-[10px] whitespace-nowrap xl:inline">Ctrl K</kbd>
         </button>
         <WorkTimer />
+        <LimitsPill />
         <WatcherPill state={watcher} enabled={watcherEnabled} onClick={onToggleWatcher} />
         <button
           type="button"
@@ -178,7 +180,7 @@ function WatcherPill({ state, enabled, onClick }: { state: WatcherState; enabled
   const look = {
     off: { cls: 'border-line bg-card text-zinc-500', icon: <EyeOff size={14} />, label: 'Vigia' },
     idle: {
-      cls: 'border-pink-500/50 bg-pink-500/15 text-pink-300',
+      cls: 'border-violet-300/50 bg-violet-300/15 text-violet-200',
       icon: <Eye size={14} />,
       label: mmss ? `Vigia · ${mmss}` : 'Vigia'
     },

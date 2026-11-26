@@ -405,6 +405,86 @@ export interface AiConfig {
   geminiCommand: string
   /** Comando do Codex CLI / ChatGPT (ex: codex) */
   codexCommand: string
+  /** Modelo do Claude nas tarefas normais ('' = o padrão do Claude Code) */
+  claudeModel: ClaudeModel
+  /** Esforço do Claude nas tarefas normais ('' = o padrão) */
+  claudeEffort: ClaudeEffort
+  /** Economia automática: tarefas leves (análise, revisão, fases leves) usam o modelo/esforço abaixo */
+  economy: boolean
+  lightModel: ClaudeModel
+  lightEffort: ClaudeEffort
+  /** Até quantos % da janela de 5h a fila e as fases podem usar (100 = até o limite) */
+  sessionCapPct: number
+  /** Avisar quando a janela de 5h passar desta porcentagem (0 = nunca) */
+  paceWarnPct: number
+  /** Linha de status do Claude ligada pelo Hélice (lê os limites também das sessões interativas) */
+  statusLine: boolean
+}
+
+export type ClaudeModel = '' | 'opus' | 'sonnet' | 'haiku' | 'fable'
+export type ClaudeEffort = '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+/** Peso da tarefa: leve pode usar o modelo/esforço econômico */
+export type TaskTier = 'light' | 'heavy'
+
+/** Uma janela de uso do Claude (5h ou semana) */
+export interface LimitWindow {
+  /** Quanto já usou, 0–100 (null = o Claude não informou) */
+  pct: number | null
+  /** Quando a janela reseta (ms) */
+  resetsAt: number | null
+  /** ok | aviso (perto do limite) | bloqueado (estourou) */
+  status: 'ok' | 'aviso' | 'bloqueado'
+  updatedAt: number
+}
+
+export interface LimitsState {
+  fiveHour: LimitWindow | null
+  sevenDay: LimitWindow | null
+  /** Até quando a fila e as fases esperam (limite estourado ou acima do teto); null = livre */
+  blockedUntil: number | null
+  /** Teto da janela de 5h configurado */
+  capPct: number
+  /** Linha de status ligada */
+  statusLine: boolean
+}
+
+export type PlanPhaseStatus = 'pendente' | 'agendada' | 'aguardando' | 'rodando' | 'feita' | 'falhou'
+
+/** Uma fase do plano de execução de uma demanda */
+export interface PlanPhase {
+  id: string
+  title: string
+  /** O que o Claude deve fazer nesta fase */
+  prompt: string
+  tier: TaskTier
+  /** Custo estimado em % da janela de 5h */
+  estPct: number
+  status: PlanPhaseStatus
+  /** Quando deve começar (agenda) */
+  scheduledAt?: number
+  queueTaskId?: string
+  summary?: string
+  error?: string
+}
+
+/** Plano por fases: a demanda é executada aos poucos, respeitando o limite do Claude */
+export interface DemandPlan {
+  phases: PlanPhase[]
+  /** auto = a próxima fase entra sozinha; manual = espera você liberar */
+  mode: 'auto' | 'manual'
+  /** Plano em execução */
+  running: boolean
+  createdAt: number
+}
+
+/** Quando cada fase deve começar (simulação das janelas de 5h) */
+export interface PlanSlot {
+  id: string
+  at: number
+  /** 0 = janela atual, 1 = depois do próximo reset… */
+  window: number
+  /** % da janela usada depois desta fase */
+  usedAfter: number
 }
 
 export interface AppConfig {
@@ -566,6 +646,8 @@ export interface RunRequest {
   readOnly?: boolean
   /** Pastas extras que o Claude pode ler (ex: projeto da API) */
   addDirs?: string[]
+  /** Peso da tarefa (economia automática). Padrão: leve se readOnly, senão normal */
+  tier?: TaskTier
 }
 
 /** Estado do git de um projeto (card) */
@@ -645,6 +727,8 @@ export interface Demand {
   /** Comentários do PR já mandados para o Claude */
   prCommentsDone: string[]
   timeline: Array<{ at: number; text: string }>
+  /** Plano por fases (execução compassada) */
+  plan?: DemandPlan | null
   createdAt: number
   updatedAt: number
 }
@@ -652,7 +736,7 @@ export interface Demand {
 /** O que a IA está fazendo agora numa demanda */
 export interface DemandBusy {
   demandId: string
-  what: 'jira' | 'analysis' | 'design' | 'dev' | 'branch' | 'review'
+  what: 'jira' | 'analysis' | 'design' | 'dev' | 'branch' | 'review' | 'plan'
   runId?: string
 }
 
@@ -742,6 +826,11 @@ export interface QueueTask {
   shotsFailed?: boolean
   /** Aviso da preparação (ex: dependências da cópia diferentes do projeto) */
   warning?: string
+  /** Não começa antes disso (agenda das fases ou espera do reset do limite) */
+  notBefore?: number
+  /** Fase do plano da demanda (roda na hora agendada, mesmo com você Online) */
+  planPhaseId?: string
+  tier?: TaskTier
 }
 
 /** Situação da cópia da fila de uma demanda */
@@ -843,6 +932,15 @@ export type RunEvent =
   | { runId: string; tab: TabKey; type: 'lines'; lines: Array<{ kind: RunLineKind; text: string }> }
   | { runId: string; tab: TabKey; type: 'session'; sessionId: string }
   | { runId: string; tab: TabKey; type: 'usage'; costUsd: number | null; tokens: number | null }
+  | {
+      runId: string
+      tab: TabKey
+      type: 'limit'
+      window: 'five_hour' | 'seven_day' | null
+      status: LimitWindow['status']
+      resetsAt: number | null
+      pct: number | null
+    }
   | { runId: string; tab: TabKey; type: 'exit'; code: number | null; signal: string | null; killed: boolean }
   | { runId: string; tab: TabKey; type: 'error'; message: string }
 
@@ -975,6 +1073,17 @@ export interface CommandCenterApi {
   demandTimings(): Promise<DemandTiming[]>
   /** Jornadas: tempo em cada demanda */
   worklogState(): Promise<WorkLogState>
+  limitsState(): Promise<LimitsState>
+  onLimits(cb: (s: LimitsState) => void): () => void
+  /** Liga/desliga a linha de status do Claude (mexe só na chave statusLine do ~/.claude/settings.json) */
+  statuslineSet(on: boolean): Promise<OpResult>
+  statuslineInstalled(): Promise<boolean>
+  planGenerate(demandId: string): Promise<OpResult>
+  planEdit(demandId: string, plan: DemandPlan | null): Promise<OpResult>
+  planStart(demandId: string): Promise<OpResult>
+  planPause(demandId: string): Promise<OpResult>
+  planRelease(demandId: string): Promise<OpResult>
+  planPreview(demandId: string): Promise<PlanSlot[]>
   /** Relatório da semana em texto (horas por demanda, estimado x registrado) */
   worklogWeekly(): Promise<string>
   /** Confere o status das demandas abertas no Jira e finaliza as concluídas lá */

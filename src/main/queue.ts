@@ -2,7 +2,8 @@ import { randomUUID } from 'crypto'
 import { existsSync, readFileSync, writeFileSync } from 'fs'
 import { writeFileAtomic } from './fsutil'
 import { join } from 'path'
-import type { OpResult, QueueState, QueueTask, RunEvent, ShotSet } from '../shared/types'
+import type { OpResult, QueueState, QueueTask, RunEvent, ShotSet, TaskTier } from '../shared/types'
+import { fmtReset } from './limits'
 import { shotSummary } from './shots'
 import { costs } from './costs'
 import type { DemandManager } from './demands'
@@ -38,6 +39,10 @@ export class QueueManager {
   /** "Rodar agora": ignora o "só quando Ausente" até a fila esvaziar */
   private force = false
   private ticking = false
+  /** Próxima checagem agendada (reset do limite ou horário de uma fase) */
+  private wake: ReturnType<typeof setTimeout> | null = null
+  /** Execuções que bateram no limite do Claude */
+  private limited = new Set<string>()
   /** runId → linhas de texto do Claude */
   private text = new Map<string, string[]>()
   /** runId → saída do comando de verificação */
@@ -54,6 +59,11 @@ export class QueueManager {
       log: (text: string, kind?: 'info' | 'error' | 'success') => void
       /** Front/back: prints e checagem da API antes/depois (só na pasta do projeto, não na cópia) */
       shots?: (t: QueueTask, label: 'antes' | 'depois') => Promise<ShotSet[] | null>
+      /** Limite do Claude: até quando esperar (null = livre) */
+      blockedUntil?: () => number | null
+      /** Avisos para o plano por fases */
+      onTaskStart?: (t: QueueTask) => void
+      onTaskDone?: (t: QueueTask) => void
     }
   ) {
     this.file = join(base, 'queue.json')
@@ -82,25 +92,37 @@ export class QueueManager {
     this.d.onChange(this.state())
   }
 
-  add(input: { projectId: string; demandId?: string; prompt: string; origin?: 'app' | 'telegram' }): OpResult {
+  add(input: {
+    projectId: string
+    demandId?: string
+    prompt: string
+    origin?: 'app' | 'telegram'
+    tier?: TaskTier
+    notBefore?: number
+    planPhaseId?: string
+  }): OpResult & { taskId?: string } {
     const cfg = store.get()
     if (!cfg.projects.some((p) => p.id === input.projectId)) return { ok: false, message: 'Projeto não encontrado.' }
     if (input.demandId && !this.d.demands.get(input.demandId)) return { ok: false, message: 'Demanda não encontrada.' }
     const prompt = input.prompt.trim()
     if (!prompt) return { ok: false, message: 'Escreva o que o Claude deve fazer.' }
+    const id = randomUUID()
     this.tasks.push({
-      id: randomUUID(),
+      id,
       projectId: input.projectId,
       demandId: input.demandId,
       prompt,
       status: 'pendente',
       createdAt: Date.now(),
-      origin: input.origin ?? 'app'
+      origin: input.origin ?? 'app',
+      tier: input.tier,
+      notBefore: input.notBefore,
+      planPhaseId: input.planPhaseId
     })
     this.persist()
     void this.tick()
     const pos = this.tasks.filter((t) => t.status === 'pendente').length
-    return { ok: true, message: `Na fila (posição ${pos}).${this.waiting ? ' ' + this.waiting : ''}` }
+    return { ok: true, message: `Na fila (posição ${pos}).${this.waiting ? ' ' + this.waiting : ''}`, taskId: id }
   }
 
   cancel(id: string): void {
@@ -110,6 +132,7 @@ export class QueueManager {
       t.status = 'cancelada'
       t.endedAt = Date.now()
       this.persist()
+      this.d.onTaskDone?.(t)
     } else if (t.status === 'rodando' && t.runId) void this.d.runs.stop(t.runId)
   }
 
@@ -124,7 +147,7 @@ export class QueueManager {
     const t = this.tasks.find((x) => x.id === id)
     if (!t || t.status === 'rodando' || t.status === 'pendente') return
     this.tasks = this.tasks.filter((x) => x.id !== id)
-    this.tasks.push({ ...t, status: 'pendente', error: undefined, summary: undefined, runId: undefined, startedAt: undefined, endedAt: undefined, reported: false, costUsd: undefined })
+    this.tasks.push({ ...t, status: 'pendente', error: undefined, summary: undefined, runId: undefined, startedAt: undefined, endedAt: undefined, reported: false, costUsd: undefined, notBefore: undefined })
     this.persist()
     void this.tick()
   }
@@ -174,20 +197,46 @@ export class QueueManager {
     this.ticking = true
     try {
       if (this.tasks.some((t) => t.status === 'rodando')) return this.setWaiting(null)
-      const next = this.tasks.find((t) => t.status === 'pendente')
-      if (!next) {
+      const pending = this.tasks.filter((t) => t.status === 'pendente')
+      if (!pending.length) {
         this.force = false
         return this.setWaiting(null)
       }
+      const now = Date.now()
       const cfg = store.get()
       if (cfg.queue.paused) return this.setWaiting('Fila pausada.')
-      if (cfg.queue.onlyAway && cfg.status !== 'off' && !this.force) return this.setWaiting('Esperando você ir para Ausente (ou clique em "Rodar agora").')
+      const pick = pickNext(pending, now, cfg.queue.onlyAway && cfg.status !== 'off' && !this.force)
+      if (!pick.task) {
+        if (pick.wakeAt) this.wakeAt(pick.wakeAt)
+        return this.setWaiting(
+          pick.wakeAt && !pick.awayBlocked
+            ? `Próxima tarefa agendada para ${fmtReset(pick.wakeAt, now)}.`
+            : 'Esperando você ir para Ausente (ou clique em "Rodar agora").'
+        )
+      }
       if (!costs.allowsAutomation()) return this.setWaiting('Pausada: limite diário de gastos atingido.')
+      // Limite do Claude estourado (ou acima do teto): espera o reset em vez de falhar
+      const until = this.d.blockedUntil?.() ?? null
+      if (until && until > now) {
+        this.wakeAt(until + 60_000)
+        return this.setWaiting(`Esperando o limite do Claude resetar (${fmtReset(until, now)}).`)
+      }
       this.setWaiting(null)
-      await this.start(next)
+      await this.start(pick.task)
     } finally {
       this.ticking = false
     }
+  }
+
+  /** Checa a fila de novo num horário (só guarda o mais próximo) */
+  private wakeAt(at: number): void {
+    if (this.wake) clearTimeout(this.wake)
+    // setTimeout aceita até ~24 dias; acorda pelo menos a cada 6h para reavaliar
+    const ms = Math.max(5_000, Math.min(at - Date.now(), 6 * 3600_000))
+    this.wake = setTimeout(() => {
+      this.wake = null
+      void this.tick()
+    }, ms)
   }
 
   private fail(t: QueueTask, error: string): void {
@@ -196,6 +245,7 @@ export class QueueManager {
     t.endedAt = Date.now()
     this.d.log(`[Fila] não começou: ${error}`, 'error')
     this.persist()
+    this.d.onTaskDone?.(t)
     setTimeout(() => void this.tick(), 50)
   }
 
@@ -214,7 +264,7 @@ export class QueueManager {
       const w = await ensureWorktree(p, dm.key, cwd)
       if (!w.ok) return this.fail(t, w.message)
       t.warning = w.warn
-      const r = this.d.demands.implement(dm.id, t.prompt + QUEUE_COPY_NOTE + QUEUE_SUFFIX, false, 'fila', { cwd, queueCopy: true })
+      const r = this.d.demands.implement(dm.id, t.prompt + QUEUE_COPY_NOTE + QUEUE_SUFFIX, false, 'fila', { cwd, queueCopy: true, tier: t.tier })
       if (!r.ok || !r.runId) return this.fail(t, r.message)
       runId = r.runId
     } else if (t.demandId) {
@@ -232,7 +282,7 @@ export class QueueManager {
         }
       }
       await this.d.shots?.(t, 'antes').catch(() => null)
-      const r = this.d.demands.implement(dm.id, t.prompt + QUEUE_SUFFIX, false, 'fila')
+      const r = this.d.demands.implement(dm.id, t.prompt + QUEUE_SUFFIX, false, 'fila', { tier: t.tier })
       if (!r.ok || !r.runId) return this.fail(t, r.message)
       runId = r.runId
     } else {
@@ -244,7 +294,8 @@ export class QueueManager {
         content: t.prompt + QUEUE_SUFFIX,
         cwd: p.path,
         projectId: p.id,
-        origin: 'fila'
+        origin: 'fila',
+        tier: t.tier
       })
     }
     t.status = 'rodando'
@@ -255,6 +306,7 @@ export class QueueManager {
     this.text.set(runId, [])
     this.d.log(`[Fila] começou: ${t.prompt.slice(0, 80)}`, 'info')
     this.persist()
+    this.d.onTaskStart?.(t)
   }
 
   handleRunEvent(e: RunEvent): void {
@@ -276,10 +328,24 @@ export class QueueManager {
       if (e.costUsd !== null) t.costUsd = (t.costUsd ?? 0) + e.costUsd
       return
     }
+    if (e.type === 'limit') {
+      if (e.status === 'bloqueado') this.limited.add(e.runId)
+      return
+    }
     if (e.type !== 'exit') return
     if (t.phase === 'verificando') return void this.finishCheck(t, e)
     t.summary = tail(this.text.get(e.runId) ?? []) || undefined
     this.text.delete(e.runId)
+    // Bateu no limite do Claude: volta para a fila e espera o reset (não conta como falha)
+    if (this.limited.delete(e.runId) && !e.killed) {
+      const until = this.d.blockedUntil?.() ?? Date.now() + 30 * 60_000
+      Object.assign(t, { status: 'pendente', runId: undefined, startedAt: undefined, phase: undefined, notBefore: until + 60_000 })
+      this.d.log(`[Fila] limite do Claude atingido; a tarefa volta às ${fmtReset(until)}: ${t.prompt.slice(0, 60)}`, 'info')
+      this.persist()
+      this.d.onTaskDone?.(t)
+      setTimeout(() => void this.tick(), 300)
+      return
+    }
     if (!e.killed && e.code === 0) {
       void this.afterWork(t)
       return
@@ -347,6 +413,7 @@ export class QueueManager {
     t.phase = undefined
     this.d.log(`[Fila] ${t.status}: ${t.prompt.slice(0, 80)}`, t.status === 'feita' ? 'success' : 'error')
     this.persist()
+    this.d.onTaskDone?.(t)
     const more = this.tasks.some((x) => x.status === 'pendente')
     if (!more && store.get().status === 'off') {
       const done = this.takeUnreported()
@@ -354,6 +421,31 @@ export class QueueManager {
     }
     setTimeout(() => void this.tick(), 300)
   }
+}
+
+/**
+ * Qual tarefa pendente pode começar agora. As fases do plano rodam na hora agendada mesmo com você
+ * Online (você mandou executar); as outras respeitam o "só quando Ausente".
+ */
+export function pickNext(
+  pending: QueueTask[],
+  now: number,
+  awayBlocked: boolean
+): { task: QueueTask | null; wakeAt: number | null; awayBlocked: boolean } {
+  let wakeAt: number | null = null
+  let blockedByAway = false
+  for (const t of pending) {
+    if (t.notBefore && t.notBefore > now) {
+      wakeAt = wakeAt === null ? t.notBefore : Math.min(wakeAt, t.notBefore)
+      continue
+    }
+    if (awayBlocked && !t.planPhaseId) {
+      blockedByAway = true
+      continue
+    }
+    return { task: t, wakeAt: null, awayBlocked: false }
+  }
+  return { task: null, wakeAt, awayBlocked: blockedByAway }
 }
 
 /** Texto do resumo (Telegram e sino) */

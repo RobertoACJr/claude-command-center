@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { fmtReset } from './LimitsPill'
 import { ArrowDown, ArrowUp, CheckCircle2, CircleSlash, ListTodo, Loader2, Pause, Play, RotateCcw, Trash2, XCircle } from 'lucide-react'
 import type { AppConfig, Demand, QueueState, QueueTask } from '@shared/types'
 import { cn } from '../lib/utils'
@@ -187,6 +188,8 @@ export function QueueModal({
                     {t.endedAt ? ` · terminou ${fmt(t.endedAt)}` : ''}
                     {t.costUsd ? ` · US$ ${t.costUsd.toFixed(2)}` : ''}
                     {t.origin === 'telegram' ? ' · via Telegram' : ''}
+                    {t.status === 'pendente' && t.notBefore && t.notBefore > Date.now() ? ` · começa ${fmtReset(t.notBefore)}` : ''}
+                    {t.planPhaseId ? ' · fase do plano' : ''}
                   </div>
                 </button>
                 {t.status === 'pendente' && (

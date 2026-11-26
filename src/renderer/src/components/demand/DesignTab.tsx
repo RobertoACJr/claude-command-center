@@ -38,6 +38,7 @@ import { ReviewTab } from './ReviewTab'
 export { DEMAND_STATUS, newDemand, statusInfo }
 
 import type { DemandTabProps } from './tabProps'
+import { PlanBox } from './PlanBox'
 
 /** Aba Desenho: a solução que a IA propõe antes de implementar */
 export function DesignTab(props: DemandTabProps) {
@@ -97,6 +98,7 @@ export function DesignTab(props: DemandTabProps) {
               </p>
             )
           )}
+          {(d.design.trim() || d.plan) && !isNew && <PlanBox d={d} working={working} act={act} />}
           {d.designApproved && (
             <div className="flex justify-end">
               <Button variant="primary" size="sm" onClick={() => setTab('dev')}>

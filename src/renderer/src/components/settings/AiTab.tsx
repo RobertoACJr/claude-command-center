@@ -25,6 +25,7 @@ import { isProdEnv } from '@shared/vars'
 import { ClaudePermsEditor } from '../ClaudePermsEditor'
 import { Copy, SetupTab, TOOLS, type Os } from '../SetupTab'
 import { useAis } from '../../lib/ais'
+import { ClaudeUsage } from './ClaudeUsage'
 import { HelpTip, Section, SecretInput, Result, useBusy, Spin, CHECK_STYLE, fmtWhen, CheckList, CheckBadge, Switch, IconBtn, type SaveFn } from './shared'
 
 export const AI_ROWS: Array<{ id: AiId; name: string; what: string }> = [
@@ -152,6 +153,7 @@ export function AiTab({ config, save }: { config: AppConfig; save: SaveFn }) {
         </Field>
         <p className="text-[11px] text-zinc-600">Cada projeto tem as próprias permissões no cadastro dele.</p>
       </Section>
+      <ClaudeUsage config={config} save={save} />
       <Section icon={<Gem size={15} />} title="Gemini CLI">
         <p className="text-xs leading-relaxed text-zinc-500">
           Use para triagem (Modo Vigia), análises e scripts do tipo "Ordem para o Gemini". Sem terminal, o Gemini não
