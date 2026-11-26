@@ -1,7 +1,7 @@
 // Pílula do topo: quanto da janela de 5h (e da semana) do Claude já foi usado e quando reseta
 import { useEffect, useRef, useState } from 'react'
 import { Gauge } from 'lucide-react'
-import type { LimitWindow, LimitsState } from '@shared/types'
+import type { AccountInfo, LimitWindow, LimitsState } from '@shared/types'
 import { cn } from '../lib/utils'
 
 /** "16:40", "amanhã 09:10" ou "qui 09:10" */
@@ -42,7 +42,11 @@ const pctText = (w: LimitWindow | null) => (w?.pct !== null && w?.pct !== undefi
 export function LimitsPill() {
   const s = useLimits()
   const [open, setOpen] = useState(false)
+  const [account, setAccount] = useState<AccountInfo | null>(null)
   const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (open) void window.api.accounts().then((l) => setAccount(l.find((a) => a.service === 'claude') ?? null))
+  }, [open])
   useEffect(() => {
     if (!open) return
     const close = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false)
@@ -84,7 +88,10 @@ export function LimitsPill() {
       </button>
       {open && (
         <div className="absolute top-11 right-0 z-50 w-80 rounded-xl border border-line bg-card-2 p-3 text-xs text-zinc-300 shadow-xl">
-          <div className="mb-2 text-sm font-semibold text-zinc-100">Uso do Claude</div>
+          <div className="text-sm font-semibold text-zinc-100">Uso do Claude</div>
+          <div className="mb-2 truncate text-[11px] text-zinc-500" data-testid="limits-account">
+            {account ? (account.who ? `Conta: ${account.who}${account.plan ? ' · ' + account.plan : ''}${account.org ? ' · ' + account.org : ''}` : 'Nenhuma conta logada no Claude') : '…'}
+          </div>
           <Row label="Janela de 5h" w={five} now={now} />
           <Row label="Semana" w={week} now={now} />
           <div className="mt-2 border-t border-line pt-2 text-[11px] text-zinc-500">

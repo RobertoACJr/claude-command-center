@@ -542,7 +542,7 @@ function ProjectCard({
           <SquareTerminal size={12} /> Terminal
         </Button>
         {p.path && (
-          <Button size="sm" onClick={onOpenEnv} title="Containers do Docker (shell, log, reiniciar, comandos) e troca de .env" data-testid="project-env">
+          <Button size="sm" onClick={onOpenEnv} title="Contas do projeto (git e Claude), containers do Docker (shell, log, reiniciar, comandos) e troca de .env" data-testid="project-env">
             <Boxes size={12} /> Ambiente
           </Button>
         )}

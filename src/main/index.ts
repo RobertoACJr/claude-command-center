@@ -1023,7 +1023,7 @@ function registerIpc(): void {
     saveNotificationsSoon()
   })
   registerWorklogIpc({ worklog, demands, weeklyText, syncJira })
-  registerLimitsIpc({ limits, plans, demands })
+  registerLimitsIpc({ limits, plans, demands, projects: () => store.get().projects })
   ipcMain.handle('tokens:check', () => ({ plain: findPlainTokens(store.get().projects), encrypted: secrets.status().encrypted }))
   ipcMain.handle('tokens:remove', async (_e, t: { server: string; scope: 'user' | 'local' | 'project'; projectPath?: string }) => {
     const scope = (['user', 'local', 'project'] as const).includes(t?.scope) ? t.scope : 'user'

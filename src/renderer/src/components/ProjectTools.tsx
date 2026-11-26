@@ -23,6 +23,7 @@ import { Button, IconButton, Modal, Toggle, inputCls } from './ui'
 import { lineStore, useLines } from '../lib/lineStore'
 import { dangerQuestion, isDangerous } from '@shared/danger'
 import { cn, uid } from '../lib/utils'
+import { ProjectAccounts } from './ProjectAccounts'
 
 // ---------------------------------------------------------------- Menu simples (abre ao clicar)
 
@@ -193,6 +194,7 @@ export function EnvModal({ p, onClose, onResult }: { p: Project | null; onClose:
   return (
     <Modal open={!!p} onClose={onClose} width="max-w-3xl" title={`Ambiente · ${p.name}`} icon={<Boxes size={16} />}>
       <div className="space-y-4" data-testid="env-modal">
+        <ProjectAccounts p={p} />
         {/* Docker */}
         <div>
           <div className="mb-1.5 flex items-center justify-between">

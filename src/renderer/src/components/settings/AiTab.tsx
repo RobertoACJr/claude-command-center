@@ -2,6 +2,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { AppWindow, ArrowLeftRight, CheckCircle2, CircleHelp, Clock, Bell, Bot, Eye, Gem, Github, KeyRound, Loader2, MessageSquare, MessageSquareReply, Pencil, Plug, Plus, RefreshCw, Rocket, Search, Send, Settings, ShieldCheck, SquareKanban, Trash2, Workflow, X, XCircle, Zap } from 'lucide-react'
 import type {
+  AccountInfo,
   AiId,
   AiProvider,
   ToolCheck,
@@ -34,19 +35,42 @@ export const AI_ROWS: Array<{ id: AiId; name: string; what: string }> = [
   { id: 'codex', name: 'ChatGPT (Codex)', what: 'Análise, desenho e revisão de demandas, console só leitura' }
 ]
 
+/** "Conta: voce@email.com · Max · Empresa X" (só leitura, nunca mostra token) */
+export function AccountLine({ a, compact }: { a?: AccountInfo; compact?: boolean }) {
+  if (!a) return null
+  const extra = [a.plan, a.org].filter(Boolean).join(' · ')
+  return (
+    <div className={cn('text-[11px]', !compact && 'mt-0.5')} data-testid={`account-${a.service}`} title={`Lido de ${a.source}`}>
+      {a.who ? (
+        <span className="text-zinc-300">
+          Conta: <span className="selectable font-medium text-zinc-100">{a.who}</span>
+          {a.name && a.name !== a.who && <span className="text-zinc-500"> ({a.name})</span>}
+          {extra && <span className="text-zinc-400"> · {extra}</span>}
+        </span>
+      ) : (
+        <span className="text-zinc-500">Conta: nenhuma logada</span>
+      )}
+      {a.note && <div className="text-zinc-500">{a.note}</div>}
+    </div>
+  )
+}
+
 /**
  * Escolha simples: liga/desliga cada IA neste PC e mostra se ela está instalada e logada.
  * Desligada, a IA some dos seletores (console, scripts, demandas, revisão, Vigia).
  */
 export function AiPicker({ config }: { config: AppConfig }) {
   const [checks, setChecks] = useState<ToolCheck[] | null>(null)
+  const [accounts, setAccounts] = useState<AccountInfo[]>([])
   const [checking, setChecking] = useState(false)
   const [os, setOs] = useState<Os>('linux')
   const [home, setHome] = useState('')
   const check = async () => {
     setChecking(true)
     try {
-      setChecks(await window.api.checkTools())
+      const [c, a] = await Promise.all([window.api.checkTools(), window.api.accounts()])
+      setChecks(c)
+      setAccounts(a)
     } finally {
       setChecking(false)
     }
@@ -102,6 +126,7 @@ export function AiPicker({ config }: { config: AppConfig }) {
                     <span className="text-zinc-400">Não encontrado neste PC.</span>
                   )}
                 </div>
+                {checks && c?.installed && <AccountLine a={accounts.find((x) => x.service === r.id)} />}
                 {checks && !c?.installed && install && (
                   <div className="mt-1.5 flex items-center gap-1 rounded-md border border-line bg-bg px-2 py-1 font-mono text-[11px] text-zinc-300">
                     <span className="selectable min-w-0 flex-1 truncate">{install}</span>

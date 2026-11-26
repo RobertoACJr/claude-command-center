@@ -426,6 +426,34 @@ export type ClaudeEffort = '' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 /** Peso da tarefa: leve pode usar o modelo/esforço econômico */
 export type TaskTier = 'light' | 'heavy'
 
+/** Conta logada numa ferramenta (nunca traz token) */
+export interface AccountInfo {
+  service: 'claude' | 'codex' | 'gemini'
+  /** E-mail (ou "Chave de API"); null = sem login */
+  who: string | null
+  name?: string
+  org?: string
+  plan?: string
+  note?: string
+  /** Arquivo de onde veio */
+  source: string
+}
+
+/** Contas que um projeto usa */
+export interface ProjectAccounts {
+  git: {
+    name: string | null
+    email: string | null
+    /** De onde vem o e-mail: só deste projeto, global (do seu usuário) ou do sistema */
+    scope: 'projeto' | 'global' | 'sistema' | null
+    /** host/dono/repo do origin */
+    remote: string | null
+    ssh: boolean
+  }
+  /** Conta do Claude usada nas execuções deste projeto */
+  claude: AccountInfo
+}
+
 /** Uma janela de uso do Claude (5h ou semana) */
 export interface LimitWindow {
   /** Quanto já usou, 0–100 (null = o Claude não informou) */
@@ -1074,6 +1102,9 @@ export interface CommandCenterApi {
   /** Jornadas: tempo em cada demanda */
   worklogState(): Promise<WorkLogState>
   limitsState(): Promise<LimitsState>
+  /** Contas logadas nas IAs deste PC */
+  accounts(): Promise<AccountInfo[]>
+  projectAccounts(projectId: string): Promise<ProjectAccounts | null>
   onLimits(cb: (s: LimitsState) => void): () => void
   /** Liga/desliga a linha de status do Claude (mexe só na chave statusLine do ~/.claude/settings.json) */
   statuslineSet(on: boolean): Promise<OpResult>
