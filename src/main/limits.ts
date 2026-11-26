@@ -147,12 +147,19 @@ const fresh = (w: LimitWindow | null, now: number): LimitWindow | null => {
   return w
 }
 
-/** Guarda o estado dos limites, avisa o ritmo e diz até quando a fila deve esperar */
+interface AccLimits {
+  five: LimitWindow | null
+  week: LimitWindow | null
+  warnedFor: number | null
+}
+
+/**
+ * Guarda o estado dos limites, avisa o ritmo e diz até quando a fila deve esperar.
+ * Cada conta do app ('' = a padrão do PC) tem as próprias janelas.
+ */
 export class LimitsTracker {
-  private five: LimitWindow | null = null
-  private week: LimitWindow | null = null
+  private byAcc: Record<string, AccLimits> = {}
   private file: string
-  private warnedFor: number | null = null
   private watching: string | null = null
 
   constructor(
@@ -161,16 +168,16 @@ export class LimitsTracker {
       config: () => AiConfig
       onChange: (s: LimitsState) => void
       /** Aviso de ritmo: passou de X% da janela de 5h */
-      onPace: (pct: number, resetsAt: number | null) => void
+      onPace: (pct: number, resetsAt: number | null, account: string) => void
     }
   ) {
     this.file = join(base, 'limits.json')
     try {
       if (existsSync(this.file)) {
         const raw = JSON.parse(readFileSync(this.file, 'utf8'))
-        this.five = raw.five ?? null
-        this.week = raw.week ?? null
-        this.warnedFor = raw.warnedFor ?? null
+        // Formato antigo (uma conta só)
+        if (raw && ('five' in raw || 'week' in raw)) this.byAcc[''] = { five: raw.five ?? null, week: raw.week ?? null, warnedFor: raw.warnedFor ?? null }
+        else if (raw?.byAcc && typeof raw.byAcc === 'object') this.byAcc = raw.byAcc
       }
     } catch {
       /* começa vazio */
@@ -181,23 +188,40 @@ export class LimitsTracker {
     return join(homedir(), '.claude', 'helice-limits.json')
   }
 
+  private acc(id: string): AccLimits {
+    return (this.byAcc[id] ??= { five: null, week: null, warnedFor: null })
+  }
+
+  /** Estado da conta padrão no topo, e de cada conta com dados em `accounts` */
   state(now = Date.now()): LimitsState {
     const cfg = this.d.config()
+    const one = (id: string) => {
+      const a = this.byAcc[id]
+      return { id, fiveHour: fresh(a?.five ?? null, now), sevenDay: fresh(a?.week ?? null, now), blockedUntil: this.blockedUntil(now, id) }
+    }
+    const main = one('')
     return {
-      fiveHour: fresh(this.five, now),
-      sevenDay: fresh(this.week, now),
-      blockedUntil: this.blockedUntil(now),
+      fiveHour: main.fiveHour,
+      sevenDay: main.sevenDay,
+      blockedUntil: main.blockedUntil,
       capPct: cfg.sessionCapPct,
-      statusLine: cfg.statusLine
+      statusLine: cfg.statusLine,
+      accounts: Object.keys(this.byAcc).map(one)
     }
   }
 
-  /** Até quando a fila e as fases devem esperar (null = podem rodar) */
-  blockedUntil(now = Date.now()): number | null {
+  /** Janela de 5h de uma conta (para a agenda das fases) */
+  fiveHour(account = '', now = Date.now()): LimitWindow | null {
+    return fresh(this.byAcc[account]?.five ?? null, now)
+  }
+
+  /** Até quando a fila e as fases desta conta devem esperar (null = podem rodar) */
+  blockedUntil(now = Date.now(), account = ''): number | null {
     const cap = this.d.config().sessionCapPct || 100
     let until: number | null = null
-    const five = fresh(this.five, now)
-    const week = fresh(this.week, now)
+    const a = this.byAcc[account]
+    const five = fresh(a?.five ?? null, now)
+    const week = fresh(a?.week ?? null, now)
     const later = (t: number | null) => {
       const v = t ?? now + 30 * 60_000 // sem horário: tenta de novo em 30 min
       until = until === null ? v : Math.max(until, v)
@@ -207,46 +231,46 @@ export class LimitsTracker {
     return until && until > now ? until : null
   }
 
-  update(list: LimitUpdate[], now = Date.now()): void {
-    let changed = false
+  update(list: LimitUpdate[], now = Date.now(), account = ''): void {
+    if (!list.length) return
+    const a = this.acc(account)
     for (const u of list) {
       // Sem janela informada: bloqueio vale para a de 5h
       const id = u.window ?? 'five_hour'
-      const prev = id === 'five_hour' ? this.five : this.week
+      const prev = id === 'five_hour' ? a.five : a.week
       const next: LimitWindow = {
         pct: u.pct ?? (u.status === 'bloqueado' ? 100 : prev && prev.resetsAt === u.resetsAt ? prev.pct : null),
         resetsAt: u.resetsAt ?? (prev?.resetsAt && prev.resetsAt > now ? prev.resetsAt : null),
         status: u.status,
         updatedAt: now
       }
-      if (id === 'five_hour') this.five = next
-      else this.week = next
-      changed = true
+      if (id === 'five_hour') a.five = next
+      else a.week = next
     }
-    if (!changed) return
-    this.checkPace(now)
+    this.checkPace(now, account)
     this.persist()
     this.d.onChange(this.state(now))
   }
 
   /** Bateu no limite sem saber o horário do reset */
-  markBlocked(): void {
-    this.update([{ window: 'five_hour', status: 'bloqueado', resetsAt: null, pct: null }])
+  markBlocked(account = ''): void {
+    this.update([{ window: 'five_hour', status: 'bloqueado', resetsAt: null, pct: null }], Date.now(), account)
   }
 
-  private checkPace(now: number): void {
+  private checkPace(now: number, account: string): void {
     const warn = this.d.config().paceWarnPct
-    const five = fresh(this.five, now)
+    const a = this.acc(account)
+    const five = fresh(a.five, now)
     if (!warn || !five || five.pct === null || five.pct < warn) return
     const key = five.resetsAt ?? Math.floor(now / FIVE_H)
-    if (this.warnedFor === key) return
-    this.warnedFor = key
-    this.d.onPace(five.pct, five.resetsAt)
+    if (a.warnedFor === key) return
+    a.warnedFor = key
+    this.d.onPace(five.pct, five.resetsAt, account)
   }
 
   private persist(): void {
     try {
-      writeFileAtomic(this.file, JSON.stringify({ five: this.five, week: this.week, warnedFor: this.warnedFor }))
+      writeFileAtomic(this.file, JSON.stringify({ byAcc: this.byAcc }))
     } catch {
       /* ignora */
     }

@@ -7,6 +7,7 @@ import { registerWorklogIpc } from './ipc/worklog'
 import { registerLimitsIpc } from './ipc/limits'
 import { LimitsTracker, claudeTierArgs, fmtReset } from './limits'
 import { PlanRunner } from './plan'
+import { accountEnv, accountOf } from './accounts'
 import { registerDemandsIpc } from './ipc/demands'
 import { composeCmd, dockerStatus, execCommand as dockerExecCommand, hasComposeFile, SAFE_SERVICE, shellCommand as dockerShellCommand, suggestions as dockerSuggestions } from './docker'
 import { envProfiles, envSwitch } from './envfiles'
@@ -100,7 +101,7 @@ const runs = new RunManager((e) => {
     }
   }
   if (e.type === 'usage') recordRunCost(e)
-  if (e.type === 'limit') limits.update([{ window: e.window, status: e.status, resetsAt: e.resetsAt, pct: e.pct }])
+  if (e.type === 'limit') limits.update([{ window: e.window, status: e.status, resetsAt: e.resetsAt, pct: e.pct }], Date.now(), e.account)
   history.handle(e)
   queue.handleRunEvent(e)
   demandsDoneNotice(e)
@@ -192,7 +193,7 @@ async function runProfile(id: string): Promise<OpResult> {
     if (!r.ok) ok = false
     lines.push(`${p.name}: ${r.message}`)
   }
-  return { ok, message: lines.join('\n') || 'O perfil não tem projetos.' }
+  return { ok, message: lines.join('\n') || 'O grupo não tem projetos.' }
 }
 
 const demands = new DemandManager(app.getPath('userData'), runs, (list, busy, change) => {
@@ -333,7 +334,7 @@ const queue = new QueueManager(app.getPath('userData'), {
   },
   log: (text, kind = 'info') => appLog({ kind, text }),
   shots: queueShots,
-  blockedUntil: () => limits.blockedUntil(),
+  blockedUntil: (t) => limits.blockedUntil(Date.now(), accountOf(store.get(), t.projectId)?.id ?? ''),
   onTaskStart: (t) => plans.taskStarted(t),
   onTaskDone: (t) => plans.taskDone(t)
 })
@@ -345,10 +346,11 @@ const limits = new LimitsTracker(app.getPath('userData'), {
     send('limits:update', s)
     void queue.tick()
   },
-  onPace: (pct, resetsAt) => {
+  onPace: (pct, resetsAt, account) => {
+    const accName = account ? store.get().accounts.find((a) => a.id === account)?.name : ''
     const left = resetsAt ? Math.max(0, resetsAt - Date.now()) : null
     const h = left !== null ? `${Math.floor(left / 3600_000)}h${String(Math.round((left % 3600_000) / 60_000)).padStart(2, '0')}` : ''
-    const body = `Você já usou ${Math.round(pct)}% da janela de 5h do Claude${left !== null ? ` e faltam ${h} para resetar (${fmtReset(resetsAt)})` : ''}.`
+    const body = `Você já usou ${Math.round(pct)}% da janela de 5h do Claude${accName ? ` (conta ${accName})` : ''}${left !== null ? ` e faltam ${h} para resetar (${fmtReset(resetsAt)})` : ''}.`
     notify('⏳ Ritmo do Claude', body, undefined, 'sistema', 'always', true)
   }
 })
@@ -358,7 +360,7 @@ const plans = new PlanRunner({
   all: () => demands.all(),
   setPlan: (id, plan, note) => demands.setPlan(id, plan, note),
   queue,
-  limits: () => limits.state(),
+  limits: (projectId) => ({ fiveHour: limits.fiveHour(accountOf(store.get(), projectId)?.id ?? ''), capPct: store.get().ai.sessionCapPct }),
   notify: (title, body, demandId) => notify(title, body, `demand:${demandId}`, 'demanda', 'unfocused', false),
   askRelease: (d, ph, text) => {
     if (telegramReady()) tg.askRelease(d, ph, text, () => plans.release(d.id))
@@ -411,6 +413,7 @@ const remote = new RemoteManager((sessions) => {
     }
   }
 })
+remote.accountEnv = (p) => accountEnv(accountOf(store.get(), p.id))
 
 let lastWatcherError = ''
 const appLog = (l: AppLog) => {
@@ -459,6 +462,11 @@ const approvals = new ApprovalServer({
     send('approval:resolved', id)
     approvalTelegram.delete(id)
   }
+})
+// Conta do projeto: o Claude/Codex rodam com a pasta de login dela
+runs.setAccountProvider((req) => {
+  const a = accountOf(store.get(), req.projectId)
+  return { id: a?.id ?? '', env: accountEnv(a) }
 })
 runs.setClaudeArgsProvider((runId, req) => {
   const cfg = store.get()
@@ -1023,7 +1031,7 @@ function registerIpc(): void {
     saveNotificationsSoon()
   })
   registerWorklogIpc({ worklog, demands, weeklyText, syncJira })
-  registerLimitsIpc({ limits, plans, demands, projects: () => store.get().projects })
+  registerLimitsIpc({ limits, plans, demands, config: () => store.get() })
   ipcMain.handle('tokens:check', () => ({ plain: findPlainTokens(store.get().projects), encrypted: secrets.status().encrypted }))
   ipcMain.handle('tokens:remove', async (_e, t: { server: string; scope: 'user' | 'local' | 'project'; projectPath?: string }) => {
     const scope = (['user', 'local', 'project'] as const).includes(t?.scope) ? t.scope : 'user'

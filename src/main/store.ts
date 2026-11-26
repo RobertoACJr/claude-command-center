@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, copyFileSync } from 'fs'
 import { join } from 'path'
 import type {
+  AccountProfile,
   ClaudeEffort,
   ClaudeModel,
   WorkProfile,
@@ -74,6 +75,7 @@ function defaults(): AppConfig {
     ],
     rules: [],
     profiles: [],
+    accounts: [],
     queue: { onlyAway: true, paused: false, useWorktree: true },
     costs: { dailyLimitUsd: 0 },
     sync: { enabled: false, repoUrl: '' }
@@ -180,6 +182,12 @@ function normalize(raw: unknown): AppConfig {
     claudeGlobal: normPerms(r.claudeGlobal),
     replies: Array.isArray(r.replies) ? (r.replies as ReplyTemplate[]).filter((x) => x && x.id).map(normReply) : d.replies,
     rules: Array.isArray(r.rules) ? (r.rules as AutomationRule[]).filter((x) => x && x.id).map(normRule) : [],
+    accounts: Array.isArray(r.accounts)
+      ? (r.accounts as AccountProfile[])
+          .filter((x) => x && typeof x.id === 'string' && x.id)
+          .map((x) => ({ id: x.id, name: str(x.name).trim() || 'Conta', claudeDir: str(x.claudeDir).trim(), codexDir: str(x.codexDir).trim() }))
+          .slice(0, 10)
+      : [],
     profiles: Array.isArray(r.profiles)
       ? (r.profiles as WorkProfile[])
           .filter((x) => x && typeof x.id === 'string' && x.id)
@@ -291,7 +299,8 @@ function normProject(p: Project): Project {
       path: str(p.logSource?.path).trim(),
       command: str(p.logSource?.command).trim()
     },
-    logAlerts: bool(p.logAlerts, false)
+    logAlerts: bool(p.logAlerts, false),
+    accountId: str(p.accountId)
   }
 }
 
@@ -395,7 +404,8 @@ class ConfigStore {
       claudeGlobal: c.claudeGlobal,
       replies: c.replies,
       rules: c.rules,
-      profiles: c.profiles
+      profiles: c.profiles,
+      accounts: c.accounts
     }
   }
 
@@ -418,7 +428,7 @@ class ConfigStore {
     const localPath = new Map(cur.projects.map((p) => [p.id, p.path]))
     const incoming = normalize({ ...cur, ...merged })
     return this.update((d) => {
-      for (const k of ['projects', 'scripts', 'replies', 'rules', 'profiles', 'general', 'integrations', 'telegram', 'ai', 'claudeGlobal', 'queue', 'costs'] as const) {
+      for (const k of ['projects', 'scripts', 'replies', 'rules', 'profiles', 'accounts', 'general', 'integrations', 'telegram', 'ai', 'claudeGlobal', 'queue', 'costs'] as const) {
         ;(d as unknown as Record<string, unknown>)[k] = incoming[k]
       }
       d.projects = incoming.projects.map((p) => ({ ...p, path: localPath.get(p.id) || paths[p.id] || '' }))
@@ -490,6 +500,7 @@ class ConfigStore {
       if (patch.replies) d.replies = patch.replies
       if (patch.rules) d.rules = patch.rules
       if (patch.profiles) d.profiles = patch.profiles
+      if (patch.accounts) d.accounts = patch.accounts
       if (patch.queue) d.queue = { ...d.queue, ...patch.queue }
       if (patch.costs) d.costs = { ...d.costs, ...patch.costs }
       if (patch.sync) d.sync = { ...d.sync, ...patch.sync }

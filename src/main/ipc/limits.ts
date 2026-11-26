@@ -1,6 +1,9 @@
 import { ipcMain } from 'electron'
-import type { DemandPlan, OpResult, Project } from '../../shared/types'
-import { aiAccounts, projectAccounts } from '../accounts'
+import { mkdirSync } from 'fs'
+import { homedir } from 'os'
+import type { AppConfig, DemandPlan, OpResult } from '../../shared/types'
+import { accountEnv, accountOf, allAccounts, projectAccounts } from '../accounts'
+import { openSystemTerminal } from '../systerm'
 import type { DemandManager } from '../demands'
 import type { LimitsTracker } from '../limits'
 import type { PlanRunner } from '../plan'
@@ -11,14 +14,24 @@ export function registerLimitsIpc(d: {
   limits: LimitsTracker
   plans: PlanRunner
   demands: DemandManager
-  projects: () => Project[]
+  config: () => AppConfig
 }): void {
   const { limits, plans, demands } = d
   ipcMain.handle('limits:state', () => limits.state())
-  ipcMain.handle('accounts:list', () => aiAccounts())
+  ipcMain.handle('accounts:list', () => allAccounts(d.config()))
   ipcMain.handle('accounts:project', (_e, id: string) => {
-    const p = d.projects().find((x) => x.id === id)
-    return p?.path ? projectAccounts(p) : null
+    const cfg = d.config()
+    const p = cfg.projects.find((x) => x.id === id)
+    return p?.path ? projectAccounts(p, accountOf(cfg, p.id)) : null
+  })
+  // Login numa conta: abre o terminal com a pasta de login dela (o Claude pede o /login na primeira vez)
+  ipcMain.handle('accounts:login', (_e, accountId: string, tool: 'claude' | 'codex'): OpResult => {
+    const acc = d.config().accounts.find((a) => a.id === accountId) ?? null
+    const env = accountEnv(acc)
+    if (tool === 'claude' && !env.CLAUDE_CONFIG_DIR) return { ok: false, message: 'Essa conta usa a pasta padrão do Claude; faça login normalmente.' }
+    if (tool === 'codex' && !env.CODEX_HOME) return { ok: false, message: 'Essa conta usa a pasta padrão do Codex.' }
+    for (const dir of Object.values(env)) mkdirSync(dir, { recursive: true })
+    return openSystemTerminal(homedir(), tool === 'codex' ? 'codex' : 'claude', undefined, env)
   })
   ipcMain.handle('statusline:set', (_e, on: boolean): OpResult => {
     // A interface grava ai.statusLine depois que der certo (e o app passa a ler o arquivo)

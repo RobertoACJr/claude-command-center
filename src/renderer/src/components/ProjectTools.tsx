@@ -469,7 +469,7 @@ export function ProfilesMenu({ profiles, projects, onResult }: { profiles: WorkP
   }
   return (
     <div ref={ref} className="relative">
-      <IconButton title="Perfis de trabalho: sobem vários projetos de uma vez" onClick={() => setOpen((o) => !o)} data-testid="profiles-menu">
+      <IconButton title="Grupos: sobem vários projetos de uma vez" onClick={() => setOpen((o) => !o)} data-testid="profiles-menu">
         {busy ? <Loader2 size={14} className="animate-spin" /> : <Star size={14} />}
       </IconButton>
       {open && (
@@ -491,7 +491,7 @@ export function ProfilesMenu({ profiles, projects, onResult }: { profiles: WorkP
               </div>
             </button>
           ))}
-          {!profiles.length && <div className="px-2.5 py-2 text-[11px] text-zinc-500">Nenhum perfil ainda. Ex.: "Bom dia" sobe o back e o front.</div>}
+          {!profiles.length && <div className="px-2.5 py-2 text-[11px] text-zinc-500">Nenhum grupo ainda. Ex.: "Bom dia" sobe o back e o front.</div>}
           <button
             type="button"
             onClick={() => {
@@ -500,7 +500,7 @@ export function ProfilesMenu({ profiles, projects, onResult }: { profiles: WorkP
             }}
             className="mt-1 w-full cursor-pointer rounded-lg border-t border-line px-2.5 py-2 text-left text-xs text-purple hover:bg-white/5"
           >
-            Gerenciar perfis…
+            Gerenciar grupos…
           </button>
         </div>
       )}
@@ -525,7 +525,7 @@ function ProfilesModal({ open, profiles, projects, onClose }: { open: boolean; p
       open={open}
       onClose={onClose}
       width="max-w-2xl"
-      title="Perfis de trabalho"
+      title="Grupos de projetos"
       icon={<Star size={16} />}
       footer={
         <>
@@ -540,13 +540,13 @@ function ProfilesModal({ open, profiles, projects, onClose }: { open: boolean; p
     >
       <div className="space-y-3">
         <p className="text-xs text-zinc-500">
-          Um clique (ou <code>/subir nome</code> no Telegram) sobe todos os projetos do perfil. Projetos sem "Como executar" não aparecem.
+          Um clique (ou <code>/subir nome</code> no Telegram) sobe todos os projetos do grupo. Projetos sem "Como executar" não aparecem.
         </p>
         {list.map((pr, i) => (
           <div key={pr.id} className="space-y-2 rounded-xl border border-line p-3">
             <div className="flex items-center gap-2">
-              <input className={inputCls + ' h-8 flex-1 text-sm'} value={pr.name} onChange={(e) => set(i, { name: e.target.value })} placeholder="Nome do perfil" />
-              <IconButton title="Excluir perfil" tone="danger" onClick={() => setList((l) => l.filter((_, j) => j !== i))}>
+              <input className={inputCls + ' h-8 flex-1 text-sm'} value={pr.name} onChange={(e) => set(i, { name: e.target.value })} placeholder="Nome do grupo" />
+              <IconButton title="Excluir grupo" tone="danger" onClick={() => setList((l) => l.filter((_, j) => j !== i))}>
                 <X size={13} />
               </IconButton>
             </div>
@@ -573,7 +573,7 @@ function ProfilesModal({ open, profiles, projects, onClose }: { open: boolean; p
           </div>
         ))}
         <Button size="sm" variant="ghost" onClick={() => setList((l) => [...l, { id: uid(), name: '', projectIds: [], withLinked: true }])}>
-          + Perfil
+          + Grupo
         </Button>
       </div>
     </Modal>

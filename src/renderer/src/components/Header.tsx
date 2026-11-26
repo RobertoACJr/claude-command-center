@@ -42,13 +42,15 @@ export function Header({
   onOpenPalette: () => void
 }) {
   const on = status === 'on'
+  const [hover, setHover] = useState(false)
   const vigia = watcherEnabled && (watcher.phase === 'idle' || watcher.phase === 'checking')
   return (
     <header className="flex h-16 shrink-0 items-center justify-between border-b border-line bg-bg/80 px-5">
-      <div className="flex items-center gap-3">
-        <HelixLogo size={36} tone={!on ? 'away' : vigia ? 'vigia' : 'online'} spin={busy} />
+      {/* Mouse em cima do logo ou do nome: a hélice gira e um brilho passa pelo nome */}
+      <div className="group flex cursor-default items-center gap-3" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+        <HelixLogo size={36} tone={!on ? 'away' : vigia ? 'vigia' : 'online'} spin={busy} hover={hover} />
         <div className="leading-tight">
-          <div className="text-[15px] font-semibold tracking-tight text-zinc-50">Hélice</div>
+          <div className="helix-name text-[15px] font-semibold tracking-tight">Hélice</div>
           <div className={cn('text-[11px]', vigia && on ? 'text-purple' : 'text-zinc-500')}>{vigia && on ? 'vigia de plantão' : 'central de comando'}</div>
         </div>
       </div>
@@ -120,11 +122,11 @@ export function Header({
           aria-checked={on}
           onClick={onToggle}
           title={on ? 'Ir para o modo Ausente' : 'Voltar ao PC (Online)'}
-          className="relative flex h-11 w-[204px] cursor-pointer items-center rounded-full border border-violet/60 bg-violet/10 p-[3px] transition-all glow-violet"
+          className="relative flex h-9 w-[204px] cursor-pointer items-center rounded-lg border border-violet/60 bg-violet/10 p-[3px] transition-all glow-violet"
         >
           <span
             className={cn(
-              'absolute top-[3px] h-9 w-[98px] rounded-full bg-gradient-to-b from-purple to-violet transition-all duration-300',
+              'absolute top-[3px] h-[28px] w-[98px] rounded-md bg-gradient-to-b from-purple to-violet transition-all duration-300',
               on ? 'left-[3px]' : 'left-[101px]'
             )}
           />
@@ -134,7 +136,7 @@ export function Header({
               on ? 'text-white' : 'text-zinc-500'
             )}
           >
-            <span className={cn('h-2 w-2 rounded-full', on ? 'bg-emerald-400' : 'bg-zinc-600')} />
+            <span className={cn('h-2 w-2 rounded-full', on ? 'bg-white' : 'bg-zinc-600')} />
             Online
           </span>
           <span

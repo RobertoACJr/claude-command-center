@@ -60,7 +60,7 @@ export class QueueManager {
       /** Front/back: prints e checagem da API antes/depois (só na pasta do projeto, não na cópia) */
       shots?: (t: QueueTask, label: 'antes' | 'depois') => Promise<ShotSet[] | null>
       /** Limite do Claude: até quando esperar (null = livre) */
-      blockedUntil?: () => number | null
+      blockedUntil?: (t: QueueTask) => number | null
       /** Avisos para o plano por fases */
       onTaskStart?: (t: QueueTask) => void
       onTaskDone?: (t: QueueTask) => void
@@ -205,22 +205,21 @@ export class QueueManager {
       const now = Date.now()
       const cfg = store.get()
       if (cfg.queue.paused) return this.setWaiting('Fila pausada.')
-      const pick = pickNext(pending, now, cfg.queue.onlyAway && cfg.status !== 'off' && !this.force)
+      // Limite do Claude estourado (ou acima do teto) na conta da tarefa: ela espera o reset e as outras seguem
+      const pick = pickNext(pending, now, cfg.queue.onlyAway && cfg.status !== 'off' && !this.force, (t) => this.d.blockedUntil?.(t) ?? null)
       if (!pick.task) {
-        if (pick.wakeAt) this.wakeAt(pick.wakeAt)
+        if (pick.wakeAt) this.wakeAt(pick.wakeAt + (pick.limitWait ? 60_000 : 0))
         return this.setWaiting(
-          pick.wakeAt && !pick.awayBlocked
-            ? `Próxima tarefa agendada para ${fmtReset(pick.wakeAt, now)}.`
-            : 'Esperando você ir para Ausente (ou clique em "Rodar agora").'
+          pick.awayBlocked
+            ? 'Esperando você ir para Ausente (ou clique em "Rodar agora").'
+            : pick.limitWait
+              ? `Esperando o limite do Claude resetar (${fmtReset(pick.wakeAt, now)}).`
+              : pick.wakeAt
+                ? `Próxima tarefa agendada para ${fmtReset(pick.wakeAt, now)}.`
+                : null
         )
       }
       if (!costs.allowsAutomation()) return this.setWaiting('Pausada: limite diário de gastos atingido.')
-      // Limite do Claude estourado (ou acima do teto): espera o reset em vez de falhar
-      const until = this.d.blockedUntil?.() ?? null
-      if (until && until > now) {
-        this.wakeAt(until + 60_000)
-        return this.setWaiting(`Esperando o limite do Claude resetar (${fmtReset(until, now)}).`)
-      }
       this.setWaiting(null)
       await this.start(pick.task)
     } finally {
@@ -338,7 +337,7 @@ export class QueueManager {
     this.text.delete(e.runId)
     // Bateu no limite do Claude: volta para a fila e espera o reset (não conta como falha)
     if (this.limited.delete(e.runId) && !e.killed) {
-      const until = this.d.blockedUntil?.() ?? Date.now() + 30 * 60_000
+      const until = this.d.blockedUntil?.(t) ?? Date.now() + 30 * 60_000
       Object.assign(t, { status: 'pendente', runId: undefined, startedAt: undefined, phase: undefined, notBefore: until + 60_000 })
       this.d.log(`[Fila] limite do Claude atingido; a tarefa volta às ${fmtReset(until)}: ${t.prompt.slice(0, 60)}`, 'info')
       this.persist()
@@ -430,22 +429,31 @@ export class QueueManager {
 export function pickNext(
   pending: QueueTask[],
   now: number,
-  awayBlocked: boolean
-): { task: QueueTask | null; wakeAt: number | null; awayBlocked: boolean } {
+  awayBlocked: boolean,
+  limitUntil: (t: QueueTask) => number | null = () => null
+): { task: QueueTask | null; wakeAt: number | null; awayBlocked: boolean; limitWait: boolean } {
   let wakeAt: number | null = null
   let blockedByAway = false
+  let limitWait = false
+  const later = (at: number) => (wakeAt = wakeAt === null ? at : Math.min(wakeAt, at))
   for (const t of pending) {
     if (t.notBefore && t.notBefore > now) {
-      wakeAt = wakeAt === null ? t.notBefore : Math.min(wakeAt, t.notBefore)
+      later(t.notBefore)
       continue
     }
     if (awayBlocked && !t.planPhaseId) {
       blockedByAway = true
       continue
     }
-    return { task: t, wakeAt: null, awayBlocked: false }
+    const until = limitUntil(t)
+    if (until && until > now) {
+      later(until)
+      limitWait = true
+      continue
+    }
+    return { task: t, wakeAt: null, awayBlocked: false, limitWait: false }
   }
-  return { task: null, wakeAt, awayBlocked: blockedByAway }
+  return { task: null, wakeAt, awayBlocked: blockedByAway, limitWait }
 }
 
 /** Texto do resumo (Telegram e sino) */

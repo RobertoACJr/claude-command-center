@@ -3,7 +3,7 @@
 import { existsSync, readFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
-import type { AccountInfo, Project, ProjectAccounts } from '../shared/types'
+import type { AccountInfo, AccountProfile, AppConfig, Project, ProjectAccounts } from '../shared/types'
 import { git } from './git'
 
 const readJson = (f: string): Record<string, any> | null => {
@@ -66,6 +66,43 @@ export function parseGeminiAccount(accounts: Record<string, any> | null, setting
   return { who: null, note: 'Sem login. Rode "gemini" no terminal e entre com a conta Google.' }
 }
 
+/** "~/x" → pasta de verdade */
+export function expandHome(p: string, home = homedir()): string {
+  const t = p.trim()
+  if (!t) return ''
+  if (t === '~') return home
+  if (t.startsWith('~/') || t.startsWith('~\\')) return join(home, t.slice(2))
+  return t
+}
+
+/** Conta usada por um projeto ('' = padrão do PC; conta apagada também cai na padrão) */
+export function accountOf(cfg: Pick<AppConfig, 'accounts' | 'projects'>, projectId?: string): AccountProfile | null {
+  const id = projectId ? cfg.projects.find((p) => p.id === projectId)?.accountId : ''
+  return (id && cfg.accounts.find((a) => a.id === id)) || null
+}
+
+/** Variáveis de ambiente que apontam o Claude/Codex para a pasta de login da conta */
+export function accountEnv(acc: Pick<AccountProfile, 'claudeDir' | 'codexDir'> | null, home = homedir()): Record<string, string> {
+  const env: Record<string, string> = {}
+  if (acc?.claudeDir) env.CLAUDE_CONFIG_DIR = expandHome(acc.claudeDir, home)
+  if (acc?.codexDir) env.CODEX_HOME = expandHome(acc.codexDir, home)
+  return env
+}
+
+/** Contas logadas: a padrão do PC e cada conta cadastrada */
+export function allAccounts(cfg: Pick<AppConfig, 'accounts'>): AccountInfo[] {
+  const out = aiAccounts().map((a) => ({ ...a, accountId: '' }))
+  for (const acc of cfg.accounts) {
+    const env = { ...process.env, ...accountEnv(acc) }
+    if (!acc.claudeDir) delete env.CLAUDE_CONFIG_DIR
+    for (const a of aiAccounts(env)) {
+      // Só o que a conta muda (Claude e/ou Codex); o Gemini é sempre o do PC
+      if ((a.service === 'claude' && acc.claudeDir) || (a.service === 'codex' && acc.codexDir)) out.push({ ...a, accountId: acc.id })
+    }
+  }
+  return out
+}
+
 /** Contas das IAs neste PC */
 export function aiAccounts(env = process.env, home = homedir()): AccountInfo[] {
   const claudeDir = env.CLAUDE_CONFIG_DIR || join(home, '.claude')
@@ -101,7 +138,7 @@ export function remoteInfo(url: string): { host: string; repo: string } | null {
 }
 
 /** Identidade do git e remoto de um projeto (e a conta do Claude que as execuções dele usam) */
-export async function projectAccounts(p: Project): Promise<ProjectAccounts> {
+export async function projectAccounts(p: Project, acc: AccountProfile | null = null): Promise<ProjectAccounts> {
   const get = async (key: string) => {
     const r = await git(p.path, ['config', '--show-origin', '--get', key], 5000)
     if (!r.ok || !r.out.trim()) return null
@@ -121,6 +158,9 @@ export async function projectAccounts(p: Project): Promise<ProjectAccounts> {
       remote: info ? `${info.host}/${info.repo}` : null,
       ssh: /^(git@|ssh:\/\/)/.test(url)
     },
-    claude: aiAccounts().find((a) => a.service === 'claude')!
+    claude: {
+      ...aiAccounts(acc?.claudeDir ? { ...process.env, ...accountEnv(acc) } : process.env).find((a) => a.service === 'claude')!,
+      accountId: acc?.id ?? ''
+    }
   }
 }

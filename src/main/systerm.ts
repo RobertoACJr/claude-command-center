@@ -26,7 +26,8 @@ function has(cmd: string): boolean {
  * Abre o terminal do sistema na pasta. `preset` vem da interface (lista fechada);
  * `command` só é montado aqui no processo principal (ex.: entrar num container), nunca vem pronto da tela.
  */
-export function openSystemTerminal(cwd: string, preset?: TerminalPreset, command?: string): OpResult {
+export function openSystemTerminal(cwd: string, preset?: TerminalPreset, command?: string, extraEnv?: Record<string, string>): OpResult {
+  const env = { ...envWithPath(), ...(extraEnv ?? {}) }
   if (!cwd || !existsSync(cwd)) return { ok: false, message: `Pasta não encontrada: ${cwd}` }
   const cmd = command ?? (preset ? PRESETS[preset] : '')
   if (preset && !cmd) return { ok: false, message: 'Comando desconhecido.' }
@@ -36,8 +37,8 @@ export function openSystemTerminal(cwd: string, preset?: TerminalPreset, command
       const psArgs = ['-NoExit', '-NoLogo', ...(cmd ? ['-Command', cmd] : [])]
       const hasWt = spawnSync('where', ['wt.exe'], { windowsHide: true }).status === 0
       const child = hasWt
-        ? spawn('wt.exe', ['-d', cwd, 'powershell.exe', ...psArgs], { cwd, detached: true, stdio: 'ignore', env: envWithPath() })
-        : spawn('powershell.exe', psArgs, { cwd, detached: true, stdio: 'ignore', windowsHide: false, env: envWithPath() })
+        ? spawn('wt.exe', ['-d', cwd, 'powershell.exe', ...psArgs], { cwd, detached: true, stdio: 'ignore', env })
+        : spawn('powershell.exe', psArgs, { cwd, detached: true, stdio: 'ignore', windowsHide: false, env })
       child.on('error', () => {})
       child.unref()
       return { ok: true, message: 'Terminal aberto.' }
@@ -58,7 +59,7 @@ export function openSystemTerminal(cwd: string, preset?: TerminalPreset, command
     ]
     const found = candidates.find(([bin]) => has(bin))
     if (!found) return { ok: false, message: 'Nenhum terminal encontrado (instale o gnome-terminal ou outro).' }
-    const child = spawn(found[0], found[1], { cwd, detached: true, stdio: 'ignore', env: envWithPath() })
+    const child = spawn(found[0], found[1], { cwd, detached: true, stdio: 'ignore', env })
     child.on('error', () => {})
     child.unref()
     return { ok: true, message: `Terminal aberto (${found[0]}).` }

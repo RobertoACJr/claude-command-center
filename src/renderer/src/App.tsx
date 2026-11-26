@@ -710,6 +710,7 @@ export default function App() {
       <main className="grid min-h-0 min-w-0 flex-1 grid-cols-1 gap-4 overflow-x-hidden p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <ProjectsPanel
           projects={config.projects}
+          accounts={config.accounts}
           scripts={config.scripts}
           branches={branches}
           remote={remote}
@@ -871,6 +872,7 @@ export default function App() {
 
       <ProjectModal
         projects={config?.projects ?? []}
+        accounts={config?.accounts ?? []}
         open={projectModal.open}
         initial={projectModal.item}
         onClose={() => setProjectModal({ open: false, item: null })}

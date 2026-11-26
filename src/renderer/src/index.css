@@ -88,3 +88,36 @@ body {
 .animate-modal {
   animation: fade-in 140ms ease-out;
 }
+
+/* Nome "Hélice" no topo: um brilho passa da esquerda para a direita com o mouse em cima */
+.helix-name {
+  background-image: linear-gradient(
+    110deg,
+    #fafafa 0%,
+    #fafafa 42%,
+    color-mix(in srgb, var(--color-purple) 70%, white) 50%,
+    #fafafa 58%,
+    #fafafa 100%
+  );
+  background-size: 250% 100%;
+  background-position: 100% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.group:hover .helix-name {
+  animation: helix-shine 1.1s ease-out;
+}
+@keyframes helix-shine {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .group:hover .helix-name {
+    animation: none;
+  }
+}

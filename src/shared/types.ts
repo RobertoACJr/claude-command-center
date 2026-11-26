@@ -60,6 +60,8 @@ export interface Project {
   logSource: LogSource
   /** Avisar (sino e, no Ausente, Telegram) quando aparecer erro no log */
   logAlerts: boolean
+  /** Conta das IAs que este projeto usa ('' = a conta padrão do PC) */
+  accountId?: string
 }
 
 export interface DockerCommand {
@@ -104,6 +106,19 @@ export interface DockerStatus {
 }
 
 /** Perfil de trabalho: um clique sobe vários projetos */
+/**
+ * Conta das IAs (ex: Empresa, Pessoal). Cada conta tem a própria pasta de login do Claude
+ * (CLAUDE_CONFIG_DIR) e, se quiser, do Codex (CODEX_HOME). '' = a pasta padrão.
+ */
+export interface AccountProfile {
+  id: string
+  name: string
+  /** Pasta de login do Claude (ex: ~/.claude-pessoal); '' = a padrão (~/.claude) */
+  claudeDir: string
+  /** Pasta de login do Codex (ex: ~/.codex-pessoal); '' = a padrão */
+  codexDir: string
+}
+
 export interface WorkProfile {
   id: string
   name: string
@@ -431,6 +446,8 @@ export type TaskTier = 'light' | 'heavy'
 /** Conta logada numa ferramenta (nunca traz token) */
 export interface AccountInfo {
   service: 'claude' | 'codex' | 'gemini'
+  /** Conta do app ('' = padrão do PC) */
+  accountId?: string
   /** E-mail (ou "Chave de API"); null = sem login */
   who: string | null
   name?: string
@@ -476,6 +493,8 @@ export interface LimitsState {
   capPct: number
   /** Linha de status ligada */
   statusLine: boolean
+  /** Cada conta do app com dados ('' = a padrão do PC) */
+  accounts: Array<{ id: string; fiveHour: LimitWindow | null; sevenDay: LimitWindow | null; blockedUntil: number | null }>
 }
 
 export type PlanPhaseStatus = 'pendente' | 'agendada' | 'aguardando' | 'rodando' | 'feita' | 'falhou'
@@ -537,6 +556,8 @@ export interface AppConfig {
   rules: AutomationRule[]
   /** Perfis de trabalho (ex.: "Bom dia" sobe back e front) */
   profiles: WorkProfile[]
+  /** Contas das IAs (a padrão do PC não entra na lista) */
+  accounts: AccountProfile[]
   queue: QueueConfig
   costs: CostsConfig
   sync: SyncConfig
@@ -598,6 +619,7 @@ export interface SettingsPatch {
   replies?: ReplyTemplate[]
   rules?: AutomationRule[]
   profiles?: WorkProfile[]
+  accounts?: AccountProfile[]
   queue?: Partial<QueueConfig>
   costs?: Partial<CostsConfig>
   sync?: Partial<SyncConfig>
@@ -966,6 +988,8 @@ export type RunEvent =
       runId: string
       tab: TabKey
       type: 'limit'
+      /** Conta do app ('' = padrão do PC) */
+      account: string
       window: 'five_hour' | 'seven_day' | null
       status: LimitWindow['status']
       resetsAt: number | null
@@ -1107,6 +1131,8 @@ export interface CommandCenterApi {
   /** Contas logadas nas IAs deste PC */
   accounts(): Promise<AccountInfo[]>
   projectAccounts(projectId: string): Promise<ProjectAccounts | null>
+  /** Abre o terminal para fazer login numa conta do app */
+  accountLogin(accountId: string, tool: 'claude' | 'codex'): Promise<OpResult>
   onLimits(cb: (s: LimitsState) => void): () => void
   /** Liga/desliga a linha de status do Claude (mexe só na chave statusLine do ~/.claude/settings.json) */
   statuslineSet(on: boolean): Promise<OpResult>

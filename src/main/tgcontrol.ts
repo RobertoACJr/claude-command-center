@@ -179,7 +179,7 @@ export class TelegramControl {
     '/jornada · tempo em cada demanda hoje e na semana; pausa o cronômetro',
     '/semana · relatório da semana (horas por demanda, estimado x registrado)',
     '/jira · confere o status das demandas no Jira (finaliza as concluídas lá)',
-    '/subir · sobe um perfil de trabalho ou um projeto (com os ligados); /subir nome',
+    '/subir · sobe um grupo ou um projeto (com os ligados); /subir nome',
     '/parar nome · para o projeto e os ligados (/parar sozinho interrompe o que o Telegram mandou rodar)',
     '/log nome · log da aplicação do projeto (ex.: laravel.log); sem log configurado, a saída da última execução',
     '/rodar · scripts e ações globais (pergunta as variáveis aqui)',
@@ -437,7 +437,7 @@ export class TelegramControl {
         return
       }
       const p = this.findProject(args)
-      if (!p) return void (await this.say('Não achei perfil nem projeto com esse nome. Mande /subir para ver a lista.'))
+      if (!p) return void (await this.say('Não achei grupo nem projeto com esse nome. Mande /subir para ver a lista.'))
       const r = await this.d.projects.start(p.id, true)
       await this.say(`${r.ok ? '▶' : '⚠️'} <b>${escapeHtml(p.name)}</b>: ${escapeHtml(r.message)}`)
       return
@@ -464,7 +464,7 @@ export class TelegramControl {
         )
       )
     }
-    if (!buttons.length) return void (await this.say('Nenhum perfil nem projeto com "Como executar" cadastrado.'))
+    if (!buttons.length) return void (await this.say('Nenhum grupo nem projeto com "Como executar" cadastrado.'))
     await this.say('<b>Subir o quê?</b> (projetos sobem junto com os ligados)', buttons)
   }
 

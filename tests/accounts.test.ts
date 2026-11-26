@@ -38,3 +38,18 @@ test('git: escopo da configuração e remoto sem credenciais', () => {
   assert.deepEqual(remoteInfo('https://user:tok@github.com/empresa/web.git'), { host: 'github.com', repo: 'empresa/web' })
   assert.deepEqual(remoteInfo('ssh://git@gitlab.empresa.com:2222/time/app.git'), { host: 'gitlab.empresa.com', repo: 'time/app' })
 })
+
+test('conta do projeto: pasta de login vira variável de ambiente', async () => {
+  const { accountEnv, accountOf, expandHome } = await import('../src/main/accounts')
+  const cfg = {
+    accounts: [{ id: 'pes', name: 'Pessoal', claudeDir: '~/.claude-pessoal', codexDir: '' }],
+    projects: [{ id: 'p1', accountId: 'pes' }, { id: 'p2', accountId: '' }, { id: 'p3', accountId: 'apagada' }]
+  } as any
+  assert.equal(accountOf(cfg, 'p1')?.name, 'Pessoal')
+  assert.equal(accountOf(cfg, 'p2'), null)
+  assert.equal(accountOf(cfg, 'p3'), null, 'conta apagada cai na padrão')
+  assert.equal(accountOf(cfg, undefined), null)
+  assert.deepEqual(accountEnv(accountOf(cfg, 'p1'), '/home/r'), { CLAUDE_CONFIG_DIR: '/home/r/.claude-pessoal' })
+  assert.deepEqual(accountEnv(null), {})
+  assert.equal(expandHome('/abs/dir', '/home/r'), '/abs/dir')
+})

@@ -1,6 +1,6 @@
 import { Activity, Boxes, ScrollText, AlertTriangle, AppWindow, Camera, ChevronsDownUp, ChevronsUpDown, Link2, Braces, ChevronDown, ChevronRight, Copy, ExternalLink, FolderGit2, GitBranch, Loader2, Pencil, Play, Plus, Radio, RefreshCw, RotateCcw, RotateCw, Square, SquareTerminal, Trash2, Smartphone } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import type { Demand, DemandBusy, GitInfo, OpResult, Project, ProjectRunState, RemoteSession, Script, WorkProfile } from '@shared/types'
+import type { AccountProfile, Demand, DemandBusy, GitInfo, OpResult, Project, ProjectRunState, RemoteSession, Script, WorkProfile } from '@shared/types'
 import { EnvModal, LogModal, PortOwnerChip, ProfilesMenu, SyncLinkedMenu } from './ProjectTools'
 import { statusInfo } from './DemandModal'
 import { Button, EmptyState, IconButton } from './ui'
@@ -27,6 +27,7 @@ export function ProjectsPanel({
   demandsBusy,
   onOpenDemand,
   onNewDemand,
+  accounts = [],
   gitInfos,
   onGitDiff,
   onGitResult,
@@ -55,10 +56,29 @@ export function ProjectsPanel({
   onOpenTerminal: (projectId: string) => void
   onError: (msg: string) => void
   scriptActions: ScriptActions
-  /** Perfis de trabalho (estrela no topo do painel) */
+  /** Grupos de projetos (sobem juntos) */
   profiles: WorkProfile[]
+  /** Contas das IAs (Configurações → IAs → Contas) */
+  accounts?: AccountProfile[]
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed)
+  const [filter, setFilterState] = useState<string>(loadFilter)
+  const setFilter = (v: string) => {
+    setFilterState(v)
+    saveFilter(v)
+  }
+  const accOf = (p: Project) => (accounts.some((a) => a.id === p.accountId) ? p.accountId! : '')
+  // Conta apagada (ou filtro de outro PC): mostra tudo
+  const activeFilter = accounts.length && (filter === '' || accounts.some((a) => a.id === filter)) ? filter : '*'
+  const visible = activeFilter === '*' ? projects : projects.filter((p) => accOf(p) === activeFilter)
+  // Escondidos pelo filtro, mas trabalhando: avisa no topo para não passar batido
+  const hiddenBusy = projects.filter(
+    (p) =>
+      !visible.includes(p) &&
+      (['running', 'starting'].includes(runStates[p.id]?.state ?? '') ||
+        ['active', 'starting'].includes(remote[p.id]?.state ?? '') ||
+        demandsBusy.some((b) => demands.find((d) => d.id === b.demandId)?.projectId === p.id))
+  )
   const [envFor, setEnvFor] = useState<string | null>(null)
   const [logFor, setLogFor] = useState<string | null>(null)
   useEffect(() => {
@@ -87,8 +107,36 @@ export function ProjectsPanel({
         <div className="flex items-center gap-2">
           <FolderGit2 size={16} className="text-purple" />
           <h2 className="text-sm font-semibold text-zinc-100">Projetos</h2>
-          <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-zinc-500">{projects.length}</span>
+          <span className="rounded-full bg-white/5 px-2 py-0.5 text-[11px] text-zinc-500">{visible.length}</span>
           <RemoteBadge projects={projects} remote={remote} />
+          {accounts.length > 0 && (
+            <select
+              data-testid="account-filter"
+              value={activeFilter}
+              onChange={(e) => setFilter(e.target.value)}
+              title="Mostrar só os projetos de uma conta (não para nada do que está rodando)"
+              className="h-7 cursor-pointer rounded-lg border border-line bg-card-2 px-2 text-[11px] text-zinc-300 outline-none hover:border-violet/60"
+            >
+              <option value="*">Todas as contas</option>
+              <option value="">Padrão do PC</option>
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          )}
+          {hiddenBusy.length > 0 && (
+            <button
+              type="button"
+              data-testid="hidden-busy"
+              onClick={() => setFilter('*')}
+              title={`Rodando em projetos escondidos pelo filtro:\n${hiddenBusy.map((p) => `• ${p.name}`).join('\n')}\nClique para mostrar todos.`}
+              className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-violet/40 bg-violet/10 px-2 py-0.5 text-[11px] text-purple"
+            >
+              <Loader2 size={11} className="animate-spin" /> {hiddenBusy.length} em outra conta
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <ProfilesMenu profiles={profiles} projects={projects} onResult={toolResult} />
@@ -115,10 +163,15 @@ export function ProjectsPanel({
           />
         )}
 
-        {projects.map((p) => (
+        {projects.length > 0 && visible.length === 0 && (
+          <EmptyState icon={<FolderGit2 size={20} />} title="Nenhum projeto nesta conta" text="Troque o filtro de contas no topo do painel para ver os outros." />
+        )}
+
+        {visible.map((p) => (
           <ProjectCard
             key={p.id}
             p={p}
+            accountName={accounts.find((a) => a.id === accOf(p))?.name}
             branch={branches[p.id]}
             session={remote[p.id]}
             run={runStates[p.id]}
@@ -154,6 +207,24 @@ export function ProjectsPanel({
 }
 
 const COLLAPSED_KEY = 'helice.projetosRecolhidos'
+const FILTER_KEY = 'helice.filtroConta'
+
+/** Filtro de contas do painel (só neste PC): '*' = todas, '' = padrão, ou o id da conta */
+function loadFilter(): string {
+  try {
+    return localStorage.getItem(FILTER_KEY) ?? '*'
+  } catch {
+    return '*'
+  }
+}
+
+function saveFilter(v: string) {
+  try {
+    localStorage.setItem(FILTER_KEY, v)
+  } catch {
+    /* sem armazenamento: só não lembra */
+  }
+}
 
 /** Quais cards estão recolhidos (só neste PC; não vai para a sincronização) */
 function loadCollapsed(): Set<string> {
@@ -245,8 +316,11 @@ function ProjectCard({
   onToggleCollapse,
   onOpenEnv,
   onOpenLog,
-  onToolResult
+  onToolResult,
+  accountName
 }: {
+  /** Conta das IAs do projeto (vazio = a padrão do PC) */
+  accountName?: string
   collapsed: boolean
   onToggleCollapse: () => void
   onOpenEnv: () => void
@@ -402,7 +476,18 @@ function ProjectCard({
             <ChevronDown size={14} />
           </IconButton>
           <div className="min-w-0">
-            <div className="truncate text-sm font-medium text-zinc-100">{p.name}</div>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-sm font-medium text-zinc-100">{p.name}</span>
+              {accountName && (
+                <span
+                  data-testid="project-account-chip"
+                  title={`As IAs deste projeto rodam com a conta "${accountName}"`}
+                  className="shrink-0 rounded-md border border-violet/40 px-1.5 py-px text-[10px] text-purple"
+                >
+                  {accountName}
+                </span>
+              )}
+            </div>
             <div className="selectable mt-0.5 truncate font-mono text-[11px] text-zinc-500" title={p.path}>
               {shortPath(p.path, 52)}
             </div>

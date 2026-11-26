@@ -2,7 +2,7 @@
 // e executada aos poucos pela fila, respeitando o limite. Modo automático (a próxima fase entra
 // sozinha) ou manual (espera você liberar, pelo app ou pelo Telegram).
 import { randomUUID } from 'crypto'
-import type { Demand, DemandPlan, LimitsState, OpResult, PlanPhase, PlanPhaseStatus, PlanSlot, QueueTask, TaskTier } from '../shared/types'
+import type { Demand, DemandPlan, LimitWindow, OpResult, PlanPhase, PlanPhaseStatus, PlanSlot, QueueTask, TaskTier } from '../shared/types'
 import { computeSchedule, fmtReset } from './limits'
 
 const OPEN = '<<<FASES'
@@ -113,22 +113,23 @@ export class PlanRunner {
         add: (t: { projectId: string; demandId: string; prompt: string; tier: TaskTier; notBefore?: number; planPhaseId: string }) => OpResult & { taskId?: string }
         cancel: (id: string) => void
       }
-      limits: () => LimitsState
+      /** Janela de 5h e teto da conta do projeto */
+      limits: (projectId: string) => { fiveHour: LimitWindow | null; capPct: number }
       notify: (title: string, body: string, demandId: string) => void
       /** Modo manual: pergunta no Telegram se libera a próxima fase */
       askRelease: (d: Demand, ph: PlanPhase, text: string) => void
     }
   ) {}
 
-  private slots(plan: DemandPlan, now = Date.now()): PlanSlot[] {
-    const l = this.d.limits()
+  private slots(d: Demand, plan: DemandPlan, now = Date.now()): PlanSlot[] {
+    const l = this.d.limits(d.projectId)
     return computeSchedule(plan.phases, l.fiveHour, l.capPct, now)
   }
 
   /** Agenda atual (para mostrar na demanda) */
   preview(id: string): PlanSlot[] {
     const d = this.d.get(id)
-    return d?.plan ? this.slots(d.plan) : []
+    return d?.plan ? this.slots(d, d.plan) : []
   }
 
   private clone(d: Demand): DemandPlan | null {
@@ -216,7 +217,7 @@ export class PlanRunner {
       this.d.setPlan(d.id, plan, note ?? 'Plano por fases concluído')
       return { ok: true, message: 'Nenhuma fase pendente.' }
     }
-    const slot = this.slots(plan, now).find((s) => s.id === next.id)
+    const slot = this.slots(d, plan, now).find((s) => s.id === next.id)
     const at = slot && slot.at > now + 60_000 ? slot.at : undefined
     const r = this.d.queue.add({ projectId: d.projectId, demandId: d.id, prompt: phaseMessage(plan, next), tier: next.tier, notBefore: at, planPhaseId: next.id })
     if (!r.ok || !r.taskId) {
@@ -285,7 +286,7 @@ export class PlanRunner {
     }
     next.status = 'aguardando'
     this.d.setPlan(d.id, plan, `Fase ${n} feita; esperando você liberar a próxima`)
-    const slot = this.slots(plan).find((s) => s.id === next.id)
+    const slot = this.slots(d, plan).find((s) => s.id === next.id)
     const when = !slot || slot.at <= Date.now() + 60_000 ? 'pode começar agora' : `o limite deixa às ${fmtReset(slot.at)}`
     const text = `Fase ${n} feita: ${ph.title}.\nPróxima: ${next.title} (~${next.estPct}% da janela; ${when}).`
     this.d.notify(`⏸ ${d.key}: liberar a próxima fase?`, text, d.id)

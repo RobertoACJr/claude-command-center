@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { FolderGit2, FolderOpen, Link2, Plus, X } from 'lucide-react'
-import type { ClaudePerms, Project, ProjectKind, ProjectVar } from '@shared/types'
+import type { AccountProfile, ClaudePerms, Project, ProjectKind, ProjectVar } from '@shared/types'
 import { cn } from '../lib/utils'
 import { RuntimeFields, emptyRuntime, runtimeOf, type Runtime } from './ProjectRuntime'
 import { ClaudePermsEditor } from './ClaudePermsEditor'
@@ -34,8 +34,11 @@ export function ProjectModal({
   initial,
   onClose,
   onSave,
-  projects
+  projects,
+  accounts = []
 }: {
+  /** Contas das IAs cadastradas (Configurações → IAs → Contas) */
+  accounts?: AccountProfile[]
   /** Todos os projetos (para ligar este a outros) */
   projects: Project[]
   open: boolean
@@ -61,6 +64,7 @@ export function ProjectModal({
   const [guideOk, setGuideOk] = useState<boolean[]>([])
   const [linked, setLinked] = useState<string[]>([])
   const [runtime, setRuntime] = useState<Runtime>(emptyRuntime())
+  const [accountId, setAccountId] = useState('')
 
   useEffect(() => {
     if (!open) return
@@ -74,6 +78,7 @@ export function ProjectModal({
     setGuides((initial?.guides ?? []).join('\n'))
     setCheckCommand(initial?.checkCommand ?? '')
     setKind(initial?.kind ?? 'outro')
+    setAccountId(initial?.accountId ?? '')
     setLocalUrl(initial?.localUrl ?? '')
     setRoutes((initial?.routes ?? []).join('\n'))
     setMobileShots(initial?.mobileShots ?? false)
@@ -146,6 +151,7 @@ export function ProjectModal({
       mobileShots,
       memoryFile: memoryFile.trim() || 'CLAUDE.md',
       linkedProjectIds: linked.filter((id) => projects.some((o) => o.id === id)),
+      accountId: accounts.some((a) => a.id === accountId) ? accountId : '',
       ...runtime,
       stopCommand: runtime.stopCommand.trim(),
       healthUrl: runtime.healthUrl.trim(),
@@ -345,6 +351,22 @@ export function ProjectModal({
                 )
               })}
           </div>
+        </Field>
+      )}
+
+      {accounts.length > 0 && (
+        <Field
+          label="Conta das IAs"
+          hint="Tudo deste projeto (fila, fases, demandas, console, Remote Control) roda com o login desta conta. Conversas antigas ficam na conta onde foram feitas."
+        >
+          <select data-testid="project-account" className={inputCls} value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+            <option value="">Padrão deste PC</option>
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
         </Field>
       )}
 

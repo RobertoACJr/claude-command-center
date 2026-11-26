@@ -55,6 +55,12 @@ export class RunManager {
   }
 
   private claudeArgsProvider: ((runId: string, req: RunRequest) => string[]) | null = null
+  /** Conta do projeto: id ('' = padrão) e o ambiente com a pasta de login do Claude/Codex */
+  private account: (req: RunRequest) => { id: string; env: Record<string, string> } = () => ({ id: '', env: {} })
+
+  setAccountProvider(fn: (req: RunRequest) => { id: string; env: Record<string, string> }): void {
+    this.account = fn
+  }
 
   /** Quem decide os argumentos de permissão do Claude (o servidor de aprovação, no index) */
   setClaudeArgsProvider(fn: (runId: string, req: RunRequest) => string[]): void {
@@ -193,7 +199,8 @@ export class RunManager {
     if (req.readOnly) args.push('--disallowedTools', 'Edit,Write,MultiEdit,NotebookEdit,Bash')
 
     // A aprovação pode esperar você responder: dá tempo de sobra para a ferramenta MCP
-    const child = spawnClaude(args, req.cwd, { stdin: true, env: { MCP_TOOL_TIMEOUT: '660000' } })
+    const acc = this.account(req)
+    const child = spawnClaude(args, req.cwd, { stdin: true, env: { MCP_TOOL_TIMEOUT: '660000', ...acc.env } })
     let sentSession = false
 
     const push = this.pipeLines(runId, child, (line) => {
@@ -231,11 +238,11 @@ export class RunManager {
           break
         }
         case 'rate_limit_event': {
-          for (const u of parseRateLimitEvent(msg)) this.emit({ runId, type: 'limit', ...u })
+          for (const u of parseRateLimitEvent(msg)) this.emit({ runId, type: 'limit', account: acc.id, ...u })
           break
         }
         case 'result': {
-          if (isLimitError(msg)) this.emit({ runId, type: 'limit', window: null, status: 'bloqueado', resetsAt: null, pct: null })
+          if (isLimitError(msg)) this.emit({ runId, type: 'limit', account: acc.id, window: null, status: 'bloqueado', resetsAt: null, pct: null })
           const secs = msg.duration_ms ? (msg.duration_ms / 1000).toFixed(1) + 's' : ''
           const cost = typeof msg.total_cost_usd === 'number' ? ` · US$ ${msg.total_cost_usd.toFixed(4)}` : ''
           const turns = msg.num_turns ? ` · ${msg.num_turns} turno(s)` : ''
@@ -350,7 +357,7 @@ export class RunManager {
    */
   private startCodex(runId: string, req: RunRequest): ChildProcess {
     const prompt = req.variables ? fillPrompt(req.content, req.variables) : req.content
-    const child = spawnCodex(['exec', '--json', '--skip-git-repo-check', '-'], req.cwd, { stdin: true })
+    const child = spawnCodex(['exec', '--json', '--skip-git-repo-check', '-'], req.cwd, { stdin: true, env: this.account(req).env })
     const push = this.pipeLines(runId, child, (line) => {
       if (!line.trim()) return
       let msg: Record<string, any>

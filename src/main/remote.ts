@@ -27,6 +27,9 @@ export class RemoteManager {
 
   constructor(private notify: (sessions: RemoteSession[]) => void) {}
 
+  /** Ambiente da conta do projeto (pasta de login do Claude) */
+  accountEnv: (p: Project) => Record<string, string> = () => ({})
+
   list(): RemoteSession[] {
     return [...[...this.entries.values()].map((e) => e.session), ...this.finished.values()]
   }
@@ -110,7 +113,7 @@ export class RemoteManager {
 
     const name = `${p.name} · Command Center`.replace(/[^\w .·-]/g, '').slice(0, 60)
     // --spawn same-dir evita a pergunta interativa "Spawn mode for this project"
-    const child = spawnClaude(['remote-control', '--name', name, '--spawn', 'same-dir'], p.path)
+    const child = spawnClaude(['remote-control', '--name', name, '--spawn', 'same-dir'], p.path, { env: this.accountEnv(p) })
     session.pid = child.pid
     const entry: Entry = { child, session, path: p.path }
     this.entries.set(p.id, entry)

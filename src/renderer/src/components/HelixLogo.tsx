@@ -9,9 +9,21 @@ import { LOGO_PROMPT, LOGO_RINGS, LOGO_TILE } from './logoLayers'
  */
 export type HelixTone = 'online' | 'away' | 'vigia'
 
-export function HelixLogo({ size = 36, tone = 'online', spin = false }: { size?: number; tone?: HelixTone; spin?: boolean }) {
+export function HelixLogo({
+  size = 36,
+  tone = 'online',
+  spin = false,
+  hover: outerHover
+}: {
+  size?: number
+  tone?: HelixTone
+  spin?: boolean
+  /** Hover controlado por fora (ex: o mouse no nome ao lado também gira) */
+  hover?: boolean
+}) {
   // Gira trabalhando (`spin`) ou com o mouse em cima; ao parar, termina a volta (para na mesma posição)
-  const [hover, setHover] = useState(false)
+  const [ownHover, setHover] = useState(false)
+  const hover = outerHover ?? ownHover
   const want = spin || hover
   const [turning, setTurning] = useState(spin)
   // Só do mouse: volta mais rápida. A velocidade é escolhida ao começar, para não dar tranco no meio.
@@ -27,7 +39,7 @@ export function HelixLogo({ size = 36, tone = 'online', spin = false }: { size?:
     <span
       role="img"
       aria-label="Hélice"
-      className="relative inline-block shrink-0 transition-transform duration-300 hover:scale-105"
+      className={'relative inline-block shrink-0 transition-transform duration-300' + (hover ? ' scale-105' : '')}
       style={{ width: size, height: size }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}

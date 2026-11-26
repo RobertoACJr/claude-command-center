@@ -81,6 +81,7 @@ const api: CommandCenterApi = {
   limitsState: () => ipcRenderer.invoke('limits:state'),
   accounts: () => ipcRenderer.invoke('accounts:list'),
   projectAccounts: (id) => ipcRenderer.invoke('accounts:project', id),
+  accountLogin: (id, tool) => ipcRenderer.invoke('accounts:login', id, tool),
   onLimits: (cb) => subscribe<LimitsState>('limits:update', cb),
   statuslineSet: (on) => ipcRenderer.invoke('statusline:set', on),
   statuslineInstalled: () => ipcRenderer.invoke('statusline:installed'),
