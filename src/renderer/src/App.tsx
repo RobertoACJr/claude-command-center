@@ -355,7 +355,8 @@ export default function App() {
   useEffect(() => lineStore.setShort(!!config?.ui.shortHistory), [config?.ui.shortHistory])
 
   // Tema: azul no modo Ausente; lavanda com o Vigia ligado e você Online
-  const vigiaOn = !!config?.watcher.enabled && watcher.phase !== 'off'
+  // Bloqueado (falta integração) não conta como ligado: nada de cor do Vigia nem faixa
+  const vigiaOn = !!config?.watcher.enabled && (watcher.phase === 'idle' || watcher.phase === 'checking')
   useEffect(() => {
     document.documentElement.dataset.mode = config?.status === 'off' ? 'away' : vigiaOn ? 'vigia' : 'online'
   }, [config?.status, vigiaOn])
@@ -657,8 +658,17 @@ export default function App() {
         watcher={watcher}
         watcherEnabled={config.watcher.enabled}
         onToggleWatcher={async () => {
-          // Bloqueado (ex: Google Chat não configurado): leva direto ao guia que falta
-          if (watcher.phase === 'blocked') return openSettings('setup', 'gchat')
+          // Bloqueado (ex: Google Chat não configurado): desliga se estava ligado e leva ao guia que falta
+          if (watcher.phase === 'blocked') {
+            if (config.watcher.enabled) setConfig(await window.api.setWatcherEnabled(false))
+            showToast(`Vigia não ligou: ${watcher.reason}`)
+            return openSettings('setup', 'gchat')
+          }
+          // Sem o Google Chat configurado o Vigia não tem o que olhar: nem liga
+          if (!config.watcher.enabled && !config.integrations.gchat.enabled) {
+            showToast('O Vigia precisa do Google Chat configurado. Abri o guia para você.')
+            return openSettings('setup', 'gchat')
+          }
           setConfig(await window.api.setWatcherEnabled(!config.watcher.enabled))
         }}
         onOpenSettings={() => openSettings()}

@@ -46,7 +46,7 @@ export function Header({
   onOpenPalette: () => void
 }) {
   const on = status === 'on'
-  const vigia = watcherEnabled && watcher.phase !== 'off'
+  const vigia = watcherEnabled && (watcher.phase === 'idle' || watcher.phase === 'checking')
   return (
     <header className="flex h-16 shrink-0 items-center justify-between border-b border-line bg-bg/80 px-5">
       <div className="flex items-center gap-3">
@@ -189,12 +189,13 @@ function WatcherPill({ state, enabled, onClick }: { state: WatcherState; enabled
       icon: <Loader2 size={14} className="animate-spin" />,
       label: 'Verificando…'
     },
-    blocked: { cls: 'border-amber-400/40 bg-amber-400/10 text-amber-300', icon: <Eye size={14} />, label: 'Vigia ⚠' }
+    // Falta configurar: aparência de desligado, com um alerta discreto
+    blocked: { cls: 'border-line bg-card text-zinc-500', icon: <EyeOff size={14} />, label: 'Vigia ⚠' }
   }[state.phase]
 
   const title =
     (state.phase === 'blocked'
-      ? `Vigia bloqueado: ${state.reason}\nClique para abrir o guia de configuração.`
+      ? `Vigia indisponível: ${state.reason}\nClique para abrir o guia de configuração (e desligar).`
       : `Monitorar Google Chat: ${enabled ? 'ligado' : 'desligado'} (clique para ligar/desligar, mesmo Online)\n${state.reason}\nAvisos: sino do app, notificação do sistema, faixa de pedidos e Telegram (se configurado).`) +
     (state.lastResult ? `\nÚltimo: ${state.lastResult}` : '')
 
@@ -210,7 +211,7 @@ function WatcherPill({ state, enabled, onClick }: { state: WatcherState; enabled
     >
       {look.icon}
       {look.label}
-      {state.phase !== 'off' && !enabled && <span className="text-[10px] opacity-70">auto</span>}
+      {state.phase !== 'off' && state.phase !== 'blocked' && !enabled && <span className="text-[10px] opacity-70">auto</span>}
     </button>
   )
 }
