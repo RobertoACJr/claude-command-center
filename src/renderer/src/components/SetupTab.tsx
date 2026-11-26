@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   AppWindow,
   CheckCircle2,
@@ -126,8 +126,20 @@ function Guide({
   open?: boolean
 }) {
   const [open, setOpen] = useState(initial)
+  // Aberto direto (ex: clicou no Vigia sem o Google Chat): rola até o guia e destaca por um instante
+  const box = useRef<HTMLDivElement>(null)
+  const [flash, setFlash] = useState(initial)
+  useEffect(() => {
+    if (!initial) return
+    const t1 = setTimeout(() => box.current?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 80)
+    const t2 = setTimeout(() => setFlash(false), 1800)
+    return () => {
+      clearTimeout(t1)
+      clearTimeout(t2)
+    }
+  }, [initial])
   return (
-    <div className="rounded-xl border border-line bg-card-2">
+    <div ref={box} className={cn('scroll-mt-2 rounded-xl border bg-card-2 transition-colors duration-700', flash ? 'border-violet' : 'border-line')}>
       <button type="button" onClick={() => setOpen(!open)} className="flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-left">
         {open ? <ChevronDown size={14} className="text-zinc-500" /> : <ChevronRight size={14} className="text-zinc-500" />}
         {done ? <CheckCircle2 size={15} className="text-emerald-400" /> : <CircleDashed size={15} className="text-zinc-500" />}

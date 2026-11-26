@@ -805,7 +805,7 @@ export default function App() {
       />
 
       {toast && (
-        <div className="animate-modal fixed right-4 bottom-20 z-50 max-w-sm rounded-xl border border-red-500/40 bg-card px-4 py-3 text-sm text-red-200 shadow-2xl">
+        <div className="animate-modal fixed right-4 bottom-20 z-[70] max-w-sm rounded-xl border border-red-500/40 bg-card px-4 py-3 text-sm text-red-200 shadow-2xl">
           {toast}
         </div>
       )}
