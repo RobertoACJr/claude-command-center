@@ -41,7 +41,10 @@ export function WatcherTab({ config, watcher, save }: { config: AppConfig; watch
         intervalMin: w.intervalMin,
         focus: w.focus,
         model: w.model,
-        provider: w.provider
+        provider: w.provider,
+        questions: w.questions,
+        myName: w.myName,
+        important: w.important
       }
     })
     setSaved(true)
@@ -114,6 +117,23 @@ export function WatcherTab({ config, watcher, save }: { config: AppConfig; watch
             onChange={(e) => setW({ ...w, focus: e.target.value })}
             placeholder='ex: espaço "Deploys Squad X", mensagens do Fulano, palavras "subir", "homolog"'
           />
+        </Field>
+        <Toggle
+          checked={w.questions}
+          onChange={(v) => setW({ ...w, questions: v })}
+          label="Também perguntas e menções a você"
+          hint="Além dos pedidos de deploy, o Vigia avisa quando alguém te pergunta algo ou te menciona e você ainda não respondeu, já com um rascunho de resposta. Nada é enviado sem você mandar (no app ou no Telegram)."
+        />
+        {w.questions && (
+          <Field label="Como te chamam no chat" hint="Nome, apelido ou @, para achar as menções.">
+            <input className={inputCls + ' text-xs'} value={w.myName} onChange={(e) => setW({ ...w, myName: e.target.value })} placeholder="ex: Roberto, Beto, @roberto" />
+          </Field>
+        )}
+        <Field
+          label="Pessoas e espaços importantes"
+          hint="Separados por vírgula. O que vier deles aparece com ⭐, avisa sempre e pode ligar para você (aba Telegram → Ligação)."
+        >
+          <input className={inputCls + ' text-xs'} value={w.important} onChange={(e) => setW({ ...w, important: e.target.value })} placeholder="ex: Fulano da Silva, Gerência, Deploys Produção" />
         </Field>
         <div className="flex items-center gap-2">
           <Button variant="primary" size="sm" onClick={persist}>

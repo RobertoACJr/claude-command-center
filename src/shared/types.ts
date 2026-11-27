@@ -269,6 +269,65 @@ export interface GeneralPrefs {
   notifyScriptDone: boolean
   /** Jornadas: pausar o cronômetro depois de tantos minutos sem mexer no PC (0 = nunca) */
   idlePauseMin: number
+  /** Editor do botão "Abrir no editor" ('' = o primeiro encontrado; 'custom' = comando próprio) */
+  editor: string
+  /** Comando próprio do editor: {pasta}, {arquivo} e {linha} */
+  editorCommand: string
+  /** O que avisa onde (cada tipo de aviso: notificação do sistema e Telegram) */
+  notify: Record<NotificationKind, NotifyPref>
+}
+
+/** Onde um tipo de aviso aparece (o sino do app sempre recebe) */
+export interface NotifyPref {
+  /** Notificação do sistema (com a janela fora de foco) */
+  desktop: boolean
+  /** Telegram: nunca, só quando Ausente, ou sempre */
+  telegram: 'nunca' | 'ausente' | 'sempre'
+}
+
+/** Editor encontrado (ou não) neste PC */
+export interface EditorInfo {
+  id: string
+  label: string
+  found: boolean
+}
+
+/** Card do Jira atribuído a você, sem demanda ainda */
+export interface JiraSuggestion {
+  key: string
+  summary: string
+  status: string
+  /** Projeto provável (pelas demandas com o mesmo prefixo; '' = escolher) */
+  projectId: string
+}
+
+/** Arquivo alterado (tela de mudanças) */
+export interface DiffFile {
+  path: string
+  oldPath?: string
+  /** M alterado · A novo · D apagado · R renomeado · ? novo sem git add */
+  status: 'M' | 'A' | 'D' | 'R' | '?'
+  add: number | null
+  del: number | null
+  binary: boolean
+}
+
+export interface DiffSummary {
+  ok: boolean
+  message?: string
+  /** local = pasta × último commit · base = pasta × onde a branch saiu da principal */
+  mode: 'local' | 'base'
+  ref: string
+  refLabel: string
+  branch: string | null
+  files: DiffFile[]
+}
+
+export interface DiffText {
+  text: string
+  binary: boolean
+  truncated: boolean
+  error?: string
 }
 
 export type NotificationKind = 'pedido' | 'permissao' | 'projeto' | 'script' | 'atualizacao' | 'vigia' | 'remote' | 'demanda' | 'fila' | 'custos' | 'sistema'
@@ -333,6 +392,23 @@ export interface TelegramConfig {
   forwardNotifications: boolean
   /** Manda o relatório da semana (horas por demanda) toda sexta às 17h */
   weeklyReport: boolean
+  /** Ligação de voz pelo Telegram (CallMeBot, serviço externo e não oficial) */
+  call: CallConfig
+}
+
+/** Ligação pelo Telegram via CallMeBot: o robô liga e lê um texto curto */
+export interface CallConfig {
+  enabled: boolean
+  /** Seu @usuario do Telegram (ou o número com +55…) */
+  user: string
+  /** Voz (ex: pt-BR-Standard-A) */
+  lang: string
+  /** Ligar quando o pedido vier marcado como urgente */
+  onUrgent: boolean
+  /** Ligar quando escrever uma pessoa/espaço importante (Vigia) */
+  onImportant: boolean
+  /** Só ligar quando você estiver Ausente */
+  onlyAway: boolean
 }
 
 export interface WatcherConfig {
@@ -350,6 +426,12 @@ export interface WatcherConfig {
   lastCheckAt: number | null
   /** IDs de mensagens já alertadas (dedupe) */
   seen: string[]
+  /** Também procurar perguntas e menções a você (além de pedidos de deploy) */
+  questions: boolean
+  /** Como te chamam no chat (nome, apelido, @), para achar as menções */
+  myName: string
+  /** Pessoas ou espaços importantes, separados por vírgula: sempre avisam (e podem ligar) */
+  important: string
 }
 
 export type AlertStatus = 'pending' | 'approved' | 'dismissed'
@@ -358,6 +440,12 @@ export type Urgency = 'baixa' | 'normal' | 'alta'
 
 export interface DeployAlert {
   id: string
+  /** deploy = pedido de deploy/ambiente · pergunta = pergunta ou menção a você */
+  kind?: 'deploy' | 'pergunta'
+  /** Rascunho de resposta que a IA escreveu (perguntas); só sai com a sua aprovação */
+  draft?: string
+  /** Quem escreveu (ou o espaço) está na sua lista de importantes */
+  important?: boolean
   /** O que ficou faltando no pedido (ex: "ambiente não informado") */
   missing: string[]
   urgency: Urgency
@@ -612,7 +700,7 @@ export interface SecretsStatus {
 export interface SettingsPatch {
   general?: Partial<Omit<GeneralPrefs, 'trayHintShown'>>
   integrations?: Partial<Omit<IntegrationsConfig, 'lastApplied'>>
-  telegram?: Partial<TelegramConfig>
+  telegram?: Partial<Omit<TelegramConfig, 'call'>> & { call?: Partial<CallConfig> }
   watcher?: Partial<Omit<WatcherConfig, 'seen' | 'lastCheckAt'>>
   ai?: Partial<AiConfig>
   claudeGlobal?: Partial<ClaudePerms>
@@ -1128,6 +1216,22 @@ export interface CommandCenterApi {
   /** Jornadas: tempo em cada demanda */
   worklogState(): Promise<WorkLogState>
   limitsState(): Promise<LimitsState>
+  /** Cards do Jira atribuídos a você que ainda não viraram demanda (da última sincronização) */
+  jiraSuggestions(): Promise<JiraSuggestion[]>
+  onJiraSuggestions(cb: (list: JiraSuggestion[]) => void): () => void
+  /** Não sugerir mais este card */
+  jiraDismiss(key: string): Promise<JiraSuggestion[]>
+  /** Manda um texto (ex: o rascunho, editado ou não) na conversa do pedido */
+  alertSendText(alertId: string, text: string): Promise<OpResult>
+  /** Liga agora pelo Telegram para testar */
+  callTest(): Promise<OpResult>
+  /** Mudanças do projeto (tela de mudanças) */
+  diffSummary(projectId: string, mode: 'local' | 'base'): Promise<DiffSummary>
+  diffFile(projectId: string, file: DiffFile, ref: string): Promise<DiffText>
+  /** Editores encontrados neste PC */
+  editors(): Promise<EditorInfo[]>
+  /** Abre o projeto (ou um arquivo dele, na linha) no editor */
+  openEditor(projectId: string, file?: string, line?: number): Promise<OpResult>
   /** Contas logadas nas IAs deste PC */
   accounts(): Promise<AccountInfo[]>
   projectAccounts(projectId: string): Promise<ProjectAccounts | null>

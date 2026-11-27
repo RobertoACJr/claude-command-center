@@ -1,28 +1,6 @@
 // Aba Revisão da demanda (revisão de código pela IA)
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import {
-  CheckCircle2,
-  ClipboardList,
-  Download,
-  ExternalLink,
-  GitBranch,
-  GitMerge,
-  Copy,
-  Lightbulb,
-  MessageSquare,
-  GitPullRequest,
-  ListTodo,
-  Loader2,
-  MessageSquarePlus,
-  PenLine,
-  Play,
-  RotateCcw,
-  Search,
-  Send,
-  Square,
-  SquareTerminal,
-  Trash2
-} from 'lucide-react'
+import { CheckCircle2, ClipboardList, Download, ExternalLink, GitBranch, GitMerge, Copy, Lightbulb, MessageSquare, GitPullRequest, ListTodo, Loader2, MessageSquarePlus, PenLine, Play, RotateCcw, Search, Send, Square, SquareTerminal, Trash2, FileDiff } from 'lucide-react'
 import type { Demand, DemandAi, DemandBusy, DemandQueueCopy, DemandStatus, GitInfo, OpResult, PrComment, PrDraft, Project, ReviewAi } from '@shared/types'
 import { looksLikeRule } from '@shared/text'
 import { ShotsView } from '../ShotsView'
@@ -39,8 +17,11 @@ export function ReviewTab({
   reviewing,
   onAi,
   onResult,
-  flush
+  flush,
+  onShowDiff
 }: {
+  /** Abre a tela de mudanças do projeto (desde a base) */
+  onShowDiff?: () => void
   d: Demand
   working: boolean
   reviewing: boolean
@@ -85,6 +66,11 @@ export function ReviewTab({
           >
             <Search size={12} /> {rv ? 'Revisar de novo' : 'Revisar a branch'}
           </Button>
+          {onShowDiff && (
+            <Button size="sm" onClick={onShowDiff} data-testid="demand-diff" title="Ver as mudanças da branch aberta na pasta, sem abrir o editor">
+              <FileDiff size={12} /> Ver mudanças
+            </Button>
+          )}
         </div>
         <p className="text-[11px] text-zinc-500">
           Compara a branch <code className="font-mono text-purple">{d.key}</code> com a principal (commits + o que ainda está sem

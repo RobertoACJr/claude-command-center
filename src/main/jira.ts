@@ -126,3 +126,30 @@ export function jiraConfigured(): boolean {
   const j = store.get().integrations.jira
   return !!(j.url && j.email && secrets.get('jira.token'))
 }
+
+/** Card atribuído a você que ainda não virou demanda */
+export interface JiraAssigned {
+  key: string
+  summary: string
+  status: string
+  updated: string
+}
+
+/** Cards abertos atribuídos a você (mais recentes primeiro) */
+export async function jiraAssigned(max = 30): Promise<OpResult & { issues?: JiraAssigned[] }> {
+  const jql = 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC'
+  const q = `jql=${encodeURIComponent(jql)}&fields=summary,status,updated&maxResults=${max}`
+  // Jira Cloud novo: search/jql; Jira Server/antigo: search
+  let r = await jira(`search/jql?${q}`)
+  if (!r.ok && (r.status === 404 || r.status === 410)) r = await jira(`search?${q}`)
+  if (!r.ok) return { ok: false, message: r.message ?? 'O Jira não respondeu.' }
+  const issues: JiraAssigned[] = (Array.isArray(r.data?.issues) ? r.data.issues : [])
+    .filter((i: any) => typeof i?.key === 'string')
+    .map((i: any) => ({
+      key: String(i.key),
+      summary: String(i.fields?.summary ?? '').slice(0, 300),
+      status: String(i.fields?.status?.name ?? ''),
+      updated: String(i.fields?.updated ?? '')
+    }))
+  return { ok: true, message: `${issues.length} card(s) atribuído(s) a você.`, issues }
+}

@@ -25,6 +25,7 @@ import { isProdEnv } from '@shared/vars'
 import { ClaudePermsEditor } from '../ClaudePermsEditor'
 import { Copy, SetupTab, TOOLS, type Os } from '../SetupTab'
 import { useAis } from '../../lib/ais'
+import { CallSection } from './CallSection'
 import { HelpTip, Section, SecretInput, Result, useBusy, Spin, CHECK_STYLE, fmtWhen, CheckList, CheckBadge, Switch, IconBtn, type SaveFn } from './shared'
 
 export function TranscribeField({ config, save }: { config: AppConfig; save: SaveFn }) {
@@ -78,6 +79,7 @@ export function TelegramTab({ config, sec, save }: { config: AppConfig; sec: Sec
   }
 
   return (
+    <div className="space-y-3">
     <Section icon={<Send size={15} />} title="Notificações no celular via Telegram">
       <ol className="list-decimal space-y-0.5 pl-4 text-xs text-zinc-500">
         <li>
@@ -155,10 +157,12 @@ export function TelegramTab({ config, sec, save }: { config: AppConfig; sec: Sec
       <Toggle
         checked={config.telegram.forwardNotifications}
         onChange={(v) => save({ telegram: { forwardNotifications: v } })}
-        label="No modo Ausente, mandar também os avisos do sino"
-        hint="Projeto que caiu, script que terminou, Vigia com problema e versão nova. Pedidos e permissões já chegam sempre."
+        label="Repassar avisos do sino para o Telegram"
+        hint="O que vai e quando (nunca, só Ausente, sempre) você escolhe por tipo em Geral → O que avisa onde. Pedidos e permissões já chegam sempre."
       />
       <TranscribeField config={config} save={save} />
     </Section>
+    <CallSection config={config} save={save} />
+    </div>
   )
 }

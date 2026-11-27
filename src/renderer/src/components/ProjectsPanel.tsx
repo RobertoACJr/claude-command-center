@@ -1,6 +1,6 @@
-import { Activity, Boxes, ScrollText, AlertTriangle, AppWindow, Camera, ChevronsDownUp, ChevronsUpDown, Link2, Braces, ChevronDown, ChevronRight, Copy, ExternalLink, FolderGit2, GitBranch, Loader2, Pencil, Play, Plus, Radio, RefreshCw, RotateCcw, RotateCw, Square, SquareTerminal, Trash2, Smartphone } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
-import type { AccountProfile, Demand, DemandBusy, GitInfo, OpResult, Project, ProjectRunState, RemoteSession, Script, WorkProfile } from '@shared/types'
+import { Activity, Boxes, ScrollText, AlertTriangle, AppWindow, Camera, ChevronsDownUp, ChevronsUpDown, Link2, Braces, ChevronDown, ChevronRight, Copy, ExternalLink, FolderGit2, GitBranch, Loader2, Pencil, Play, Plus, Radio, RefreshCw, RotateCcw, RotateCw, Square, SquareTerminal, Trash2, Smartphone, Code2, X } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import type { AccountProfile, Demand, DemandBusy, JiraSuggestion, GitInfo, OpResult, Project, ProjectRunState, RemoteSession, Script, WorkProfile } from '@shared/types'
 import { EnvModal, LogModal, PortOwnerChip, ProfilesMenu, SyncLinkedMenu } from './ProjectTools'
 import { statusInfo } from './DemandModal'
 import { Button, EmptyState, IconButton } from './ui'
@@ -37,7 +37,7 @@ export function ProjectsPanel({
   demands: Demand[]
   demandsBusy: DemandBusy[]
   onOpenDemand: (d: Demand) => void
-  onNewDemand: (projectId: string) => void
+  onNewDemand: (projectId: string, preset?: { key: string; title: string }) => void
   gitInfos: Record<string, GitInfo | null | undefined>
   onGitDiff: (p: Project) => void
   onGitResult: (r: OpResult) => void
@@ -63,6 +63,7 @@ export function ProjectsPanel({
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed)
   const [filter, setFilterState] = useState<string>(loadFilter)
+  const suggestions = useJiraSuggestions()
   const setFilter = (v: string) => {
     setFilterState(v)
     saveFilter(v)
@@ -163,6 +164,8 @@ export function ProjectsPanel({
           />
         )}
 
+        <JiraSuggestBox list={suggestions.filter((x) => !x.projectId || !projects.some((p) => p.id === x.projectId))} projects={projects} onCreate={onNewDemand} />
+
         {projects.length > 0 && visible.length === 0 && (
           <EmptyState icon={<FolderGit2 size={20} />} title="Nenhum projeto nesta conta" text="Troque o filtro de contas no topo do painel para ver os outros." />
         )}
@@ -172,6 +175,7 @@ export function ProjectsPanel({
             key={p.id}
             p={p}
             accountName={accounts.find((a) => a.id === accOf(p))?.name}
+            suggestions={suggestions.filter((x) => x.projectId === p.id)}
             branch={branches[p.id]}
             session={remote[p.id]}
             run={runStates[p.id]}
@@ -317,8 +321,11 @@ function ProjectCard({
   onOpenEnv,
   onOpenLog,
   onToolResult,
-  accountName
+  accountName,
+  suggestions = []
 }: {
+  /** Cards do Jira atribuídos a você, sem demanda, que parecem deste projeto */
+  suggestions?: JiraSuggestion[]
   /** Conta das IAs do projeto (vazio = a padrão do PC) */
   accountName?: string
   collapsed: boolean
@@ -329,7 +336,7 @@ function ProjectCard({
   demands: Demand[]
   demandsBusy: DemandBusy[]
   onOpenDemand: (d: Demand) => void
-  onNewDemand: (projectId: string) => void
+  onNewDemand: (projectId: string, preset?: { key: string; title: string }) => void
   git: GitInfo | null | undefined
   onGitDiff: (p: Project) => void
   onGitResult: (r: OpResult) => void
@@ -530,15 +537,17 @@ function ProjectCard({
         )}
         <GitMenu p={p} branch={branch} git={git} onDiff={() => onGitDiff(p)} onResult={onGitResult} />
         {git && git.changed > 0 && (
-          <span
-            title={git.conflicts ? `${git.conflicts} arquivo(s) com conflito` : 'Arquivos alterados ou novos, sem commit'}
+          <button
+            type="button"
+            onClick={() => onGitDiff(p)}
+            title={git.conflicts ? `${git.conflicts} arquivo(s) com conflito. Clique para ver as mudanças` : 'Arquivos alterados ou novos, sem commit. Clique para ver as mudanças'}
             className={cn(
-              'rounded-md border px-1.5 py-0.5 text-[11px]',
+              'cursor-pointer rounded-md border px-1.5 py-0.5 text-[11px] hover:bg-white/5',
               git.conflicts ? 'border-red-500/40 text-red-300' : 'border-amber-400/40 text-amber-300'
             )}
           >
             {git.conflicts ? `⚠ ${git.conflicts} conflito(s)` : `● ${git.changed} alterado${git.changed > 1 ? 's' : ''}`}
-          </span>
+          </button>
         )}
         {git && (git.ahead > 0 || git.behind > 0) && (
           <span
@@ -599,6 +608,16 @@ function ProjectCard({
         <Button size="sm" onClick={() => onOpenTerminal(p.id)} title="Abrir o terminal deste projeto">
           <SquareTerminal size={12} /> Terminal
         </Button>
+        {p.path && (
+          <Button
+            size="sm"
+            data-testid="project-editor"
+            title="Abrir o projeto no editor (escolha qual em Configurações → Geral)"
+            onClick={() => void window.api.openEditor(p.id).then((r) => !r.ok && onToolResult(r))}
+          >
+            <Code2 size={12} /> Editor
+          </Button>
+        )}
         {p.path && (
           <Button size="sm" onClick={onOpenEnv} title="Contas do projeto (git e Claude), containers do Docker (shell, log, reiniciar, comandos) e troca de .env" data-testid="project-env">
             <Boxes size={12} /> Ambiente
@@ -674,6 +693,13 @@ function ProjectCard({
           </IconButton>
           </div>
         </div>
+        {suggestions.length > 0 && (
+          <div className="mt-1.5 space-y-1" data-testid="jira-suggestions">
+            {suggestions.slice(0, 5).map((x) => (
+              <SuggestRow key={x.key} x={x} onCreate={() => onNewDemand(p.id, { key: x.key, title: x.summary })} />
+            ))}
+          </div>
+        )}
         {showDemands && (
           <div className="mt-1.5 space-y-1">
             {(showDone ? demands : openDemands).map((d) => {
@@ -814,7 +840,7 @@ function GitMenu({
               onDiff()
             }}
           >
-            ± Ver diferenças ({git.changed} alterado{git.changed === 1 ? '' : 's'})
+            ± Ver mudanças ({git.changed} alterado{git.changed === 1 ? '' : 's'})
           </button>
           <div className="border-t border-line px-3 pt-2 pb-1 text-[10px] uppercase tracking-wide text-zinc-600">Trocar de branch</div>
           <div className="max-h-48 overflow-y-auto pb-1">
@@ -935,5 +961,77 @@ function RemoteBadge({ projects, remote }: { projects: Project[]; remote: Record
       <Smartphone size={11} />
       {active.length}
     </span>
+  )
+}
+
+/** Cards do Jira atribuídos a você sem demanda (vêm da sincronização: ao abrir o app e no botão) */
+function useJiraSuggestions(): JiraSuggestion[] {
+  const [list, setList] = useState<JiraSuggestion[]>([])
+  useEffect(() => {
+    void window.api.jiraSuggestions().then(setList)
+    return window.api.onJiraSuggestions(setList)
+  }, [])
+  return list
+}
+
+function SuggestRow({ x, onCreate, children }: { x: JiraSuggestion; onCreate: () => void; children?: ReactNode }) {
+  const [hidden, setHidden] = useState(false)
+  if (hidden) return null
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-dashed border-violet/40 bg-violet/5 px-2.5 py-1.5 text-xs" title={`No Jira: ${x.status}`}>
+      <span className="shrink-0 rounded bg-violet/15 px-1 text-[10px] text-purple">novo</span>
+      <span className="shrink-0 font-mono text-[11px] text-purple">{x.key}</span>
+      <span className="min-w-0 flex-1 truncate text-zinc-300">{x.summary}</span>
+      {children}
+      <button type="button" onClick={onCreate} className="shrink-0 cursor-pointer text-[11px] text-purple hover:underline" data-testid="jira-suggest-create">
+        Criar demanda
+      </button>
+      <button
+        type="button"
+        title="Não sugerir mais este card"
+        onClick={() => {
+          setHidden(true)
+          void window.api.jiraDismiss(x.key)
+        }}
+        className="shrink-0 cursor-pointer text-zinc-600 hover:text-zinc-300"
+      >
+        <X size={12} />
+      </button>
+    </div>
+  )
+}
+
+/** Sugestões sem projeto certo: você escolhe o projeto */
+function JiraSuggestBox({
+  list,
+  projects,
+  onCreate
+}: {
+  list: JiraSuggestion[]
+  projects: Project[]
+  onCreate: (projectId: string, preset: { key: string; title: string }) => void
+}) {
+  const [pick, setPick] = useState<Record<string, string>>({})
+  if (!list.length || !projects.length) return null
+  return (
+    <div className="space-y-1 rounded-xl border border-line bg-card-2 p-2.5" data-testid="jira-suggest-box">
+      <div className="text-[11px] text-zinc-500">Do Jira, atribuídos a você e ainda sem demanda:</div>
+      {list.slice(0, 8).map((x) => (
+        <SuggestRow key={x.key} x={x} onCreate={() => onCreate(pick[x.key] || projects[0].id, { key: x.key, title: x.summary })}>
+          <select
+            value={pick[x.key] || projects[0].id}
+            onChange={(e) => setPick({ ...pick, [x.key]: e.target.value })}
+            className="h-6 shrink-0 cursor-pointer rounded border border-line bg-bg px-1 text-[11px] text-zinc-300 outline-none"
+            title="Projeto da demanda"
+          >
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </SuggestRow>
+      ))}
+    </div>
   )
 }

@@ -39,9 +39,12 @@ export function AlertsBar({
       >
         <span className="flex items-center gap-2 text-sm font-medium text-amber-200">
           <BellRing size={15} className={pending.length ? 'animate-pulse' : ''} />
-          {pending.length
-            ? `${pending.length} pedido(s) de deploy aguardando sua aprovação`
-            : 'Nenhum pedido pendente'}
+          {(() => {
+            const q = pending.filter((x) => x.kind === 'pergunta').length
+            const dep = pending.length - q
+            if (!pending.length) return 'Nenhum pedido pendente'
+            return [dep ? `${dep} pedido(s) de deploy aguardando sua aprovação` : '', q ? `${q} pergunta(s) esperando resposta` : ''].filter(Boolean).join(' · ')
+          })()}
         </span>
         <span className="flex items-center gap-2 text-xs text-zinc-500">
           {resolved > 0 && (
@@ -63,7 +66,10 @@ export function AlertsBar({
 
       {open && (
         <div className="max-h-56 space-y-2 overflow-y-auto px-3 pb-3">
-          {[...alerts].reverse().map((a) => (
+          {[...alerts].reverse().map((a) =>
+            a.kind === 'pergunta' ? (
+              <QuestionCard key={a.id} a={a} onDismiss={onDismiss} />
+            ) : (
             <AlertCard
               key={a.id}
               a={a}
@@ -75,7 +81,8 @@ export function AlertsBar({
               onDismiss={onDismiss}
               onApproveAndRun={onApproveAndRun}
             />
-          ))}
+            )
+          )}
         </div>
       )}
     </div>
@@ -262,6 +269,60 @@ function AlertCard({
           <Button size="sm" variant="ghost" onClick={() => onDismiss(a)}>
             <X size={12} /> Descartar
           </Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Pergunta ou menção a você no Google Chat: o rascunho só sai quando você manda */
+function QuestionCard({ a, onDismiss }: { a: DeployAlert; onDismiss: (a: DeployAlert) => void }) {
+  const [text, setText] = useState(a.draft ?? '')
+  const [sending, setSending] = useState(false)
+  const [msg, setMsg] = useState<string | null>(null)
+  const pending = a.status === 'pending'
+  const send = async () => {
+    setSending(true)
+    setMsg(null)
+    const r = await window.api.alertSendText(a.id, text)
+    setSending(false)
+    setMsg(r.ok ? '✓ enviado' : `✖ ${r.message}`)
+  }
+  return (
+    <div className={cn('rounded-lg border p-3', pending ? 'border-line bg-card' : 'border-line/60 bg-card/50 opacity-60')} data-testid="question-card">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 text-sm text-zinc-100">
+          {a.important && <span className="mr-1.5 rounded bg-violet/20 px-1.5 py-0.5 text-[10px] font-semibold text-purple">IMPORTANTE</span>}
+          {a.urgency === 'alta' && <span className="mr-1.5 rounded bg-red-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-red-300">URGENTE</span>}
+          <MessageSquareReply size={13} className="mr-1 inline text-purple" />
+          <b>{a.requester || 'Alguém'}</b>
+          <span className="text-zinc-500"> te perguntou{a.space ? ` em ${a.space}` : ''}</span>
+          {a.summary && <div className="selectable mt-0.5 text-xs text-zinc-400">{a.summary}</div>}
+        </div>
+        {a.link && (
+          <IconButton title="Abrir a mensagem" onClick={() => window.open(a.link, '_blank')}>
+            <ExternalLink size={13} />
+          </IconButton>
+        )}
+      </div>
+      {pending && (
+        <div className="mt-2 space-y-1.5">
+          <textarea
+            rows={3}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Escreva a resposta (a IA deixou um rascunho quando conseguiu)"
+            className="w-full resize-y rounded-lg border border-line bg-bg px-2.5 py-1.5 text-xs text-zinc-200 outline-none focus:border-violet/60"
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="primary" disabled={sending || !text.trim() || !a.spaceId} onClick={() => void send()} title={a.spaceId ? 'Manda na conversa, na mesma thread' : 'O Vigia não informou a conversa'}>
+              {sending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} Enviar resposta
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => onDismiss(a)}>
+              <X size={12} /> Descartar
+            </Button>
+            {msg && <span className="text-[11px] text-zinc-400">{msg}</span>}
+          </div>
         </div>
       )}
     </div>

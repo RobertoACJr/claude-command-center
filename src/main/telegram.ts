@@ -114,6 +114,19 @@ export function formatAlert(a: DeployAlert, projectName = '', footer?: string): 
   )
 }
 
+/** Pergunta ou menção no Google Chat, com o rascunho de resposta */
+export function formatQuestion(a: DeployAlert): string {
+  return (
+    `💬 <b>${a.important ? '⭐ ' : ''}Te perguntaram no Google Chat</b>${a.urgency === 'alta' ? ' 🔥 URGENTE' : ''}\n\n` +
+    (a.requester ? `<b>Quem:</b> ${escapeHtml(a.requester)}\n` : '') +
+    (a.space ? `<b>Onde:</b> ${escapeHtml(a.space)}\n` : '') +
+    (a.summary ? `\n<i>${escapeHtml(a.summary)}</i>\n` : '') +
+    (a.draft ? `\n✍️ <b>Rascunho de resposta:</b>\n${escapeHtml(a.draft)}\n` : '') +
+    (a.link ? `\n${escapeHtml(a.link)}\n` : '') +
+    '\nNada foi enviado. Envie o rascunho, ou responda no app para editar antes.'
+  )
+}
+
 export interface InlineButton {
   text: string
   callback_data: string

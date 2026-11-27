@@ -51,6 +51,7 @@ import { ShotsModal } from '../components/ShotsView'
 import {
   Clock,
   Bell,
+  Code2,
   Bot,
   ClipboardList,
   Camera,
@@ -199,6 +200,13 @@ export function buildPaletteItems(ctx: PaletteContext): PaletteItem[] {
           label: `Terminal do projeto: ${p.name}`,
           icon: <SquareTerminal size={14} />,
           run: () => openProjectTerminal(p.id)
+        },
+        {
+          id: `editor:${p.id}`,
+          group: 'Projetos',
+          label: `Abrir no editor: ${p.name}`,
+          icon: <Code2 size={14} />,
+          run: () => void window.api.openEditor(p.id).then((r) => !r.ok && showToast(r.message))
         },
         ...(p.kind !== 'outro'
           ? [

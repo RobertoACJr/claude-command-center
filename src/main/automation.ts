@@ -26,7 +26,8 @@ import { costs } from './costs'
 import type { RunManager } from './runner'
 import { secrets } from './secrets'
 import { store } from './store'
-import { editTelegramMessage, escapeHtml, formatAlert, sendTelegramMessage, type InlineButton } from './telegram'
+import { editTelegramMessage, escapeHtml, formatAlert, formatQuestion, sendTelegramMessage, type InlineButton } from './telegram'
+import { callMe } from './callmebot'
 import { parseLastJson } from './watcher'
 
 /**
@@ -68,6 +69,14 @@ export class Automation {
 
   private buttons(cfg: AppConfig, a: DeployAlert): InlineButton[][] {
     if (!cfg.telegram.interactive) return []
+    if (a.kind === 'pergunta') {
+      return [
+        [
+          ...(a.draft && a.spaceId ? [{ text: '✉️ Enviar o rascunho', callback_data: `sd:${a.id}` }] : []),
+          { text: '🗑 Descartar', callback_data: `ds:${a.id}` }
+        ]
+      ]
+    }
     const rows: InlineButton[][] = [
       [
         { text: '✅ Aprovar', callback_data: `ap:${a.id}` },
@@ -82,6 +91,8 @@ export class Automation {
   /** Chamado pelo Vigia para cada pedido novo */
   async onNewAlert(a: DeployAlert): Promise<void> {
     const cfg = store.get()
+    if (a.kind === 'pergunta') return this.onQuestion(cfg, a)
+    void this.maybeCall(cfg, a)
     this.log({
       kind: 'error',
       text: `🚨 Pedido de deploy: ${a.requester || '?'} pediu ${a.card || a.branch || 'deploy'} → ${a.environment || '?'}${a.missing.length ? ` · faltou: ${a.missing.join('; ')}` : ''}`
@@ -117,6 +128,32 @@ export class Automation {
       }
       await this.approve(a.id, 'pela regra automática', true)
     }
+  }
+
+  /** Pergunta ou menção a você: avisa com o rascunho; nada é enviado sem a sua aprovação */
+  private async onQuestion(cfg: AppConfig, a: DeployAlert): Promise<void> {
+    void this.maybeCall(cfg, a)
+    this.log({ kind: 'info', text: `💬 ${a.important ? '⭐ ' : ''}${a.requester || 'Alguém'} te perguntou no Chat: ${a.summary}` })
+    if (!this.telegramReady(cfg)) return
+    const r = await sendTelegramMessage(cfg.telegram.chatId, formatQuestion(a), this.buttons(cfg, a))
+    store.patchAlert(a.id, { telegram: r.ok ? 'sent' : 'failed', telegramMessageId: r.messageId }, r.ok ? 'avisado no Telegram' : undefined)
+  }
+
+  /** Liga pelo Telegram (CallMeBot) se for urgente ou de alguém importante, conforme a configuração */
+  private async maybeCall(cfg: AppConfig, a: DeployAlert): Promise<void> {
+    const c = cfg.telegram.call
+    if (!c.enabled || (c.onlyAway && cfg.status !== 'off')) return
+    const why = a.urgency === 'alta' && c.onUrgent ? 'urgente' : a.important && c.onImportant ? 'importante' : ''
+    if (!why) return
+    // Só o essencial vai para o serviço da ligação: quem e o tipo, nada do conteúdo
+    const who = a.requester || 'alguém'
+    const text =
+      a.kind === 'pergunta'
+        ? `Hélice aqui. ${who} te chamou no Google Chat${why === 'urgente' ? ' com urgência' : ''}. Veja o Telegram.`
+        : `Hélice aqui. Pedido de deploy ${why === 'urgente' ? 'urgente ' : ''}de ${who} no Google Chat. Veja o Telegram.`
+    const r = await callMe(c, text)
+    store.patchAlert(a.id, {}, r.ok ? `ligação feita (${why})` : `ligação falhou: ${r.message}`)
+    this.log({ kind: r.ok ? 'info' : 'error', text: `[Ligação] ${r.ok ? `liguei pelo Telegram (${why})` : r.message}` })
   }
 
   /** Aprova (de onde for: app, Telegram, regra). runRule = também roda o script da regra. */
@@ -229,6 +266,25 @@ export class Automation {
     const a = store.getAlert(alertId)
     const reply: ReplyTemplate | undefined = cfg.replies.find((r) => r.id === replyId)
     if (!a || !reply) return { ok: false, message: 'Pedido ou resposta não encontrados.' }
+    return this.sendText(alertId, fillVariables(reply.text, alertValues(a, this.projectName(cfg, a))).trim(), `resposta "${reply.name}"`, via)
+  }
+
+  /** Rascunho aprovado (editado ou não) */
+  async sendDraft(alertId: string, text: string | null, via: string): Promise<OpResult> {
+    const a = store.getAlert(alertId)
+    const body = (text ?? a?.draft ?? '').trim()
+    if (!a || !body) return { ok: false, message: 'Nada para enviar.' }
+    const r = await this.sendText(alertId, body, 'rascunho', via)
+    if (r.ok) store.patchAlert(alertId, { status: 'approved', draft: body }, `respondido (${via})`)
+    return r
+  }
+
+  /** Manda um texto na conversa do pedido, pela ferramenta de envio do Google Chat */
+  async sendText(alertId: string, text: string, label: string, via: string): Promise<OpResult> {
+    const cfg = store.get()
+    const a = store.getAlert(alertId)
+    if (!a) return { ok: false, message: 'Pedido não encontrado.' }
+    if (!text.trim()) return { ok: false, message: 'Mensagem vazia.' }
     if (!a.spaceId) return { ok: false, message: 'O Vigia não informou em qual conversa o pedido foi feito.' }
     const sendTool =
       cfg.integrations.gchat.mode === 'official'
@@ -236,7 +292,6 @@ export class Automation {
         : cfg.integrations.gchat.sendTool.trim().replace(/^mcp__[\w-]+__/, '')
     if (!sendTool || !/^[\w.-]+$/.test(sendTool)) return { ok: false, message: 'Informe a ferramenta de envio do Google Chat (modo personalizado).' }
 
-    const text = fillVariables(reply.text, alertValues(a, this.projectName(cfg, a))).trim()
     const full = `mcp__${MCP_NAMES.gchat}__${sendTool}`
     const deny = cfg.integrations.gchat.mode === 'official' ? GCHAT_OFFICIAL_WRITE_TOOLS.filter((t) => t !== sendTool) : []
     const args = ['-p', '--output-format', 'json', '--tools', '', '--permission-mode', 'default', '--allowedTools', full, '--max-budget-usd', '0.3']
@@ -254,11 +309,11 @@ export class Automation {
 
     const r = await runClaudeCapture(args, { cwd: homedir(), stdin: prompt, timeoutMs: 120_000 })
     const env = parseLastJson(r.stdout) as { result?: string; is_error?: boolean; total_cost_usd?: number } | null
-    if (env) costs.record({ source: 'resposta', ai: 'claude', title: `Resposta "${reply.name}"`, usd: env.total_cost_usd ?? null, tokens: null })
+    if (env) costs.record({ source: 'resposta', ai: 'claude', title: label, usd: env.total_cost_usd ?? null, tokens: null })
     const ok = !r.spawnError && !r.timedOut && !!env && !env.is_error && /^\s*OK\b/i.test(String(env.result ?? ''))
     const why = r.spawnError ?? (r.timedOut ? 'tempo esgotado' : String(env?.result ?? r.stderr).trim().slice(0, 200))
-    store.patchAlert(alertId, {}, ok ? `resposta "${reply.name}" enviada (${via})` : `resposta "${reply.name}" falhou`)
-    this.log({ kind: ok ? 'success' : 'error', text: `[Chat] resposta "${reply.name}" ${ok ? 'enviada' : `falhou: ${why}`}` })
+    store.patchAlert(alertId, {}, ok ? `${label} enviado (${via})` : `${label} falhou`)
+    this.log({ kind: ok ? 'success' : 'error', text: `[Chat] ${label} ${ok ? 'enviado' : `falhou: ${why}`}` })
     return { ok, message: ok ? 'Resposta enviada.' : why || 'Falhou.' }
   }
 }

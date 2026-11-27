@@ -48,6 +48,7 @@ import { lineStore } from './lib/lineStore'
 import { QueueModal } from './components/QueueModal'
 import { CostsModal } from './components/CostsModal'
 import { DailyModal } from './components/DailyModal'
+import { DiffModal } from './components/DiffModal'
 import { ShotsModal } from './components/ShotsView'
 import {
   Clock,
@@ -120,6 +121,7 @@ export default function App() {
   const [costGuard, setCostGuard] = useState<CostGuard | null>(null)
   const [costsOpen, setCostsOpen] = useState(false)
   const [dailyOpen, setDailyOpen] = useState(false)
+  const [diffFor, setDiffFor] = useState<{ projectId: string; mode: 'local' | 'base' } | null>(null)
   const [shotsProject, setShotsProject] = useState<Project | null>(null)
   useEffect(() => {
     window.api.queue().then(setQueueState)
@@ -730,15 +732,13 @@ export default function App() {
           onOpenDemand={(d) => setDemandOpen({ id: d.id })}
           gitInfos={gitInfos}
           onOpenShots={setShotsProject}
-          onGitDiff={(p) =>
-            execute('terminal', 'git status -sb; git diff --stat', undefined, p.path, { tab: `git:${p.id}`, title: `git · ${p.name}` })
-          }
+          onGitDiff={(p) => setDiffFor({ projectId: p.id, mode: 'local' })}
           onGitResult={(r) => {
             if (!r.ok) showToast(r.message)
             else log('success', `[Git] ${r.message}`)
             refreshBranches(config.projects)
           }}
-          onNewDemand={(projectId) => setDemandOpen({ draft: newDemand(projectId) })}
+          onNewDemand={(projectId, preset) => setDemandOpen({ draft: { ...newDemand(projectId), ...(preset ?? {}) } })}
         />
         <ScriptsPanel
           scripts={globalScripts}
@@ -832,6 +832,7 @@ export default function App() {
               setDemandOpen(null)
               setQueueOpen({ demandId: d.id })
             }}
+            onShowDiff={(projectId) => setDiffFor({ projectId, mode: 'base' })}
             onOpenTerminal={(d) => {
               setDemandOpen(null)
               ensureTab(`demand:${d.id}`, `${d.key}`)
@@ -840,6 +841,13 @@ export default function App() {
           />
         )
       })()}
+      <DiffModal
+        open={!!diffFor}
+        project={config?.projects.find((p) => p.id === diffFor?.projectId) ?? null}
+        initialMode={diffFor?.mode ?? 'local'}
+        onClose={() => setDiffFor(null)}
+        onResult={(r) => showToast(r.message)}
+      />
       <DailyModal open={dailyOpen} onClose={() => setDailyOpen(false)} />
       <WorklogModal onResult={(r) => showToast(r.message)} />
       <BranchJourneyPrompt branches={branches} demands={demands} />

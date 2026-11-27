@@ -1,10 +1,12 @@
 import { AppLogs, logTail } from './applog'
-import { jiraConfigured, jiraStatuses, jiraTransition, jiraTransitions, jiraWorklog } from './jira'
+import { jiraAssigned, jiraConfigured, jiraStatuses, jiraTransition, jiraTransitions, jiraWorklog } from './jira'
+import { JiraDismissed, suggestFromAssigned } from './jirasuggest'
 import { WorkLog } from './worklog'
 import { findPlainTokens, removeMcp } from './tokencheck'
 import { registerProjectToolsIpc } from './ipc/projectTools'
 import { registerWorklogIpc } from './ipc/worklog'
 import { registerLimitsIpc } from './ipc/limits'
+import { registerCodeIpc } from './ipc/code'
 import { LimitsTracker, claudeTierArgs, fmtReset } from './limits'
 import { PlanRunner } from './plan'
 import { accountEnv, accountOf } from './accounts'
@@ -51,6 +53,7 @@ import { isUp, ShotManager } from './shots'
 import { captureWithElectron, makeThumb } from './capture'
 import { learn } from './guides'
 import type {
+  JiraSuggestion,
   AlertStatus,
   AppNotification,
   Demand,
@@ -131,10 +134,36 @@ setInterval(() => {
  * Sincroniza com o Jira: atualiza o status das demandas abertas e finaliza aqui as que foram concluídas lá.
  * Roda uma vez ao abrir o app e quando você pede (botão nas demandas, paleta ou /jira no Telegram).
  */
+/** Cards atribuídos a você sem demanda (atualiza na sincronização: ao abrir o app e no botão) */
+let jiraSuggest: JiraSuggestion[] = []
+const jiraDismissed = new JiraDismissed(app.getPath('userData'))
+async function refreshJiraSuggestions(): Promise<number> {
+  const r = await jiraAssigned()
+  if (!r.ok || !r.issues) return 0
+  const cfg = store.get()
+  jiraSuggest = suggestFromAssigned(r.issues, demands.all(), jiraDismissed.all(), cfg.projects)
+  send('jira:suggestions', jiraSuggest)
+  // Avisa só os que nunca foram avisados (abrir o app de novo não repete)
+  const freshKeys = new Set(jiraDismissed.unseen(jiraSuggest.map((x) => x.key)))
+  const fresh = jiraSuggest.filter((x) => freshKeys.has(x.key))
+  if (fresh.length) {
+    notify(`🆕 ${fresh.length} card(s) novo(s) para você no Jira`, fresh.slice(0, 3).map((x) => `${x.key} ${x.summary}`).join(' · '), undefined, 'demanda', 'unfocused')
+  }
+  return jiraSuggest.length
+}
+ipcMain.handle('jira:suggestions', () => jiraSuggest)
+ipcMain.handle('jira:dismiss', (_e, key: string) => {
+  jiraDismissed.add(String(key))
+  jiraSuggest = jiraSuggest.filter((x) => x.key.toUpperCase() !== String(key).toUpperCase())
+  return jiraSuggest
+})
+
 async function syncJira(manual = false): Promise<OpResult> {
   if (!jiraConfigured()) return { ok: false, message: 'Configure o Jira (Configurações → Integrações) para sincronizar.' }
+  const suggested = await refreshJiraSuggestions().catch(() => 0)
+  const sugText = suggested ? ` · ${suggested} card(s) seu(s) ainda sem demanda` : ''
   const open = demands.all().filter((d) => d.status !== 'feita' && /^[A-Z][A-Z0-9_]*-\d+$/.test(d.key))
-  if (!open.length) return { ok: true, message: 'Nenhuma demanda aberta para sincronizar.' }
+  if (!open.length) return { ok: true, message: 'Nenhuma demanda aberta para conferir' + sugText + '.' }
   const st = await jiraStatuses(open.map((d) => d.key))
   const finished: string[] = []
   let failed = 0
@@ -150,12 +179,12 @@ async function syncJira(manual = false): Promise<OpResult> {
     }
   }
   if (finished.length) {
-    notify(`✅ Finalizadas no Jira`, `${finished.join(', ')}: marquei como Feita aqui.`, undefined, 'demanda', manual ? 'never' : 'unfocused', true)
+    notify(`✅ Finalizadas no Jira`, `${finished.join(', ')}: marquei como Feita aqui.`, undefined, 'demanda', manual ? 'never' : 'unfocused')
   }
   const parts = [`${open.length - failed} demanda(s) conferida(s)`]
   if (finished.length) parts.push(`finalizada(s): ${finished.join(', ')}`)
   if (failed) parts.push(`${failed} sem acesso no Jira`)
-  return { ok: true, message: parts.join(' · ') + '.' }
+  return { ok: true, message: parts.join(' · ') + sugText + '.' }
 }
 /** Uma vez ao abrir o app (depois de tudo carregar); depois só quando você pedir */
 setTimeout(() => void syncJira().catch(() => {}), 15_000)
@@ -177,7 +206,7 @@ function maybeSendWeekly(): void {
 const appLogs = new AppLogs(
   runs,
   (id) => store.get().projects.find((p) => p.id === id),
-  (p, line, tab) => notify(`🐞 Erro no log: ${p.name}`, line, `tab:${tab}`, 'projeto', 'unfocused', true)
+  (p, line, tab) => notify(`🐞 Erro no log: ${p.name}`, line, `tab:${tab}`, 'projeto', 'unfocused')
 )
 /** Perfil de trabalho: sobe os projetos dele (com os ligados, se marcado) */
 async function runProfile(id: string): Promise<OpResult> {
@@ -351,7 +380,7 @@ const limits = new LimitsTracker(app.getPath('userData'), {
     const left = resetsAt ? Math.max(0, resetsAt - Date.now()) : null
     const h = left !== null ? `${Math.floor(left / 3600_000)}h${String(Math.round((left % 3600_000) / 60_000)).padStart(2, '0')}` : ''
     const body = `Você já usou ${Math.round(pct)}% da janela de 5h do Claude${accName ? ` (conta ${accName})` : ''}${left !== null ? ` e faltam ${h} para resetar (${fmtReset(resetsAt)})` : ''}.`
-    notify('⏳ Ritmo do Claude', body, undefined, 'sistema', 'always', true)
+    notify('⏳ Ritmo do Claude', body, undefined, 'custos', 'always')
   }
 })
 limits.watchStatusline(store.get().ai.statusLine)
@@ -361,7 +390,7 @@ const plans = new PlanRunner({
   setPlan: (id, plan, note) => demands.setPlan(id, plan, note),
   queue,
   limits: (projectId) => ({ fiveHour: limits.fiveHour(accountOf(store.get(), projectId)?.id ?? ''), capPct: store.get().ai.sessionCapPct }),
-  notify: (title, body, demandId) => notify(title, body, `demand:${demandId}`, 'demanda', 'unfocused', false),
+  notify: (title, body, demandId) => notify(title, body, `demand:${demandId}`, 'demanda', 'unfocused'),
   askRelease: (d, ph, text) => {
     if (telegramReady()) tg.askRelease(d, ph, text, () => plans.release(d.id))
   }
@@ -374,7 +403,7 @@ function demandsDoneNotice(e: RunEvent): void {
   if (!d || !busy) return
   const what = { analysis: 'análise pronta', design: 'desenho pronto para revisar', dev: 'o Claude respondeu' }[busy.what as 'analysis']
   if (!what) return
-  notify(`📋 ${d.key}: ${e.code === 0 ? what : 'falhou'}`, d.title || d.jira?.summary || '', `demand:${d.id}`, 'demanda', 'unfocused', false)
+  notify(`📋 ${d.key}: ${e.code === 0 ? what : 'falhou'}`, d.title || d.jira?.summary || '', `demand:${d.id}`, 'demanda', 'unfocused')
 }
 const projects = new ProjectProcesses(runs, (states) => {
   send('project:states', states)
@@ -607,6 +636,7 @@ const bot = new TelegramBot({
     if (kind === 'ap') return (await automation.approve(id, 'pelo Telegram', false)).message
     if (kind === 'ds') return (await automation.dismiss(id, 'pelo Telegram')).message
     if (kind === 'rr') return (await automation.approve(id, 'pelo Telegram', true)).message
+    if (kind === 'sd') return (await automation.sendDraft(id, null, 'pelo Telegram')).message
     if (kind === 'pa' || kind === 'pd' || kind === 'pw') {
       return respondApproval(id, kind === 'pa' ? 'allow' : kind === 'pd' ? 'deny' : 'always', 'pelo Telegram')
     }
@@ -725,8 +755,8 @@ function notify(
   target?: NotificationTarget,
   kind: NotificationKind = 'sistema',
   desktop: 'always' | 'unfocused' | 'never' = 'unfocused',
-  /** Mandar também pro Telegram no modo Ausente (pedidos e permissões já têm mensagem própria) */
-  toTelegram = kind === 'projeto' || kind === 'script' || kind === 'vigia' || kind === 'atualizacao'
+  /** false = já tem mensagem própria no Telegram (pedidos, permissões); senão vale a configuração de avisos */
+  toTelegram?: boolean
 ) {
   const n: AppNotification = { id: randomUUID(), at: Date.now(), kind, title, body, target, read: false }
   notifications.unshift(n)
@@ -734,11 +764,14 @@ function notify(
   saveNotificationsSoon()
   send('notify:new', n)
   const cfg = store.get()
-  if (toTelegram && cfg.status === 'off' && cfg.telegram.forwardNotifications && telegramReady()) {
+  // Configurações → Geral → Avisos: cada tipo diz se vai para o sistema e para o Telegram
+  const pref = cfg.general.notify[kind]
+  const tgWhen = toTelegram === false ? 'nunca' : pref.telegram
+  if ((tgWhen === 'sempre' || (tgWhen === 'ausente' && cfg.status === 'off')) && cfg.telegram.forwardNotifications && telegramReady()) {
     void sendTelegramMessage(cfg.telegram.chatId, `🔔 <b>${escapeHtml(title)}</b>\n${escapeHtml(body)}`)
   }
   const focused = !!mainWindow?.isVisible() && mainWindow.isFocused()
-  const want = desktop === 'always' || (desktop === 'unfocused' && !focused)
+  const want = pref.desktop && (desktop === 'always' || (desktop === 'unfocused' && !focused))
   if (!want || !store.get().general.desktopNotifications || !Notification.isSupported()) return
   const dn = new Notification({ title, body, icon: appIcon })
   dn.on('click', () => showWindow(target))
@@ -808,12 +841,15 @@ store.onChange((cfg) => {
   const pending = cfg.alerts.filter((a) => a.status === 'pending').length
   if (lastPending >= 0 && pending > lastPending) {
     const a = cfg.alerts.filter((x) => x.status === 'pending').at(-1)
+    const q = a?.kind === 'pergunta'
     notify(
-      '🚨 Pedido de deploy',
-      a ? `${a.requester || 'Alguém'} pediu ${a.card || a.branch || 'deploy'} → ${a.environment || '?'}` : 'Novo pedido',
+      `${a?.important ? '⭐ ' : ''}${q ? '💬 Te perguntaram no Chat' : '🚨 Pedido de deploy'}`,
+      !a ? 'Novo pedido' : q ? `${a.requester || 'Alguém'}: ${a.summary}` : `${a.requester || 'Alguém'} pediu ${a.card || a.branch || 'deploy'} → ${a.environment || '?'}`,
       'alerts',
-      'pedido',
-      'always'
+      q ? 'vigia' : 'pedido',
+      'always',
+      // O Telegram já recebe a mensagem própria do pedido (com os botões)
+      false
     )
   }
   lastPending = pending
@@ -1032,6 +1068,7 @@ function registerIpc(): void {
   })
   registerWorklogIpc({ worklog, demands, weeklyText, syncJira })
   registerLimitsIpc({ limits, plans, demands, config: () => store.get() })
+  registerCodeIpc({ config: () => store.get(), sendDraft: (id, text) => automation.sendDraft(id, text, 'pelo app') })
   ipcMain.handle('tokens:check', () => ({ plain: findPlainTokens(store.get().projects), encrypted: secrets.status().encrypted }))
   ipcMain.handle('tokens:remove', async (_e, t: { server: string; scope: 'user' | 'local' | 'project'; projectPath?: string }) => {
     const scope = (['user', 'local', 'project'] as const).includes(t?.scope) ? t.scope : 'user'

@@ -1,5 +1,6 @@
 // Configurações → Geral (bandeja, avisos, jornadas, sincronização, atualizações)
 import { useEffect, useState, type ReactNode } from 'react'
+import { EditorSection, NotifySection } from './NotifyEditor'
 import { AppWindow, ArrowLeftRight, CheckCircle2, CircleHelp, Clock, Bell, Bot, Eye, Gem, Github, KeyRound, Loader2, MessageSquare, MessageSquareReply, Pencil, Plug, Plus, RefreshCw, Rocket, Search, Send, Settings, ShieldCheck, SquareKanban, Trash2, Workflow, X, XCircle, Zap } from 'lucide-react'
 import type {
   AiId,
@@ -123,7 +124,7 @@ export function GeneralTab({ config, save }: { config: AppConfig; save: SaveFn }
           checked={g.desktopNotifications}
           onChange={(v) => save({ general: { desktopNotifications: v } })}
           label="Mostrar também como notificação do sistema"
-          hint="Pedidos de deploy e projetos que caem aparecem sempre; o resto só quando você não está olhando o app."
+          hint="Pedidos de deploy e projetos que caem aparecem sempre; o resto só quando você não está olhando o app. Escolha por tipo logo abaixo."
         />
         <Toggle
           checked={g.notifyScriptDone}
@@ -132,6 +133,10 @@ export function GeneralTab({ config, save }: { config: AppConfig; save: SaveFn }
           hint="Com sucesso ou falha. Clicar leva para a aba do script."
         />
       </Section>
+
+      <NotifySection config={config} save={save} />
+
+      <EditorSection config={config} save={save} />
 
       <Section icon={<Clock size={15} />} title="Jornadas">
         <p className="text-xs text-zinc-400">

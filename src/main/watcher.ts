@@ -254,9 +254,17 @@ function buildPrompt(cfg: AppConfig, now: number): string {
     'Para cada pedido, faça um resumo de uma frase (o que, onde, para quando) e liste o que ficou faltando para executar',
     '(ex: "ambiente não informado", "não diz qual card", "não diz qual projeto"). Urgência: "alta" se pedirem pressa/urgente/agora, "baixa" se disserem sem pressa, senão "normal".',
     'Para dar para responder depois, informe o identificador do espaço (ex: spaces/AAAA) e da thread, se houver.',
+    cfg.watcher.questions
+      ? [
+          '',
+          `Procure também mensagens que me façam uma PERGUNTA ou me mencionem${cfg.watcher.myName.trim() ? ` (me chamam de: ${cfg.watcher.myName.trim()})` : ''} e que ainda estejam sem resposta minha.`,
+          'Para essas use "kind":"pergunta", resuma em "summary" o que querem e escreva em "draft" um rascunho curto de resposta em português, informal e educado,',
+          'sem prometer prazos e sem inventar informação (se não der para saber, diga que vou verificar e já retorno). Pedidos de deploy usam "kind":"deploy".'
+        ].join('\n')
+      : '',
     '',
     'Responda SOMENTE com um JSON neste formato, sem texto antes ou depois e sem bloco de código:',
-    '{"requests":[{"messageId":"identificador único da mensagem","requester":"quem pediu","card":"card/ticket (ex: PROJ-123) ou vazio","branch":"branch ou vazio","environment":"ambiente ou vazio","project":"projeto/repo citado ou vazio","summary":"resumo de uma frase","missing":["o que faltou"],"urgency":"baixa|normal|alta","space":"nome do espaço/conversa","spaceId":"spaces/…","threadId":"spaces/…/threads/… ou vazio","link":"link da mensagem ou vazio","messageTime":"data/hora da mensagem"}]}',
+    '{"requests":[{"kind":"deploy|pergunta","draft":"rascunho de resposta (só perguntas) ou vazio","messageId":"identificador único da mensagem","requester":"quem pediu","card":"card/ticket (ex: PROJ-123) ou vazio","branch":"branch ou vazio","environment":"ambiente ou vazio","project":"projeto/repo citado ou vazio","summary":"resumo de uma frase","missing":["o que faltou"],"urgency":"baixa|normal|alta","space":"nome do espaço/conversa","spaceId":"spaces/…","threadId":"spaces/…/threads/… ou vazio","link":"link da mensagem ou vazio","messageTime":"data/hora da mensagem"}]}',
     'Se não houver pedidos, responda {"requests":[]}.'
   ]
     .filter((l) => l !== '')
@@ -295,7 +303,7 @@ export function parseLastJson(text: string): unknown {
   return null
 }
 
-function toAlert(raw: unknown, cfg: AppConfig): DeployAlert | null {
+export function toAlert(raw: unknown, cfg: AppConfig): DeployAlert | null {
   if (!raw || typeof raw !== 'object') return null
   const r = raw as Record<string, unknown>
   const s = (k: string, max = 300) => (typeof r[k] === 'string' ? (r[k] as string).trim().slice(0, max) : '')
@@ -311,8 +319,12 @@ function toAlert(raw: unknown, cfg: AppConfig): DeployAlert | null {
   const projectHint = s('project', 120)
   const project = matchProject(projectHint, cfg.projects)
   const urgency = s('urgency', 10).toLowerCase()
+  const kind = s('kind', 20).toLowerCase() === 'pergunta' ? 'pergunta' : 'deploy'
   const alert: DeployAlert = {
     id: randomUUID(),
+    kind,
+    draft: kind === 'pergunta' ? s('draft', 1500) : '',
+    important: isImportant(cfg.watcher.important, requester, s('space', 120)),
     createdAt: Date.now(),
     messageId,
     missing: Array.isArray(r.missing)
@@ -338,6 +350,25 @@ function toAlert(raw: unknown, cfg: AppConfig): DeployAlert | null {
     status: 'pending',
     telegram: 'off'
   }
-  alert.ruleId = findRule(alert, cfg.rules)?.id ?? ''
+  // Perguntas não passam pelas regras de deploy
+  alert.ruleId = kind === 'deploy' ? findRule(alert, cfg.rules)?.id ?? '' : ''
   return alert
+}
+
+const fold = (t: string) =>
+  t
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim()
+
+/** Quem escreveu (ou o espaço) está na lista de importantes? (sem acento e sem maiúsculas; "ana" não casa com "mariana") */
+export function isImportant(list: string, requester: string, space: string): boolean {
+  const names = list
+    .split(/[,;\n]/)
+    .map(fold)
+    .filter((x) => x.length >= 2)
+  if (!names.length) return false
+  const hay = [fold(requester), fold(space)].filter(Boolean)
+  return names.some((n) => hay.some((h) => h === n || new RegExp(`(^|[^a-z0-9])${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^a-z0-9])`).test(h)))
 }

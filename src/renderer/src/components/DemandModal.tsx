@@ -52,6 +52,7 @@ export function DemandModal({
   onClose,
   onCreated,
   onOpenTerminal,
+  onShowDiff,
   onDeleted,
   git,
   onGitChanged,
@@ -69,6 +70,8 @@ export function DemandModal({
   onClose: () => void
   onCreated: (d: Demand) => void
   onOpenTerminal: (d: Demand) => void
+  /** Tela de mudanças do projeto da demanda */
+  onShowDiff?: (projectId: string) => void
   onDeleted: () => void
 }) {
   const [draft, setDraft] = useState<Demand | null>(demand)
@@ -349,7 +352,7 @@ export function DemandModal({
       {/* ---------------- Revisão ---------------- */}
       {!isNew && tab === 'revisao' && (
         <>
-          <ReviewTab d={d} working={working} reviewing={busy?.what === 'review'} onAi={(reviewAi) => change({ reviewAi })} onResult={setResult} flush={() => flush(d)} />
+          <ReviewTab d={d} working={working} reviewing={busy?.what === 'review'} onAi={(reviewAi) => change({ reviewAi })} onResult={setResult} flush={() => flush(d)} onShowDiff={onShowDiff && project ? () => onShowDiff(project.id) : undefined} />
           <PrBox d={d} onResult={setResult} />
           <PrCommentsBox d={d} working={working} onResult={setResult} />
         </>

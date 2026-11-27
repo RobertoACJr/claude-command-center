@@ -3,6 +3,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync, copyFil
 import { join } from 'path'
 import type {
   AccountProfile,
+  NotificationKind,
+  NotifyPref,
   ClaudeEffort,
   ClaudeModel,
   WorkProfile,
@@ -24,7 +26,17 @@ function defaults(): AppConfig {
     version: 1,
     status: 'on',
     statusSince: Date.now(),
-    general: { closeToTray: true, openAtLogin: false, trayHintShown: false, desktopNotifications: true, notifyScriptDone: true, idlePauseMin: 15 },
+    general: {
+      closeToTray: true,
+      openAtLogin: false,
+      trayHintShown: false,
+      desktopNotifications: true,
+      notifyScriptDone: true,
+      idlePauseMin: 15,
+      editor: '',
+      editorCommand: '',
+      notify: defaultNotify()
+    },
     projects: [],
     scripts: [],
     ui: { consoleExpanded: false, consoleMode: 'terminal', ais: { claude: true, gemini: true, codex: true }, shortHistory: true, histV: 2 },
@@ -34,7 +46,14 @@ function defaults(): AppConfig {
       gchat: { enabled: false, mode: 'official', clientId: '', callbackPort: 8765, readTools: '', sendTool: '' },
       lastApplied: {}
     },
-    telegram: { chatId: '', interactive: true, forwardNotifications: true, transcribeCommand: '', weeklyReport: false },
+    telegram: {
+      chatId: '',
+      interactive: true,
+      forwardNotifications: true,
+      transcribeCommand: '',
+      weeklyReport: false,
+      call: { enabled: false, user: '', lang: 'pt-BR-Standard-A', onUrgent: true, onImportant: true, onlyAway: true }
+    },
     watcher: {
       enabled: false,
       autoWhenOff: true,
@@ -43,7 +62,10 @@ function defaults(): AppConfig {
       model: '',
       provider: 'claude',
       lastCheckAt: null,
-      seen: []
+      seen: [],
+      questions: false,
+      myName: '',
+      important: ''
     },
     alerts: [],
     ai: {
@@ -87,6 +109,25 @@ export function configFilePath(): string {
 }
 
 const str = (v: unknown, d = '') => (typeof v === 'string' ? v : d)
+const NOTIFY_KINDS: NotificationKind[] = ['pedido', 'permissao', 'projeto', 'script', 'atualizacao', 'vigia', 'remote', 'demanda', 'fila', 'custos', 'sistema']
+/** Padrão: o que já ia para o Telegram no Ausente continua indo; demanda e fila passam a ir também */
+export function defaultNotify(): Record<NotificationKind, NotifyPref> {
+  const away = new Set<NotificationKind>(['projeto', 'script', 'atualizacao', 'vigia', 'demanda', 'fila', 'custos'])
+  return Object.fromEntries(NOTIFY_KINDS.map((k) => [k, { desktop: true, telegram: away.has(k) ? 'ausente' : 'nunca' }])) as Record<NotificationKind, NotifyPref>
+}
+function normNotify(raw: unknown): Record<NotificationKind, NotifyPref> {
+  const d = defaultNotify()
+  const r = raw && typeof raw === 'object' ? (raw as Record<string, Partial<NotifyPref>>) : {}
+  for (const k of NOTIFY_KINDS) {
+    const v = r[k]
+    if (!v) continue
+    d[k] = {
+      desktop: typeof v.desktop === 'boolean' ? v.desktop : d[k].desktop,
+      telegram: v.telegram === 'nunca' || v.telegram === 'ausente' || v.telegram === 'sempre' ? v.telegram : d[k].telegram
+    }
+  }
+  return d
+}
 const MODELS: ClaudeModel[] = ['', 'opus', 'sonnet', 'haiku', 'fable']
 const EFFORTS: ClaudeEffort[] = ['', 'low', 'medium', 'high', 'xhigh', 'max']
 function oneOf<T extends string>(v: unknown, list: T[], d: T): T {
@@ -118,7 +159,10 @@ function normalize(raw: unknown): AppConfig {
       trayHintShown: bool(r.general?.trayHintShown, false),
       desktopNotifications: bool(r.general?.desktopNotifications, true),
       notifyScriptDone: bool(r.general?.notifyScriptDone, true),
-      idlePauseMin: num(r.general?.idlePauseMin, 15, 0, 240)
+      idlePauseMin: num(r.general?.idlePauseMin, 15, 0, 240),
+      editor: str(r.general?.editor).trim(),
+      editorCommand: str(r.general?.editorCommand).trim(),
+      notify: normNotify(r.general?.notify)
     },
     projects: Array.isArray(r.projects) ? (r.projects as Project[]).filter((p) => p && p.id).map(normProject) : [],
     scripts: Array.isArray(r.scripts) ? (r.scripts as Script[]).filter((s) => s && s.id).map(normScript) : [],
@@ -154,7 +198,15 @@ function normalize(raw: unknown): AppConfig {
       chatId: str(r.telegram?.chatId).trim(),
       interactive: bool(r.telegram?.interactive, true),
       forwardNotifications: bool(r.telegram?.forwardNotifications, true),
-      weeklyReport: bool(r.telegram?.weeklyReport, false)
+      weeklyReport: bool(r.telegram?.weeklyReport, false),
+      call: {
+        enabled: bool(r.telegram?.call?.enabled, false),
+        user: str(r.telegram?.call?.user).trim().slice(0, 60),
+        lang: /^[a-z]{2}-[A-Z]{2}-[\w-]+$/.test(str(r.telegram?.call?.lang)) ? str(r.telegram?.call?.lang) : 'pt-BR-Standard-A',
+        onUrgent: bool(r.telegram?.call?.onUrgent, true),
+        onImportant: bool(r.telegram?.call?.onImportant, true),
+        onlyAway: bool(r.telegram?.call?.onlyAway, true)
+      }
     },
     watcher: {
       enabled: bool(w?.enabled, d.watcher.enabled),
@@ -164,7 +216,10 @@ function normalize(raw: unknown): AppConfig {
       model: str(w?.model).trim(),
       provider: w?.provider === 'gemini' ? 'gemini' : 'claude',
       lastCheckAt: typeof w?.lastCheckAt === 'number' ? w.lastCheckAt : null,
-      seen: Array.isArray(w?.seen) ? w.seen.filter((x) => typeof x === 'string').slice(-500) : []
+      seen: Array.isArray(w?.seen) ? w.seen.filter((x) => typeof x === 'string').slice(-500) : [],
+      questions: bool(w?.questions, false),
+      myName: str(w?.myName).trim().slice(0, 120),
+      important: str(w?.important).trim().slice(0, 500)
     },
     alerts: Array.isArray(r.alerts) ? (r.alerts as DeployAlert[]).filter((a) => a && a.id).map(normAlert).slice(-200) : [],
     ai: {
@@ -216,7 +271,10 @@ function normAlert(a: DeployAlert): DeployAlert {
     threadId: str(a.threadId),
     ruleId: str(a.ruleId),
     telegramMessageId: typeof a.telegramMessageId === 'number' ? a.telegramMessageId : null,
-    history: Array.isArray(a.history) ? a.history.filter((h) => typeof h === 'string').slice(-30) : []
+    history: Array.isArray(a.history) ? a.history.filter((h) => typeof h === 'string').slice(-30) : [],
+    kind: a.kind === 'pergunta' ? 'pergunta' : 'deploy',
+    draft: str(a.draft),
+    important: a.important === true
   }
 }
 
@@ -493,7 +551,7 @@ class ConfigStore {
       if (patch.integrations?.github) d.integrations.github = { ...d.integrations.github, ...patch.integrations.github }
       if (patch.integrations?.jira) d.integrations.jira = { ...d.integrations.jira, ...patch.integrations.jira }
       if (patch.integrations?.gchat) d.integrations.gchat = { ...d.integrations.gchat, ...patch.integrations.gchat }
-      if (patch.telegram) d.telegram = { ...d.telegram, ...patch.telegram }
+      if (patch.telegram) d.telegram = { ...d.telegram, ...patch.telegram, call: { ...d.telegram.call, ...(patch.telegram.call ?? {}) } }
       if (patch.watcher) d.watcher = { ...d.watcher, ...patch.watcher }
       if (patch.ai) d.ai = { ...d.ai, ...patch.ai }
       if (patch.claudeGlobal) d.claudeGlobal = { ...d.claudeGlobal, ...patch.claudeGlobal }
@@ -530,7 +588,7 @@ class ConfigStore {
 
   patchAlert(
     id: string,
-    patch: Partial<Pick<DeployAlert, 'status' | 'telegram' | 'telegramMessageId'>>,
+    patch: Partial<Pick<DeployAlert, 'status' | 'telegram' | 'telegramMessageId' | 'draft'>>,
     historyLine?: string
   ): AppConfig {
     const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
