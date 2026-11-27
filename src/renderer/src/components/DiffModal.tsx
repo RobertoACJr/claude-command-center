@@ -227,7 +227,7 @@ export function DiffModal({
                       <tr key={i} className={l.kind === 'add' ? 'bg-sky-500/10' : l.kind === 'del' ? 'bg-red-500/10' : ''}>
                         <td className="w-12 select-none px-2 text-right text-[11px] text-zinc-600">{l.oldNo ?? ''}</td>
                         <td
-                          className={cn('w-12 select-none px-2 text-right text-[11px] text-zinc-600', l.newNo && file?.status !== 'D' && 'cursor-pointer hover:text-purple')}
+                          className={cn('w-12 select-none px-2 text-right text-[11px] text-zinc-600', l.newNo !== null && file?.status !== 'D' && 'cursor-pointer hover:text-purple')}
                           title={l.newNo ? 'Abrir no editor nesta linha' : ''}
                           onClick={() => l.newNo && file && file.status !== 'D' && void openAt(file.path, l.newNo)}
                         >
